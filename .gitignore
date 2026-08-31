@@ -40,10 +40,6 @@ venv/
 .coverage
 htmlcov/
 
-# Official TTT-E2E clone (not authored in this repo).
-# See upstream/ttt-e2e.toml for the source URL and pinned commit.
-/e2e/
-
 # Downloaded datasets and model artifacts
 /data/*
 !/data/.gitkeep
