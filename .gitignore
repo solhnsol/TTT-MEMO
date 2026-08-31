@@ -1,0 +1,83 @@
+# Cursor / editor
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets and local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+wandb_key*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+.tox/
+.coverage
+htmlcov/
+
+# Official TTT-E2E clone (not authored in this repo).
+# See upstream/ttt-e2e.toml for the source URL and pinned commit.
+/e2e/
+
+# Downloaded datasets and model artifacts
+/data/*
+!/data/.gitkeep
+!/data/README.md
+/checkpoints/*
+!/checkpoints/.gitkeep
+!/checkpoints/README.md
+
+# Training / eval outputs
+wandb/
+outputs/
+multirun/
+experiments/
+logs/
+results/raw/
+.hydra/
+*.log
+
+# Local caches
+.cache/
+.jax_cache/
+jax_cache/
+hf_cache/
+.uv/
+
+# Large binary artifacts that may appear outside checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.zarr
+*.npz
+
+# Slurm / cluster
+slurm-*.out
+*.sbatch.bak

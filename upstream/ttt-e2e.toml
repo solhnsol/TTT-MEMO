@@ -1,0 +1,11 @@
+# Official End-to-End Test-Time Training implementation.
+# This code is not authored in TTT-MEMO. Keep the local clone unmodified.
+#
+#   git clone https://github.com/test-time-training/e2e.git e2e
+#   git -C e2e checkout a4fc4788ace38e29b5067916d4f4be33da894085
+
+name = "ttt-e2e"
+url = "https://github.com/test-time-training/e2e.git"
+ref = "main"
+commit = "a4fc4788ace38e29b5067916d4f4be33da894085"
+path = "e2e"
