@@ -1,0 +1,27 @@
+# The Dockerfile only needs e2e/pyproject.toml, e2e/uv.lock and docker/.
+# Everything below would otherwise be sent to the daemon (data/ alone is ~8 GB).
+
+.git
+**/.git
+.gitmodules
+
+data/
+checkpoints/
+.cursor/
+
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/*.egg-info/
+
+# Upstream run artifacts
+e2e/experiments/
+e2e/outputs/
+e2e/multirun/
+e2e/wandb/
+
+# Local secrets never belong in an image layer
+.env
+.env.*
+*.pem
+*.key

@@ -1,0 +1,36 @@
+services:
+  ttt:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: ttt-memo:py312-jax0.5.3-cu128
+    working_dir: /workspace
+    volumes:
+      # Bind mount, so editing code on the host takes effect immediately and
+      # data/ and checkpoints/ are visible without being copied into the image.
+      - .:/workspace
+      # Persist the XLA compilation cache; first compiles of the 8K meta loop
+      # are slow. Path matches JaxDistributedConfig.compilation_cache_dir.
+      - jax-cache:/tmp/jax_cache
+    environment:
+      PYTHONPATH: /workspace/e2e
+      XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Upstream requires these even when logging is disabled, because
+      # WandbLogger calls wandb.login() on the master process regardless.
+      WANDB_API_KEY: ${WANDB_API_KEY:-}
+    # grain's dataloader workers use shared memory; the 64 MB default is tight.
+    shm_size: "4gb"
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  jax-cache:

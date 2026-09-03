@@ -1,0 +1,26 @@
+# TTT-MEMO research additions, on top of the upstream e2e/uv.lock environment.
+# Keep this list minimal: anything the official implementation already pins
+# belongs in e2e/uv.lock, not here.
+#
+# Needed because the project logs experiment measurements as Parquet/JSONL
+# rather than ad-hoc text.
+#
+# Versions are the ones resolved on the first successful image build
+# (2026-08-31). Verified afterwards that this install does not move any package
+# pinned by e2e/uv.lock -- in particular numpy stays at 2.2.5, which jax 0.5.3
+# was locked against. Re-check that invariant before bumping either line.
+
+pandas==3.0.5
+pyarrow==25.0.1
+
+# Llama-3 tokenizer for turning natural text into the token IDs this checkpoint
+# was trained on. The upstream repo ships no tokenizer code -- its datasets are
+# already tokenized -- so this is ours, not theirs.
+#
+# huggingface-hub is capped below 1.0 on purpose: tokenizers only needs it for
+# `Tokenizer.from_pretrained`, and hub 1.x drags in a click upgrade
+# (8.1.8 -> 8.5.0) that would move a package pinned by e2e/uv.lock. Capping it
+# keeps the install purely additive. Resolved transitively with these:
+# filelock==3.32.5, hf-xet==1.6.0.
+tokenizers==0.23.1
+huggingface-hub==0.36.2

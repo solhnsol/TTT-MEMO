@@ -1,0 +1,29 @@
+# Llama-3 tokenizer used to reproduce the token IDs this checkpoint was trained on.
+#
+# The upstream TTT-E2E repo ships no tokenizer and pins no revision. Its README
+# only says the datasets are "Llama-3 tokenized", and configs/training's
+# `tokenizer_name = "meta-llama/Llama-2-7b-hf"` is dead code with a wrong value
+# (Llama-2 has a 32000-token vocab; this checkpoint has 128256). So the exact
+# tokenizer is our choice, and this file is what pins it.
+#
+# meta-llama/Meta-Llama-3-8B is gated (HTTP 401 without an accepted license), so
+# we use a public mirror. Verified on 2026-09-01 that the tokenizer.json in both
+# mirrors below is byte-identical, so the mirror choice does not affect results:
+#   NousResearch/Meta-Llama-3-8B  -> sha256 e134af98...
+#   unsloth/llama-3-8b            -> sha256 e134af98...
+#
+# The file is not committed (9 MB, gitignored under data/). Download and integrity
+# check are done by scripts/baseline_125m/verify_tokenizer.py, which fails hard on
+# a sha256 mismatch.
+
+name = "llama3-tokenizer"
+repo = "NousResearch/Meta-Llama-3-8B"
+url = "https://huggingface.co/NousResearch/Meta-Llama-3-8B/resolve/main/tokenizer.json"
+path = "data/tokenizer/llama3/tokenizer.json"
+sha256 = "e134af98b985517b4f068e3755ae90d4e9cd2d45d328325dc503f1c6b2d06cc7"
+size_bytes = 9085698
+
+# Must match configs/model/125m.yaml.
+vocab_size = 128256
+bos_token_id = 128000
+eos_token_id = 128001
