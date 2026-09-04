@@ -10,7 +10,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_BASELINE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_BASELINE_ROOT / "common"))
+sys.path.insert(0, str(_BASELINE_ROOT / "sanity"))
 
 from baseline_config import CHECKPOINT_DIR, CONFIG_DIR, compose_baseline_config  # noqa: E402
 

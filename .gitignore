@@ -44,6 +44,7 @@ htmlcov/
 /data/*
 !/data/.gitkeep
 !/data/README.md
+!/data/_probe_val_head.bin
 /checkpoints/*
 !/checkpoints/.gitkeep
 !/checkpoints/README.md
@@ -52,9 +53,11 @@ htmlcov/
 wandb/
 outputs/
 multirun/
-experiments/
+/experiments/
 logs/
-results/raw/
+results/raw/*
+!results/raw/baseline_125m/
+!results/raw/baseline_125m/**/
 .hydra/
 *.log
 
@@ -73,6 +76,7 @@ hf_cache/
 *.onnx
 *.zarr
 *.npz
+!results/raw/baseline_125m/**/*.npz
 
 # Slurm / cluster
 slurm-*.out

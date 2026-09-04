@@ -29,7 +29,9 @@ import sys
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_BASELINE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_BASELINE_ROOT / "common"))
+sys.path.insert(0, str(_BASELINE_ROOT / "sanity"))
 
 from baseline_config import REPO_ROOT, compose_baseline_config  # noqa: E402
 

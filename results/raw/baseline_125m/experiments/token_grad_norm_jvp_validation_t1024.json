@@ -1,0 +1,1146 @@
+{
+  "hypothesis": "At frozen chunk-0 W0/S0, Rademacher JVP estimates of ||\u2207_{W_fast} l_t^TTT||_2 should track exact norms as K grows. G_t is a gradient-signal magnitude, not token importance.",
+  "seq_len": 1024,
+  "chunk_index": 0,
+  "mini_batch_size": 1024,
+  "checkpoint_dir": "/workspace/checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc",
+  "probe_path": "/workspace/data/_probe_val_head.bin",
+  "spec_inner": [
+    "language_model.**.suffix_blocks.feed_forward_prime.**"
+  ],
+  "n_fastweight_scalars": 11501568,
+  "wfast_checkpoint_prime_storage": [
+    {
+      "path": ".w1.weight",
+      "shape": [
+        3,
+        768,
+        1664
+      ],
+      "dtype": "float32",
+      "size": 3833856
+    },
+    {
+      "path": ".w2.weight",
+      "shape": [
+        3,
+        1664,
+        768
+      ],
+      "dtype": "float32",
+      "size": 3833856
+    },
+    {
+      "path": ".w3.weight",
+      "shape": [
+        3,
+        768,
+        1664
+      ],
+      "dtype": "float32",
+      "size": 3833856
+    }
+  ],
+  "wfast_runtime_spec_inner": [
+    {
+      "path": ".language_model.model.h.suffix_blocks.feed_forward_prime.w1.weight",
+      "shape": [
+        3,
+        768,
+        1664
+      ],
+      "dtype": "float32",
+      "size": 3833856
+    },
+    {
+      "path": ".language_model.model.h.suffix_blocks.feed_forward_prime.w2.weight",
+      "shape": [
+        3,
+        1664,
+        768
+      ],
+      "dtype": "float32",
+      "size": 3833856
+    },
+    {
+      "path": ".language_model.model.h.suffix_blocks.feed_forward_prime.w3.weight",
+      "shape": [
+        3,
+        768,
+        1664
+      ],
+      "dtype": "float32",
+      "size": 3833856
+    }
+  ],
+  "wfast_runtime_suffix_blocks_prime": [
+    {
+      "path": ".w1.weight",
+      "shape": [
+        3,
+        768,
+        1664
+      ],
+      "dtype": "float32",
+      "size": 3833856
+    },
+    {
+      "path": ".w2.weight",
+      "shape": [
+        3,
+        1664,
+        768
+      ],
+      "dtype": "float32",
+      "size": 3833856
+    },
+    {
+      "path": ".w3.weight",
+      "shape": [
+        3,
+        768,
+        1664
+      ],
+      "dtype": "float32",
+      "size": 3833856
+    }
+  ],
+  "prefix_len": 9,
+  "suffix_len": 3,
+  "global_layer_map": [
+    9,
+    10,
+    11
+  ],
+  "global_layer_rule": "global_layer(i) = prefix_len + i, prefix/suffix lens from vmap leading axis",
+  "exact_token_selection": {
+    "rule": "even_segments_midpoint_of_valid_positions",
+    "n_requested": 32,
+    "n_valid": 1024,
+    "n_selected": 32,
+    "segment_start_in_valid_list": [
+      0,
+      32,
+      64,
+      96,
+      128,
+      160,
+      192,
+      224,
+      256,
+      288,
+      320,
+      352,
+      384,
+      416,
+      448,
+      480,
+      512,
+      544,
+      576,
+      608,
+      640,
+      672,
+      704,
+      736,
+      768,
+      800,
+      832,
+      864,
+      896,
+      928,
+      960,
+      992
+    ],
+    "segment_end_in_valid_list": [
+      32,
+      64,
+      96,
+      128,
+      160,
+      192,
+      224,
+      256,
+      288,
+      320,
+      352,
+      384,
+      416,
+      448,
+      480,
+      512,
+      544,
+      576,
+      608,
+      640,
+      672,
+      704,
+      736,
+      768,
+      800,
+      832,
+      864,
+      896,
+      928,
+      960,
+      992,
+      1024
+    ],
+    "midpoint_in_valid_list": [
+      15,
+      47,
+      79,
+      111,
+      143,
+      175,
+      207,
+      239,
+      271,
+      303,
+      335,
+      367,
+      399,
+      431,
+      463,
+      495,
+      527,
+      559,
+      591,
+      623,
+      655,
+      687,
+      719,
+      751,
+      783,
+      815,
+      847,
+      879,
+      911,
+      943,
+      975,
+      1007
+    ],
+    "selected_indices": [
+      15,
+      47,
+      79,
+      111,
+      143,
+      175,
+      207,
+      239,
+      271,
+      303,
+      335,
+      367,
+      399,
+      431,
+      463,
+      495,
+      527,
+      559,
+      591,
+      623,
+      655,
+      687,
+      719,
+      751,
+      783,
+      815,
+      847,
+      879,
+      911,
+      943,
+      975,
+      1007
+    ],
+    "rng_used": false
+  },
+  "jvp_seed": 0,
+  "k_list": [
+    1,
+    2,
+    4,
+    8,
+    16,
+    32
+  ],
+  "k_max": 32,
+  "rademacher": {
+    "distribution": "independent \u00b11 per inner parameter element",
+    "normalized": false,
+    "dtype_rule": "match inner leaf dtype"
+  },
+  "loss_definitions": {
+    "primary": "l_t^TTT = -log_softmax(logits.astype(fp32))[target_t], unmasked",
+    "legacy_diagnostic": "official -token_log_probs(logits, target) (no fp32 cast, no mask)",
+    "chunk_reduction": "sum(mask * l_t^TTT) / sum(mask)"
+  },
+  "dtypes": {
+    "param_dtype_config": "fp32",
+    "compute_dtype_config": "bf16",
+    "state_dtype_config": "fp32",
+    "inner_eval_cast": "<class 'jax.numpy.float32'>",
+    "inner_leaf_dtype": "float32",
+    "norm_accumulation_dtype": "float32",
+    "token_ttt_ce_dtype": "float32",
+    "token_nll_legacy_dtype": "bfloat16"
+  },
+  "step_index": {
+    "set_to_eval_warmup_value": false,
+    "reason": "pure f / exact / JVP do not call inner_loop_step; step_index is not in the gradient definition"
+  },
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 3060",
+    "compute_capability": "8.6",
+    "jax_device": "cuda:0",
+    "jax_backend": "gpu"
+  },
+  "attention": {
+    "override_enabled": true,
+    "override_installed": true,
+    "seq_modeling_block": "SWA",
+    "force_flash": false,
+    "prefix_requested_backend": "cudnn",
+    "prefix_effective_backend": "xla",
+    "suffix_requested_backend": null,
+    "suffix_effective_backend": null,
+    "redirects_only_when_implementation_is_cudnn": true,
+    "n_dot_product_attention_seen": 9,
+    "n_cudnn_redirected_to_xla": 1,
+    "n_passthrough": 8
+  },
+  "tokenizer_path": "/workspace/data/tokenizer/llama3/tokenizer.json",
+  "proceed_to_estimator": true,
+  "sanity": {
+    "purity": {
+      "token_ttt_ce_max_abs_diff": 0.0,
+      "inner_w_max_abs_diff": 0.0,
+      "canonical_suffix_state_max_abs_diff": 0.0,
+      "token_ttt_ce_shape": [
+        1024
+      ],
+      "token_ttt_ce_dtype": "float32"
+    },
+    "finite_token_ttt_ce": {
+      "name": "token_ttt_ce",
+      "any_nan": false,
+      "any_inf": false,
+      "all_finite": true
+    },
+    "ce_from_f_vs_direct_suffix_call_max_abs_diff": 9.5367431640625e-07,
+    "scalar_identity": {
+      "L_reconstructed": 3.130803108215332,
+      "L_reconstructed_from_f": 3.130803108215332,
+      "L_official_lm_loss": 3.130803108215332,
+      "L_official_repeat": 3.130803108215332,
+      "L_official_helper_on_same_logits": 3.130803108215332,
+      "abs_diff_reconstructed_vs_lm_loss": 0.0,
+      "abs_diff_reconstructed_vs_helper": 0.0,
+      "abs_diff_lm_loss_repeat": 0.0,
+      "loss_pure_ce_note": "cross_entropy_loss_and_accuracy returns two scalars (loss, loss_pure_ce); they are identical masked means, not a per-token vector. Primary l_t is the unmasked fp32 NLL term inside that helper."
+    },
+    "finite_legacy_nll": {
+      "name": "token_nll_legacy",
+      "any_nan": false,
+      "any_inf": false,
+      "all_finite": true
+    },
+    "gradient_identity": {
+      "official_inner_grad_l2": 0.5821007490158081,
+      "reconstructed_inner_grad_l2": 0.5821007490158081,
+      "l2_diff": 0.0,
+      "relative_l2_error": 0.0,
+      "max_abs_diff": 0.0,
+      "repeat_official_max_abs_diff": 0.0,
+      "repeat_reconstructed_max_abs_diff": 0.0,
+      "leafwise_max_abs_diff": [
+        {
+          "path": ".language_model.model.h.suffix_blocks.feed_forward_prime.w1.weight",
+          "max_abs_diff": 0.0
+        },
+        {
+          "path": ".language_model.model.h.suffix_blocks.feed_forward_prime.w2.weight",
+          "max_abs_diff": 0.0
+        },
+        {
+          "path": ".language_model.model.h.suffix_blocks.feed_forward_prime.w3.weight",
+          "max_abs_diff": 0.0
+        }
+      ],
+      "note": "eqx.filter_grad on frozen inner->combine->lm_loss scalar, not inner_loop_step / optimizer / clip"
+    },
+    "finite_exact_norms": {
+      "name": "exact_norms",
+      "any_nan": false,
+      "any_inf": false,
+      "all_finite": true
+    },
+    "exact_inner_w_after_loop_max_abs_diff": 0.0,
+    "exact_canonical_state_after_loop_max_abs_diff": 0.0,
+    "jvp_vs_f_ce_max_abs_diff": 0.06808662414550781,
+    "exact_jvp_directional_identity": {
+      "token_index": 15,
+      "direction_index": 0,
+      "direct_g_dot_v": 13.14921760559082,
+      "jvp_at_t": 13.333019256591797,
+      "abs_diff": 0.18380165100097656,
+      "relative_diff": 0.013978143530214853,
+      "accumulation_dtype": "float32",
+      "note": "no pre-set pass/fail threshold; bf16 compute is in the suffix"
+    },
+    "finite_jvp": {
+      "name": "jvp_estimates",
+      "any_nan": false,
+      "any_inf": false,
+      "all_finite": true
+    },
+    "jvp_inner_w_after_loop_max_abs_diff": 0.0,
+    "jvp_canonical_state_after_loop_max_abs_diff": 0.0
+  },
+  "correlations_exact_vs_ghat_selected_tokens": {
+    "1": {
+      "n": 32,
+      "pearson": 0.6809544185969875,
+      "spearman": 0.7089442815249266,
+      "relative_error_mean": 0.5271765768870729,
+      "relative_error_median": 0.41368521500196126,
+      "relative_error_max": 1.5017885089792582,
+      "exact_mean": 14.62246904335916,
+      "estimated_mean": 13.733342103660107
+    },
+    "2": {
+      "n": 32,
+      "pearson": 0.7833798067522056,
+      "spearman": 0.7752932551319647,
+      "relative_error_mean": 0.36857547461051876,
+      "relative_error_median": 0.33214367725182936,
+      "relative_error_max": 1.1122899640014943,
+      "exact_mean": 14.62246904335916,
+      "estimated_mean": 13.45817166818781
+    },
+    "4": {
+      "n": 32,
+      "pearson": 0.8735524721376109,
+      "spearman": 0.9296187683284455,
+      "relative_error_mean": 0.22989961156241354,
+      "relative_error_median": 0.1774831930820629,
+      "relative_error_max": 0.6784676278866818,
+      "exact_mean": 14.62246904335916,
+      "estimated_mean": 14.57024984616467
+    },
+    "8": {
+      "n": 32,
+      "pearson": 0.8930782383062532,
+      "spearman": 0.9010263929618767,
+      "relative_error_mean": 0.20096191119150725,
+      "relative_error_median": 0.21343978028978444,
+      "relative_error_max": 0.4681875993710066,
+      "exact_mean": 14.62246904335916,
+      "estimated_mean": 13.901297303436571
+    },
+    "16": {
+      "n": 32,
+      "pearson": 0.9512778402613684,
+      "spearman": 0.973973607038123,
+      "relative_error_mean": 0.150891364934145,
+      "relative_error_median": 0.12793710935701308,
+      "relative_error_max": 0.4397910008346518,
+      "exact_mean": 14.62246904335916,
+      "estimated_mean": 14.277636989185357
+    },
+    "32": {
+      "n": 32,
+      "pearson": 0.974938459182307,
+      "spearman": 0.9769061583577712,
+      "relative_error_mean": 0.10664188235761098,
+      "relative_error_median": 0.08976896534646432,
+      "relative_error_max": 0.45260231616402036,
+      "exact_mean": 14.62246904335916,
+      "estimated_mean": 14.480791676512224
+    }
+  },
+  "exact_token_rows": [
+    {
+      "loss_index_t": 15,
+      "input_token_id": 1148,
+      "target_token_id": 1587,
+      "decoded_target": "\u0120does",
+      "valid_mask": true,
+      "token_ttt_ce": 3.102837562561035,
+      "token_nll_legacy": 3.09375,
+      "exact_grad_norm_total": 18.04034423828125,
+      "exact_grad_norm_per_suffix_layer": [
+        6.157317638397217,
+        5.3058624267578125,
+        16.105567932128906
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 47,
+      "input_token_id": 1664,
+      "target_token_id": 27470,
+      "decoded_target": "\u0120documented",
+      "valid_mask": true,
+      "token_ttt_ce": 2.8307180404663086,
+      "token_nll_legacy": 2.828125,
+      "exact_grad_norm_total": 17.4052791595459,
+      "exact_grad_norm_per_suffix_layer": [
+        8.176475524902344,
+        8.133100509643555,
+        13.03616714477539
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 79,
+      "input_token_id": 7931,
+      "target_token_id": 9879,
+      "decoded_target": "\u0120registered",
+      "valid_mask": true,
+      "token_ttt_ce": 11.16006088256836,
+      "token_nll_legacy": 11.1875,
+      "exact_grad_norm_total": 24.155920028686523,
+      "exact_grad_norm_per_suffix_layer": [
+        8.609781265258789,
+        11.265115737915039,
+        19.55702781677246
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 111,
+      "input_token_id": 13375,
+      "target_token_id": 72810,
+      "decoded_target": "\u0120logistic",
+      "valid_mask": true,
+      "token_ttt_ce": 4.7545485496521,
+      "token_nll_legacy": 4.75,
+      "exact_grad_norm_total": 25.4410457611084,
+      "exact_grad_norm_per_suffix_layer": [
+        8.909677505493164,
+        8.115584373474121,
+        22.4053955078125
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 143,
+      "input_token_id": 505,
+      "target_token_id": 279,
+      "decoded_target": "\u0120the",
+      "valid_mask": true,
+      "token_ttt_ce": 1.5387650728225708,
+      "token_nll_legacy": 1.5390625,
+      "exact_grad_norm_total": 8.09230899810791,
+      "exact_grad_norm_per_suffix_layer": [
+        3.207364320755005,
+        3.416001081466675,
+        6.597667217254639
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 175,
+      "input_token_id": 13,
+      "target_token_id": 21,
+      "decoded_target": "6",
+      "valid_mask": true,
+      "token_ttt_ce": 2.1848955154418945,
+      "token_nll_legacy": 2.1875,
+      "exact_grad_norm_total": 5.722953796386719,
+      "exact_grad_norm_per_suffix_layer": [
+        2.4397060871124268,
+        2.350475549697876,
+        4.612515449523926
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 207,
+      "input_token_id": 279,
+      "target_token_id": 11093,
+      "decoded_target": "\u0120combined",
+      "valid_mask": true,
+      "token_ttt_ce": 7.099798202514648,
+      "token_nll_legacy": 7.09375,
+      "exact_grad_norm_total": 28.550329208374023,
+      "exact_grad_norm_per_suffix_layer": [
+        9.097323417663574,
+        12.776881217956543,
+        23.85605239868164
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 239,
+      "input_token_id": 1694,
+      "target_token_id": 42777,
+      "decoded_target": "\u0120cared",
+      "valid_mask": true,
+      "token_ttt_ce": 5.491320610046387,
+      "token_nll_legacy": 5.5,
+      "exact_grad_norm_total": 20.72004508972168,
+      "exact_grad_norm_per_suffix_layer": [
+        7.721555709838867,
+        9.708903312683105,
+        16.596235275268555
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 271,
+      "input_token_id": 337,
+      "target_token_id": 91260,
+      "decoded_target": "iosis",
+      "valid_mask": true,
+      "token_ttt_ce": 0.30973872542381287,
+      "token_nll_legacy": 0.306640625,
+      "exact_grad_norm_total": 9.249432563781738,
+      "exact_grad_norm_per_suffix_layer": [
+        4.688945293426514,
+        5.113879680633545,
+        6.116701602935791
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 303,
+      "input_token_id": 892,
+      "target_token_id": 315,
+      "decoded_target": "\u0120of",
+      "valid_mask": true,
+      "token_ttt_ce": 0.20865066349506378,
+      "token_nll_legacy": 0.2109375,
+      "exact_grad_norm_total": 2.667498826980591,
+      "exact_grad_norm_per_suffix_layer": [
+        1.738755464553833,
+        1.4613438844680786,
+        1.3988399505615234
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 335,
+      "input_token_id": 279,
+      "target_token_id": 19754,
+      "decoded_target": "\u0120gall",
+      "valid_mask": true,
+      "token_ttt_ce": 5.946192741394043,
+      "token_nll_legacy": 5.9375,
+      "exact_grad_norm_total": 27.38614273071289,
+      "exact_grad_norm_per_suffix_layer": [
+        7.848803997039795,
+        9.48596477508545,
+        24.462493896484375
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 367,
+      "input_token_id": 34971,
+      "target_token_id": 323,
+      "decoded_target": "\u0120and",
+      "valid_mask": true,
+      "token_ttt_ce": 2.039346933364868,
+      "token_nll_legacy": 2.046875,
+      "exact_grad_norm_total": 11.314697265625,
+      "exact_grad_norm_per_suffix_layer": [
+        6.888647079467773,
+        5.23472261428833,
+        7.291543483734131
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 399,
+      "input_token_id": 6593,
+      "target_token_id": 4787,
+      "decoded_target": "\u0120conditions",
+      "valid_mask": true,
+      "token_ttt_ce": 0.7499945163726807,
+      "token_nll_legacy": 0.74609375,
+      "exact_grad_norm_total": 11.62353515625,
+      "exact_grad_norm_per_suffix_layer": [
+        3.5756962299346924,
+        4.602333068847656,
+        10.056814193725586
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 431,
+      "input_token_id": 12220,
+      "target_token_id": 64033,
+      "decoded_target": "\u0120adulthood",
+      "valid_mask": true,
+      "token_ttt_ce": 7.029037952423096,
+      "token_nll_legacy": 7.03125,
+      "exact_grad_norm_total": 25.789791107177734,
+      "exact_grad_norm_per_suffix_layer": [
+        10.946318626403809,
+        12.429463386535645,
+        19.768659591674805
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 463,
+      "input_token_id": 8,
+      "target_token_id": 574,
+      "decoded_target": "\u0120was",
+      "valid_mask": true,
+      "token_ttt_ce": 1.955669641494751,
+      "token_nll_legacy": 1.953125,
+      "exact_grad_norm_total": 14.062735557556152,
+      "exact_grad_norm_per_suffix_layer": [
+        7.033305644989014,
+        4.746842861175537,
+        11.214303970336914
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 495,
+      "input_token_id": 15207,
+      "target_token_id": 320,
+      "decoded_target": "\u0120(",
+      "valid_mask": true,
+      "token_ttt_ce": 0.7913565635681152,
+      "token_nll_legacy": 0.7890625,
+      "exact_grad_norm_total": 7.210267066955566,
+      "exact_grad_norm_per_suffix_layer": [
+        3.000969648361206,
+        3.087503671646118,
+        5.78355073928833
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 527,
+      "input_token_id": 510,
+      "target_token_id": 18,
+      "decoded_target": "3",
+      "valid_mask": true,
+      "token_ttt_ce": 0.15403661131858826,
+      "token_nll_legacy": 0.15234375,
+      "exact_grad_norm_total": 2.2193939685821533,
+      "exact_grad_norm_per_suffix_layer": [
+        1.5243146419525146,
+        1.2414422035217285,
+        1.0300464630126953
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 559,
+      "input_token_id": 9191,
+      "target_token_id": 3278,
+      "decoded_target": "\u0120women",
+      "valid_mask": true,
+      "token_ttt_ce": 3.920743942260742,
+      "token_nll_legacy": 3.921875,
+      "exact_grad_norm_total": 20.380512237548828,
+      "exact_grad_norm_per_suffix_layer": [
+        9.034825325012207,
+        11.828509330749512,
+        13.922054290771484
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 591,
+      "input_token_id": 11,
+      "target_token_id": 4814,
+      "decoded_target": "\u0120loss",
+      "valid_mask": true,
+      "token_ttt_ce": 3.0807409286499023,
+      "token_nll_legacy": 3.078125,
+      "exact_grad_norm_total": 16.828285217285156,
+      "exact_grad_norm_per_suffix_layer": [
+        8.240478515625,
+        5.718111991882324,
+        13.512545585632324
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 623,
+      "input_token_id": 480,
+      "target_token_id": 23834,
+      "decoded_target": "astro",
+      "valid_mask": true,
+      "token_ttt_ce": 3.268871784210205,
+      "token_nll_legacy": 3.28125,
+      "exact_grad_norm_total": 32.80906677246094,
+      "exact_grad_norm_per_suffix_layer": [
+        13.039721488952637,
+        12.909515380859375,
+        27.198251724243164
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 655,
+      "input_token_id": 21301,
+      "target_token_id": 1385,
+      "decoded_target": "ities",
+      "valid_mask": true,
+      "token_ttt_ce": 0.16373568773269653,
+      "token_nll_legacy": 0.1650390625,
+      "exact_grad_norm_total": 5.1499762535095215,
+      "exact_grad_norm_per_suffix_layer": [
+        2.1126530170440674,
+        2.5482330322265625,
+        3.9453089237213135
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 687,
+      "input_token_id": 1065,
+      "target_token_id": 11,
+      "decoded_target": ",",
+      "valid_mask": true,
+      "token_ttt_ce": 2.2349963188171387,
+      "token_nll_legacy": 2.234375,
+      "exact_grad_norm_total": 12.020840644836426,
+      "exact_grad_norm_per_suffix_layer": [
+        5.081815719604492,
+        5.029556751251221,
+        9.663297653198242
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 719,
+      "input_token_id": 281,
+      "target_token_id": 19516,
+      "decoded_target": ".Arg",
+      "valid_mask": true,
+      "token_ttt_ce": 0.3487725555896759,
+      "token_nll_legacy": 0.345703125,
+      "exact_grad_norm_total": 5.590564727783203,
+      "exact_grad_norm_per_suffix_layer": [
+        1.3246175050735474,
+        1.1344677209854126,
+        5.3115715980529785
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 751,
+      "input_token_id": 59387,
+      "target_token_id": 3252,
+      "decoded_target": "ging",
+      "valid_mask": true,
+      "token_ttt_ce": 0.519988477230072,
+      "token_nll_legacy": 0.51953125,
+      "exact_grad_norm_total": 11.01730728149414,
+      "exact_grad_norm_per_suffix_layer": [
+        4.056909561157227,
+        5.94873571395874,
+        8.338770866394043
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 783,
+      "input_token_id": 11,
+      "target_token_id": 220,
+      "decoded_target": "\u0120",
+      "valid_mask": true,
+      "token_ttt_ce": 0.9497718214988708,
+      "token_nll_legacy": 0.9453125,
+      "exact_grad_norm_total": 9.159287452697754,
+      "exact_grad_norm_per_suffix_layer": [
+        5.15708589553833,
+        4.591819763183594,
+        6.01765775680542
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 815,
+      "input_token_id": 449,
+      "target_token_id": 432,
+      "decoded_target": "\u0120R",
+      "valid_mask": true,
+      "token_ttt_ce": 0.10858709365129471,
+      "token_nll_legacy": 0.11083984375,
+      "exact_grad_norm_total": 1.9741919040679932,
+      "exact_grad_norm_per_suffix_layer": [
+        0.7388226389884949,
+        0.8062512874603271,
+        1.6436342000961304
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 847,
+      "input_token_id": 15155,
+      "target_token_id": 90388,
+      "decoded_target": "\u0120cohorts",
+      "valid_mask": true,
+      "token_ttt_ce": 7.121907711029053,
+      "token_nll_legacy": 7.125,
+      "exact_grad_norm_total": 37.20967483520508,
+      "exact_grad_norm_per_suffix_layer": [
+        17.479331970214844,
+        18.050168991088867,
+        27.44492530822754
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 879,
+      "input_token_id": 2585,
+      "target_token_id": 315,
+      "decoded_target": "\u0120of",
+      "valid_mask": true,
+      "token_ttt_ce": 1.9381344318389893,
+      "token_nll_legacy": 1.9375,
+      "exact_grad_norm_total": 15.986434936523438,
+      "exact_grad_norm_per_suffix_layer": [
+        8.451327323913574,
+        10.802641868591309,
+        8.212437629699707
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 911,
+      "input_token_id": 7211,
+      "target_token_id": 28439,
+      "decoded_target": "\u0120syndrome",
+      "valid_mask": true,
+      "token_ttt_ce": 0.051258448511362076,
+      "token_nll_legacy": 0.05322265625,
+      "exact_grad_norm_total": 0.891488254070282,
+      "exact_grad_norm_per_suffix_layer": [
+        0.4840971529483795,
+        0.365221232175827,
+        0.6534635424613953
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 943,
+      "input_token_id": 1156,
+      "target_token_id": 337,
+      "decoded_target": "ol",
+      "valid_mask": true,
+      "token_ttt_ce": 0.03062264248728752,
+      "token_nll_legacy": 0.03076171875,
+      "exact_grad_norm_total": 0.9949986934661865,
+      "exact_grad_norm_per_suffix_layer": [
+        0.45494168996810913,
+        0.45251718163490295,
+        0.760446310043335
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 975,
+      "input_token_id": 4147,
+      "target_token_id": 719,
+      "decoded_target": "\u0120but",
+      "valid_mask": true,
+      "token_ttt_ce": 4.927387714385986,
+      "token_nll_legacy": 4.9375,
+      "exact_grad_norm_total": 20.189329147338867,
+      "exact_grad_norm_per_suffix_layer": [
+        7.788296699523926,
+        9.03487777709961,
+        16.288719177246094
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "loss_index_t": 1007,
+      "input_token_id": 4819,
+      "target_token_id": 1778,
+      "decoded_target": "\u0120such",
+      "valid_mask": true,
+      "token_ttt_ce": 2.8246068954467773,
+      "token_nll_legacy": 2.8125,
+      "exact_grad_norm_total": 18.065330505371094,
+      "exact_grad_norm_per_suffix_layer": [
+        6.6081438064575195,
+        6.783949375152588,
+        15.383974075317383
+      ],
+      "global_layer_per_suffix_layer": [
+        9,
+        10,
+        11
+      ]
+    }
+  ],
+  "runtime_s": {
+    "token_ttt_ce_compile_s": 24.08664530000533,
+    "token_ttt_ce_run_s": 0.03752049899776466,
+    "official_lm_loss_compile_s": 17.475912556008552,
+    "official_lm_loss_run_s": 0.0375639650010271,
+    "grad_reconstructed_compile_s": 32.383490200998494,
+    "grad_reconstructed_run_s": 0.09438381700601894,
+    "grad_official_compile_s": 22.77253846899839,
+    "grad_official_run_s": 0.0931230419955682,
+    "exact_grad_compile_s": 22.228463974010083,
+    "exact_grad_remaining_s": 2.9700335959059885,
+    "exact_grad_total_after_compile_s": 2.9700335959059885,
+    "jvp_compile_s": 30.556534244009526,
+    "jvp_remaining_s": 3.1189337210380472
+  },
+  "memory": {
+    "before_compute": {
+      "num_allocs": 60,
+      "bytes_in_use": 1069082624,
+      "peak_bytes_in_use": 1857398016,
+      "largest_alloc_size": 394002432,
+      "bytes_limit": 9663283200,
+      "bytes_reserved": 0,
+      "peak_bytes_reserved": 0,
+      "largest_free_block_bytes": 0,
+      "pool_bytes": 2149580800,
+      "peak_pool_bytes": 2149580800
+    },
+    "after_compute": {
+      "num_allocs": 9546,
+      "bytes_in_use": 2677899520,
+      "peak_bytes_in_use": 4889725696,
+      "largest_alloc_size": 2266236928,
+      "bytes_limit": 9663283200,
+      "bytes_reserved": 0,
+      "peak_bytes_reserved": 0,
+      "largest_free_block_bytes": 0,
+      "pool_bytes": 8592031744,
+      "peak_pool_bytes": 8592031744
+    }
+  }
+}

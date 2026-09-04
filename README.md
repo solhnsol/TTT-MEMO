@@ -11,29 +11,25 @@ A new agent continuing this work should start at [`scripts/baseline_125m/README.
 | Path | Role |
 |---|---|
 | `e2e/` | Official [TTT-E2E](https://github.com/test-time-training/e2e) submodule. Pin: `upstream/ttt-e2e.toml`. |
-| `scripts/baseline_125m/` | Sanity checks and ablations **outside** the submodule. |
+| `scripts/baseline_125m/` | Baseline research scripts **outside** the submodule: `common/`, `sanity/`, `experiments/`. |
 | `docker/` | Image on top of `e2e/uv.lock` plus a short research extras list. |
 | `checkpoints/` | Official weights (gitignored). |
-| `data/` | Tokenizer, probe tokens, datasets (gitignored except README / `.gitkeep`). |
-| `results/raw/` | Raw measurements (gitignored). Copy numbers you care about into notes. |
+| `data/` | Tokenizer, probe tokens, datasets (gitignored except README / `.gitkeep` / the 32 KB DCLM probe). |
+| `results/raw/baseline_125m/` | Completed baseline measurements (JSON/NPZ). Other raw dumps stay gitignored. |
 | `upstream/` | Pins for code and tokenizer files not authored here. |
 
 ```bash
 git submodule update --init --recursive
 docker compose build
-docker compose run --rm ttt python scripts/baseline_125m/<script>.py
+docker compose run --rm ttt python scripts/baseline_125m/sanity/inspect_config.py
 ```
 
 ## Status (2026-09)
 
-The 125M official checkpoint `125m_ttt_e2e_pretrain_dclm_8k_1x_cc` loads and runs on this machine.
+The 125M official checkpoint `125m_ttt_e2e_pretrain_dclm_8k_1x_cc` loads and runs. Token-wise `G_t = ||∇_{W_fast} l_t^TTT||_2` is measured with exact reverse-mode and a Rademacher JVP estimator (STEP 2/3). STEP 4 (8-chunk trajectory × 4 projection seeds) is implemented but not yet a completed result.
 
-- Restored NTP on a real DCLM val prefix is ~3.13 vs ~11.98 for random init (T=1024).
-- T=2048 is two inner-loop chunks of 1024. Official `metrics["loss"]` is shape `[2]`.
-- Holding SWA KV fixed, resetting vs keeping chunk-0 fast weights changes chunk-1 NTP by ~0.03 nat on **one** probe sequence. That is a functional signal, not a claim that TTT “works well.”
-
-Host GPU is an RTX 3060 (sm_86). Prefix SWA hardcodes `implementation="cudnn"`; that kernel currently fails here. Script-local override rewrites only that keyword to `"xla"`. See the baseline README.
+Host GPU during development was an RTX 3060. Prefix SWA hardcodes `implementation="cudnn"`; scripts may rewrite that keyword to `"xla"` locally. On a machine where the official cuDNN path works, run with `--no-attention-cudnn-override`.
 
 ## What this repo is not yet
 
-No TTT-MEMO router, no saliency labels, no gradient-norm logging, no out-of-window long-context eval. Sliding window is 8192, matching the pretrain length, so 8K-in-window scores must not be attributed to TTT memory alone.
+No TTT-MEMO router, no saliency labels, no future-utility experiment, no out-of-window long-context eval. Sliding window is 8192, matching the pretrain length, so 8K-in-window scores must not be attributed to TTT memory alone. `G_t` is a gradient-signal magnitude, not importance.

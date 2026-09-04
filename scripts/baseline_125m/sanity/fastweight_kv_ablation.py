@@ -13,7 +13,7 @@ Reported NTP is the inner-loop value computed *before* that chunk's update.
 Inner SGD has no momentum, so optimizer state does not enter this number.
 
 Harness check: `updated` chunk-1 NTP should match
-`results/raw/baseline_125m/forward_sanity_t2048.json` restored chunk 1 within
+`results/raw/baseline_125m/sanity/forward_sanity_t2048.json` restored chunk 1 within
 bf16 noise. If it does not, the ablation is not the official path.
 """
 
@@ -25,7 +25,9 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_BASELINE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_BASELINE_ROOT / "common"))
+sys.path.insert(0, str(_BASELINE_ROOT / "sanity"))
 
 from baseline_config import CHECKPOINT_DIR, REPO_ROOT, add_e2e_to_path, compose_baseline_config  # noqa: E402
 from forward_sanity import (  # noqa: E402

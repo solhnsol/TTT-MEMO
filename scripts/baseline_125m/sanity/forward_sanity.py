@@ -33,19 +33,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_BASELINE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_BASELINE_ROOT / "common"))
+sys.path.insert(0, str(_BASELINE_ROOT / "sanity"))
 
-from baseline_config import CHECKPOINT_DIR, REPO_ROOT, add_e2e_to_path, compose_baseline_config  # noqa: E402
+from baseline_config import CHECKPOINT_DIR, REPO_ROOT, SANITY_RESULT_DIR, add_e2e_to_path, compose_baseline_config  # noqa: E402
+from runtime_helpers import AttentionOverride, describe_gpu, tokens_to_batch  # noqa: E402
 
 PROBE_PATH = REPO_ROOT / "data" / "_probe_val_head.bin"
-RESULT_DIR = REPO_ROOT / "results" / "raw" / "baseline_125m"
-
-# Smallest T the official SWA suffix path accepts under this checkpoint's config.
+RESULT_DIR = SANITY_RESULT_DIR
 DEFAULT_SEQ_LEN = 1024
 
 # Official call sites in e2e/ttt/model/attention.py for this checkpoint
@@ -78,122 +78,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     return parser.parse_args()
-
-
-@dataclass
-class GpuInfo:
-    name: str
-    compute_capability: str | None
-    jax_device: str
-    jax_backend: str
-
-
-def describe_gpu() -> GpuInfo:
-    import jax
-
-    device = jax.devices()[0]
-    name = getattr(device, "device_kind", str(device))
-    compute_capability = None
-    try:
-        line = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=name,compute_cap", "--format=csv,noheader"],
-            text=True,
-            timeout=10,
-        ).strip().splitlines()[0]
-        smi_name, smi_cc = [part.strip() for part in line.split(",", 1)]
-        name = smi_name
-        compute_capability = smi_cc
-    except (FileNotFoundError, subprocess.SubprocessError, ValueError):
-        pass
-    return GpuInfo(
-        name=name,
-        compute_capability=compute_capability,
-        jax_device=str(device),
-        jax_backend=jax.default_backend(),
-    )
-
-
-@dataclass
-class AttentionOverride:
-    """Process-local RTX 3060 compatibility workaround for this sanity-check script.
-
-    Not a change to model architecture or attention semantics. The official
-    prefix SWA path hardcodes jax.nn.dot_product_attention(..., implementation="cudnn")
-    in e2e/ttt/model/attention.py:312. On this host that kernel currently has no
-    valid cuDNN engine; the same shapes run with implementation="xla". The root
-    cause of the cuDNN failure is not established here (missing NVRTC is one
-    hypothesis, not a finding).
-
-    The wrapper only rewrites the `implementation` keyword when its value is
-    exactly "cudnn". Every other argument is forwarded unchanged. For the 125M
-    E2E config (force_flash=False) the only such call is prefix SWA; suffix
-    already passes implementation=None, so it is not rewritten.
-    """
-
-    enabled: bool
-    n_seen: int = 0
-    n_redirected: int = 0
-    n_passthrough: int = 0
-    installed: bool = False
-
-    def install(self) -> None:
-        if not self.enabled:
-            return
-        import jax
-        import jax.nn as jnn
-
-        original = jnn.dot_product_attention
-
-        def wrapped(*args, **kwargs):
-            self.n_seen += 1
-            if kwargs.get("implementation") == "cudnn":
-                kwargs = dict(kwargs)
-                kwargs["implementation"] = "xla"
-                self.n_redirected += 1
-            else:
-                self.n_passthrough += 1
-            return original(*args, **kwargs)
-
-        jnn.dot_product_attention = wrapped
-        jax.nn.dot_product_attention = wrapped
-        self.installed = True
-
-    def report_for_config(self, *, force_flash: bool, seq_modeling_block: str) -> dict:
-        """Requested vs effective backends implied by the official source + this flag.
-
-        Suffix is unaffected unless force_flash becomes True, in which case the
-        official suffix path would also request cudnn and this wrapper would
-        redirect it too. That is not this checkpoint's config.
-        """
-        prefix_requested = "cudnn"
-        suffix_requested = "cudnn" if force_flash else None
-        prefix_effective = "xla" if self.enabled else prefix_requested
-        suffix_effective = "xla" if (self.enabled and suffix_requested == "cudnn") else suffix_requested
-        return {
-            "override_enabled": self.enabled,
-            "override_installed": self.installed,
-            "seq_modeling_block": seq_modeling_block,
-            "force_flash": force_flash,
-            "prefix_requested_backend": prefix_requested,
-            "prefix_effective_backend": prefix_effective,
-            "suffix_requested_backend": suffix_requested,
-            "suffix_effective_backend": suffix_effective,
-            "redirects_only_when_implementation_is_cudnn": True,
-            "n_dot_product_attention_seen": self.n_seen,
-            "n_cudnn_redirected_to_xla": self.n_redirected,
-            "n_passthrough": self.n_passthrough,
-        }
-
-
-def tokens_to_batch(tokens, *, bos_token_id: int):
-    """Same slicing as `ttt.dataloader.lm_dataset._to_batch`, minus the unused eos arg."""
-    from ttt.model.data import Batch
-
-    return Batch(
-        input_ids=tokens[:-1],
-        target_tokens=tokens[1:],
-        loss_masks=(tokens[1:] != bos_token_id),
-    )
 
 
 def summarize_nll(name: str, nll, mask) -> dict[str, float | bool]:

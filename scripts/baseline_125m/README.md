@@ -8,7 +8,7 @@ Read this before adding gradient logging, a router, or a new eval. If a change w
 
 Checkpoint: `checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc` (Orbax step 4799, params only).
 
-Hydra experiment: `+experiment=125m/pretrain/pretrain-125m-e2e` (composed in `baseline_config.py`).
+Hydra experiment: `+experiment=125m/pretrain/pretrain-125m-e2e` (composed in `common/baseline_config.py`).
 
 | Setting | Value | Why it matters |
 |---|---|---|
@@ -37,19 +37,25 @@ Official code has **no tokenizer**. `config.tokenizer_name` is dead and wrongly 
 
 ## Files here
 
-| File | Role |
+| Path | Role |
 |---|---|
-| `baseline_config.py` | Shared Hydra compose. Import this; do not duplicate overrides. |
-| `inspect_config.py` | Config only. No JAX. |
-| `restore_checkpoint.py` | Orbax restore; both-way pytree match; init vs restored leaf stats. |
-| `verify_tokenizer.py` | Download `tokenizer.json`, sha256, DCLM probe round-trip. |
-| `forward_sanity.py` | Official `loss_for_sequence`. `--seq-len` (default 1024). Restored vs random. |
-| `fastweight_kv_ablation.py` | Orchestrates official `inner_loop_step`. Chunk 1: same KV, fast weights updated vs reset. |
+| `common/baseline_config.py` | Shared Hydra compose. Import this; do not duplicate overrides. |
+| `common/restore_checkpoint.py` | Orbax restore; both-way pytree match; init vs restored leaf stats. |
+| `common/measurement_utils.py` | Shared `l_t^TTT` / pytree / ranking helpers. No eval-point setup. |
+| `common/runtime_helpers.py` | GPU info, `AttentionOverride`, `tokens_to_batch`. |
+| `sanity/inspect_config.py` | Config only. No JAX. |
+| `sanity/verify_tokenizer.py` | Download `tokenizer.json`, sha256, DCLM probe round-trip. |
+| `sanity/forward_sanity.py` | Official `loss_for_sequence`. `--seq-len` (default 1024). Restored vs random. |
+| `sanity/fastweight_kv_ablation.py` | Orchestrates official `inner_loop_step`. Chunk 1: same KV, fast weights updated vs reset. |
+| `sanity/jvp_vjp_numerical_diagnostic.py` | JVP vs VJP directional-identity diagnostic (not an estimator study). |
+| `experiments/token_grad_norm_jvp_validation.py` | STEP 2: 32-token exact vs JVP on chunk 0. |
+| `experiments/token_grad_norm_full_validation.py` | STEP 3: full 1024-token exact vs JVP on chunk 0. |
+| `experiments/token_grad_norm_trajectory_validation.py` | STEP 4: 8 sequential TTT chunks × 4 JVP seeds (code ready; result not completed). |
 | `README.md` | This file. |
 
-Reuse from `forward_sanity.py` (do not copy-paste blindly): `AttentionOverride`, `describe_gpu`, `tokens_to_batch`, restore/mesh boilerplate in `main`.
+Reuse from `common/runtime_helpers.py`: `AttentionOverride`, `describe_gpu`, `tokens_to_batch`. Dependency direction: `common` → nothing; `sanity` → `common`; `experiments` → `common`.
 
-`fastweight_kv_ablation.py` is the pattern for “run official inner steps without editing `e2e/`”: `BlockCollectionSplit` **after** `state.substate(h.blocks)`, fp32 cast, `prefix_call` once, `tree_rearrange`, then `inner_loop_step`. Outer params are recombined from the pre-scan model every chunk, as in `process_suffix_chunk`.
+`sanity/fastweight_kv_ablation.py` is the pattern for “run official inner steps without editing `e2e/`”: `BlockCollectionSplit` **after** `state.substate(h.blocks)`, fp32 cast, `prefix_call` once, `tree_rearrange`, then `inner_loop_step`. Outer params are recombined from the pre-scan model every chunk, as in `process_suffix_chunk`.
 
 ## How to run
 
@@ -58,18 +64,26 @@ From repo root:
 ```bash
 git submodule update --init --recursive
 docker compose build
-docker compose run --rm ttt python scripts/baseline_125m/inspect_config.py
-docker compose run --rm ttt python scripts/baseline_125m/restore_checkpoint.py
-docker compose run --rm ttt python scripts/baseline_125m/verify_tokenizer.py
-docker compose run --rm ttt python scripts/baseline_125m/forward_sanity.py
-docker compose run --rm ttt python scripts/baseline_125m/forward_sanity.py --seq-len 2048
-docker compose run --rm ttt python scripts/baseline_125m/fastweight_kv_ablation.py
+docker compose run --rm ttt python scripts/baseline_125m/sanity/inspect_config.py
+docker compose run --rm ttt python scripts/baseline_125m/common/restore_checkpoint.py
+docker compose run --rm ttt python scripts/baseline_125m/sanity/verify_tokenizer.py
+docker compose run --rm ttt python scripts/baseline_125m/sanity/forward_sanity.py
+docker compose run --rm ttt python scripts/baseline_125m/sanity/forward_sanity.py --seq-len 2048
+docker compose run --rm ttt python scripts/baseline_125m/sanity/fastweight_kv_ablation.py
+docker compose run --rm -e PYTHONUNBUFFERED=1 ttt python scripts/baseline_125m/experiments/token_grad_norm_jvp_validation.py
+docker compose run --rm -e PYTHONUNBUFFERED=1 ttt python scripts/baseline_125m/experiments/token_grad_norm_full_validation.py
+```
+
+STEP 4 (8K trajectory, expensive; run on a GPU that can hold official 8K prefix SWA):
+
+```bash
+docker compose run --rm -e PYTHONUNBUFFERED=1 ttt python scripts/baseline_125m/experiments/token_grad_norm_trajectory_validation.py
 ```
 
 Disable the attention workaround only if cuDNN prefix SDPA works on that GPU:
 
 ```bash
-docker compose run --rm ttt python scripts/baseline_125m/forward_sanity.py --no-attention-cudnn-override
+docker compose run --rm ttt python scripts/baseline_125m/sanity/forward_sanity.py --no-attention-cudnn-override
 ```
 
 ### Local files (gitignored)
@@ -79,7 +93,8 @@ docker compose run --rm ttt python scripts/baseline_125m/forward_sanity.py --no-
 | `checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc/` | Official GCS, Requester Pays. |
 | `data/tokenizer/llama3/tokenizer.json` | `verify_tokenizer.py`; pin `upstream/llama3-tokenizer.toml` (`sha256 e134af98…`). |
 | `data/_probe_val_head.bin` | First 8192 little-endian uint32 tokens of `gs://llama3-dclm-filter-8k/data.zarr/val/c/0` (uncompressed). Need `T+1` tokens. |
-| `results/raw/baseline_125m/*.json` | Written by the scripts. Gitignored; numbers below are the record. |
+| `results/raw/baseline_125m/sanity/*.json` | Sanity measurements. |
+| `results/raw/baseline_125m/experiments/*.json` | Estimator measurements (STEP 2/3 completed). |
 
 ## What we already know (one DCLM val prefix, RTX 3060)
 
@@ -107,7 +122,7 @@ On this sequence, fast weights change chunk-1 NTP with KV held fixed. The effect
 
 Prefix SWA: `e2e/ttt/model/attention.py` `SWA.full_sw_attention`, `implementation="cudnn"`. On this host that call raises `No valid engine configs`. Same shapes work with `"xla"`.
 
-Implemented only in `AttentionOverride` (`forward_sanity.py`), imported by the ablation script.
+Implemented only in `AttentionOverride` (`common/runtime_helpers.py`).
 
 - Not an `e2e/` patch, not a change to mask/window/loss.
 - Rewrites **only** `implementation="cudnn"` → `"xla"`.

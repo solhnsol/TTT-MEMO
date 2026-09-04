@@ -11,12 +11,21 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# This file lives at scripts/baseline_125m/common/baseline_config.py
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BASELINE_SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
 E2E_ROOT = REPO_ROOT / "e2e"
 CONFIG_DIR = E2E_ROOT / "configs"
 CHECKPOINT_DIR = REPO_ROOT / "checkpoints" / "125m_ttt_e2e_pretrain_dclm_8k_1x_cc"
 
 EXPERIMENT = "125m/pretrain/pretrain-125m-e2e"
+
+TOKENIZER_PATH = REPO_ROOT / "data" / "tokenizer" / "llama3" / "tokenizer.json"
+PROBE_PATH = REPO_ROOT / "data" / "_probe_val_head.bin"
+
+RAW_RESULT_DIR = REPO_ROOT / "results" / "raw" / "baseline_125m"
+SANITY_RESULT_DIR = RAW_RESULT_DIR / "sanity"
+EXPERIMENT_RESULT_DIR = RAW_RESULT_DIR / "experiments"
 
 
 def add_e2e_to_path() -> None:

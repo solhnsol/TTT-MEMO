@@ -1,0 +1,55 @@
+{
+  "seq_len": 2048,
+  "mini_batch_size": 1024,
+  "n_chunks": 2,
+  "checkpoint_dir": "/workspace/checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc",
+  "probe_path": "/workspace/data/_probe_val_head.bin",
+  "param_dtype": "fp32",
+  "compute_dtype": "bf16",
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 3060",
+    "compute_capability": "8.6",
+    "jax_device": "cuda:0",
+    "jax_backend": "gpu"
+  },
+  "attention": {
+    "override_enabled": true,
+    "override_installed": true,
+    "seq_modeling_block": "SWA",
+    "force_flash": false,
+    "prefix_requested_backend": "cudnn",
+    "prefix_effective_backend": "xla",
+    "suffix_requested_backend": null,
+    "suffix_effective_backend": null,
+    "redirects_only_when_implementation_is_cudnn": true,
+    "n_dot_product_attention_seen": 4,
+    "n_cudnn_redirected_to_xla": 1,
+    "n_passthrough": 3
+  },
+  "chunk0": {
+    "mean_ntp": 3.130347967147827,
+    "token_nll_mean": 3.130152940750122,
+    "any_nan": false,
+    "any_inf": false
+  },
+  "chunk1_updated": {
+    "mean_ntp": 3.1147842407226562,
+    "token_nll_mean": 3.114367723464966,
+    "any_nan": false,
+    "any_inf": false
+  },
+  "chunk1_reset": {
+    "mean_ntp": 3.1459338665008545,
+    "token_nll_mean": 3.1461353302001953,
+    "any_nan": false,
+    "any_inf": false
+  },
+  "reset_minus_updated": 0.031149625778198242,
+  "harness_vs_scan": {
+    "ref_json": "/workspace/results/raw/baseline_125m/forward_sanity_t2048.json",
+    "chunk0_minus_ref": 0.0002505779266357422,
+    "updated_chunk1_minus_ref": -0.0006890296936035156,
+    "ref_chunk0": 3.1300973892211914,
+    "ref_chunk1": 3.1154732704162598
+  }
+}
