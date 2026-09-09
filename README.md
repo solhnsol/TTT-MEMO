@@ -26,10 +26,10 @@ docker compose run --rm ttt python scripts/baseline_125m/sanity/inspect_config.p
 
 ## Status (2026-09)
 
-The 125M official checkpoint `125m_ttt_e2e_pretrain_dclm_8k_1x_cc` loads and runs. Token-wise `G_t = ||∇_{W_fast} l_t^TTT||_2` is measured with exact reverse-mode and a Rademacher JVP estimator (STEP 2/3). STEP 4 (8-chunk trajectory × 4 projection seeds) is implemented but not yet a completed result.
+The 125M official checkpoint `125m_ttt_e2e_pretrain_dclm_8k_1x_cc` loads and runs on A100 cuDNN. Token-wise `G_t` is measured with exact reverse-mode and a Rademacher JVP estimator (STEP 2/3). Alignment metrics `Ahat`/`Ihat` were checked on DCLM chunk 0 (STEP 6C.1). RULER NIAH labels exist for 8000 rows (parquet local). An 8K **in-SWA** mechanism pilot (STEP 7A, 20+20) is recorded; it is not a long-range memory result. Details: [`scripts/baseline_125m/README.md`](scripts/baseline_125m/README.md).
 
-Host GPU during development was an RTX 3060. Prefix SWA hardcodes `implementation="cudnn"`; scripts may rewrite that keyword to `"xla"` locally. On a machine where the official cuDNN path works, run with `--no-attention-cudnn-override`.
+**Main experiment backend on A100 is cuDNN** (`--no-attention-cudnn-override`). Runtime extra, not in `e2e/uv.lock`: `nvidia-cuda-nvrtc-cu12==12.8.93` with `libnvrtc.so.12` on `LD_LIBRARY_PATH`. Details: [`scripts/baseline_125m/README.md`](scripts/baseline_125m/README.md). The XLA `AttentionOverride` remains a fallback (RTX 3060, or A100 without NVRTC).
 
 ## What this repo is not yet
 
-No TTT-MEMO router, no saliency labels, no future-utility experiment, no out-of-window long-context eval. Sliding window is 8192, matching the pretrain length, so 8K-in-window scores must not be attributed to TTT memory alone. `G_t` is a gradient-signal magnitude, not importance.
+No TTT-MEMO router, no prospective student, no out-of-window long-context eval. Sliding window is 8192, matching the pretrain length, so 8K-in-window scores must not be attributed to TTT memory alone. `G_t` is a gradient-signal magnitude, not importance. RULER needle spans are token labels, not teacher saliency.

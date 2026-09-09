@@ -69,6 +69,14 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Same RTX 3060 compatibility flag as forward_sanity.py.",
     )
+    parser.add_argument(
+        "--output-suffix",
+        default="",
+        help=(
+            "Appended to the result stem before the extension, e.g. _a100_cudnn. "
+            "Empty keeps the canonical filename. Does not change measurement semantics."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -267,7 +275,7 @@ def finite_flags(name: str, arr) -> dict:
     }
 
 
-def main(attention_cudnn_override: bool = True) -> None:
+def main(attention_cudnn_override: bool = True, output_suffix: str = "") -> None:
     wall0 = time.perf_counter()
     cfg = compose_baseline_config()
     add_e2e_to_path()
@@ -359,9 +367,24 @@ def main(attention_cudnn_override: bool = True) -> None:
 
     print("--- setup ---", flush=True)
     print(f"GPU: {gpu.name}  jax={gpu.jax_device}", flush=True)
+    print(f"jax={jax.__version__}  jaxlib={getattr(__import__('jaxlib'), '__version__', 'unknown')}", flush=True)
     print(f"T/chunk={SEQ_LEN}/{CHUNK_INDEX}  compute={cfg.model.compute_dtype}  seed={JVP_SEED}", flush=True)
     print(f"resume_step: {resume_step}", flush=True)
     print("step_index: not set (no inner_loop_step)", flush=True)
+    attn_setup = override.report_for_config(
+        force_flash=bool(cfg.model.force_flash),
+        seq_modeling_block=str(cfg.model.seq_modeling_block),
+    )
+    print(
+        f"attention override_enabled={attn_setup['override_enabled']} "
+        f"prefix_requested={attn_setup['prefix_requested_backend']} "
+        f"prefix_effective={attn_setup['prefix_effective_backend']} "
+        f"suffix_requested={attn_setup['suffix_requested_backend']} "
+        f"suffix_effective={attn_setup['suffix_effective_backend']}",
+        flush=True,
+    )
+    if output_suffix:
+        print(f"output_suffix: {output_suffix!r} (non-canonical result stem)", flush=True)
 
     memory = {"before_compute": try_memory_stats()}
     runtime: dict = {}
@@ -480,12 +503,24 @@ def main(attention_cudnn_override: bool = True) -> None:
         print(f"  valid_masks match:            {mask_equal}", flush=True)
         print(f"  valid tokens: {n_valid}/{SEQ_LEN}", flush=True)
         if not (
-            eval_point_checks["token_ttt_ce_matches_prev"]
-            and eval_point_checks["input_ids_match_prev"]
+            eval_point_checks["input_ids_match_prev"]
             and eval_point_checks["target_ids_match_prev"]
             and eval_point_checks["valid_masks_match_prev"]
         ):
             raise SystemExit("evaluation point arrays do not match previous validation; refuse to continue")
+        if not eval_point_checks["token_ttt_ce_matches_prev"]:
+            if output_suffix:
+                print(
+                    "NOTE: token_ttt_ce vs previous exceeds "
+                    f"{EVAL_POINT_CE_ABS}; continuing because --output-suffix is set "
+                    "(non-canonical run, e.g. attention backend comparison). "
+                    "ids/targets/masks still matched.",
+                    flush=True,
+                )
+            else:
+                raise SystemExit(
+                    "evaluation point arrays do not match previous validation; refuse to continue"
+                )
 
         sanity["purity_f_repeat"] = float(np.max(np.abs(token_ttt_ce - y2)))
         sanity["token_ttt_ce_shape"] = list(token_ttt_ce.shape)
@@ -772,7 +807,7 @@ def main(attention_cudnn_override: bool = True) -> None:
         )
 
         EXPERIMENT_RESULT_DIR.mkdir(parents=True, exist_ok=True)
-        stem = EXPERIMENT_RESULT_DIR / f"token_grad_norm_full_validation_t{SEQ_LEN}"
+        stem = EXPERIMENT_RESULT_DIR / f"token_grad_norm_full_validation_t{SEQ_LEN}{output_suffix}"
         npz_kwargs = {
             "positions": np.arange(SEQ_LEN, dtype=np.int32),
             "input_ids": np.asarray(seq_chunk.input_ids),
@@ -848,6 +883,12 @@ def main(attention_cudnn_override: bool = True) -> None:
                 "reason": "pure f / exact / JVP do not call inner_loop_step",
             },
             "gpu": asdict(gpu),
+            "software": {
+                "python": sys.version.split()[0],
+                "jax": jax.__version__,
+                "jaxlib": getattr(__import__("jaxlib"), "__version__", "unknown"),
+            },
+            "output_suffix": output_suffix,
             "attention": attention_cfg,
             "tokenizer_path": str(TOKENIZER_PATH) if tokenizer is not None else None,
             "evaluation_point_vs_previous": eval_point_checks,
@@ -871,4 +912,7 @@ def main(attention_cudnn_override: bool = True) -> None:
 
 if __name__ == "__main__":
     args = parse_args()
-    main(attention_cudnn_override=args.attention_cudnn_override)
+    main(
+        attention_cudnn_override=args.attention_cudnn_override,
+        output_suffix=args.output_suffix,
+    )

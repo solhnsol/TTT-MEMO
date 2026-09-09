@@ -77,6 +77,10 @@ hf_cache/
 *.zarr
 *.npz
 !results/raw/baseline_125m/**/*.npz
+*.parquet
+# Regenerated RULER token labels (~842MB) and 7A analysis tables. Rebuild locally.
+results/raw/baseline_125m/ruler_niah_labels/*.parquet
+results/raw/baseline_125m/ruler_niah_labels/_*/
 
 # Slurm / cluster
 slurm-*.out

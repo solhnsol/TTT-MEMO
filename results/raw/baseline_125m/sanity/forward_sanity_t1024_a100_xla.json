@@ -1,0 +1,75 @@
+{
+  "seq_len": 1024,
+  "mini_batch_size": 1024,
+  "n_inner_loop_chunks": 1,
+  "train_mode": "meta",
+  "param_dtype": "fp32",
+  "compute_dtype": "bf16",
+  "gpu": {
+    "name": "NVIDIA A100 80GB PCIe",
+    "compute_capability": "8.0",
+    "jax_device": "cuda:0",
+    "jax_backend": "gpu"
+  },
+  "attention": {
+    "override_enabled": true,
+    "override_installed": true,
+    "seq_modeling_block": "SWA",
+    "force_flash": false,
+    "prefix_requested_backend": "cudnn",
+    "prefix_effective_backend": "xla",
+    "suffix_requested_backend": null,
+    "suffix_effective_backend": null,
+    "redirects_only_when_implementation_is_cudnn": true,
+    "n_dot_product_attention_seen": 2,
+    "n_cudnn_redirected_to_xla": 1,
+    "n_passthrough": 1
+  },
+  "checkpoint_dir": "/home/solhnsol/workspace/TTT-MEMO/checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc",
+  "probe_path": "/home/solhnsol/workspace/TTT-MEMO/data/_probe_val_head.bin",
+  "logits_per_chunk": [
+    1024,
+    128256
+  ],
+  "logits_concat_equivalent": [
+    1024,
+    128256
+  ],
+  "restored": {
+    "mean_masked": 3.1315109729766846,
+    "min": -0.0,
+    "mean": 3.1315109729766846,
+    "max": 13.8125,
+    "any_nan": false,
+    "any_inf": false,
+    "all_finite": true
+  },
+  "random": {
+    "mean_masked": 11.981689453125,
+    "min": 10.375,
+    "mean": 11.981689453125,
+    "max": 13.8125,
+    "any_nan": false,
+    "any_inf": false,
+    "all_finite": true
+  },
+  "restored_chunks": [
+    {
+      "chunk": 0,
+      "mean_ntp": 3.1313953399658203,
+      "token_nll_masked_mean": 3.1315109729766846,
+      "any_nan": false,
+      "any_inf": false
+    }
+  ],
+  "random_chunks": [
+    {
+      "chunk": 0,
+      "mean_ntp": 11.983476638793945,
+      "token_nll_masked_mean": 11.981689453125,
+      "any_nan": false,
+      "any_inf": false
+    }
+  ],
+  "random_minus_restored_masked_mean": 8.850178480148315
+}

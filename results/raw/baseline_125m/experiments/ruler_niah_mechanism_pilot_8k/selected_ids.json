@@ -1,0 +1,52 @@
+{
+  "sample_select_seed": 20260905,
+  "rule": "numpy default_rng(seed+salt).choice(200, 20, replace=False); sorted",
+  "independent_of_model_output": true,
+  "tasks": {
+    "niah_single_2": [
+      4,
+      18,
+      57,
+      61,
+      65,
+      70,
+      80,
+      87,
+      129,
+      139,
+      142,
+      143,
+      145,
+      148,
+      151,
+      164,
+      165,
+      172,
+      178,
+      195
+    ],
+    "niah_multikey_1": [
+      39,
+      48,
+      53,
+      60,
+      61,
+      66,
+      82,
+      91,
+      96,
+      97,
+      110,
+      134,
+      136,
+      147,
+      148,
+      149,
+      170,
+      175,
+      181,
+      199
+    ]
+  },
+  "n_take": 20
+}

@@ -50,7 +50,13 @@ Official code has **no tokenizer**. `config.tokenizer_name` is dead and wrongly 
 | `sanity/jvp_vjp_numerical_diagnostic.py` | JVP vs VJP directional-identity diagnostic (not an estimator study). |
 | `experiments/token_grad_norm_jvp_validation.py` | STEP 2: 32-token exact vs JVP on chunk 0. |
 | `experiments/token_grad_norm_full_validation.py` | STEP 3: full 1024-token exact vs JVP on chunk 0. |
-| `experiments/token_grad_norm_trajectory_validation.py` | STEP 4: 8 sequential TTT chunks × 4 JVP seeds (code ready; result not completed). |
+| `experiments/token_grad_align_validation.py` | STEP 6C.1: DCLM T=1024 chunk-0 `Ahat`/`Ihat` vs 32-token exact (cuDNN). |
+| `experiments/ruler_niah_measurement_pilot.py` | STEP 6D: one RULER 8K S-NIAH sample × official TTT trajectory (pipeline sanity). |
+| `experiments/ruler_niah_mechanism_pilot_8k.py` | STEP 7A: 20+20 RULER 8K single_2 / MK1 mechanism pilot (in-SWA). |
+| `experiments/token_grad_norm_trajectory_validation.py` | STEP 4: 8 sequential TTT chunks × 4 JVP seeds (A100 run exists; JSON has a flagged comparison — inspect before treating as clean). |
+| `common/ruler_niah_labels.py` | STEP 6B: RULER NIAH needle span / loss-index helpers. CPU, no TTT. |
+| `sanity/test_ruler_niah_labels.py` | Unit tests for `t=j-1`, padding mask, overlap, one real S1 row. |
+| `experiments/prepare_ruler_niah_labels.py` | Label all 8000 JSONL rows → `results/raw/baseline_125m/ruler_niah_labels/`. |
 | `README.md` | This file. |
 
 Reuse from `common/runtime_helpers.py`: `AttentionOverride`, `describe_gpu`, `tokens_to_batch`. Dependency direction: `common` → nothing; `sanity` → `common`; `experiments` → `common`.
@@ -74,6 +80,22 @@ docker compose run --rm -e PYTHONUNBUFFERED=1 ttt python scripts/baseline_125m/e
 docker compose run --rm -e PYTHONUNBUFFERED=1 ttt python scripts/baseline_125m/experiments/token_grad_norm_full_validation.py
 ```
 
+RULER NIAH labels (CPU, no TTT):
+
+```bash
+python scripts/baseline_125m/sanity/test_ruler_niah_labels.py
+python scripts/baseline_125m/experiments/prepare_ruler_niah_labels.py
+```
+
+STEP 6C.1 / 6D / 7A (A100 cuDNN; NVRTC `LD_LIBRARY_PATH` as above; 6C.1 does not overwrite STEP 3):
+
+```bash
+export LD_LIBRARY_PATH="/home/solhnsol/workspace/TTT-MEMO/.venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+PYTHONUNBUFFERED=1 python scripts/baseline_125m/experiments/token_grad_align_validation.py
+PYTHONUNBUFFERED=1 python scripts/baseline_125m/experiments/ruler_niah_measurement_pilot.py
+PYTHONUNBUFFERED=1 python scripts/baseline_125m/experiments/ruler_niah_mechanism_pilot_8k.py
+```
+
 STEP 4 (8K trajectory, expensive; run on a GPU that can hold official 8K prefix SWA):
 
 ```bash
@@ -93,8 +115,8 @@ docker compose run --rm ttt python scripts/baseline_125m/sanity/forward_sanity.p
 | `checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc/` | Official GCS, Requester Pays. |
 | `data/tokenizer/llama3/tokenizer.json` | `verify_tokenizer.py`; pin `upstream/llama3-tokenizer.toml` (`sha256 e134af98…`). |
 | `data/_probe_val_head.bin` | First 8192 little-endian uint32 tokens of `gs://llama3-dclm-filter-8k/data.zarr/val/c/0` (uncompressed). Need `T+1` tokens. |
-| `results/raw/baseline_125m/sanity/*.json` | Sanity measurements. |
-| `results/raw/baseline_125m/experiments/*.json` | Estimator measurements (STEP 2/3 completed). |
+| `results/raw/baseline_125m/ruler_niah_labels/{examples,spans}.parquet` | ~842MB; rebuild with `prepare_ruler_niah_labels.py`. Not in git. |
+| `data/ruler_niah/` | Official RULER NIAH JSONL (gitignored). |
 
 ## What we already know (one DCLM val prefix, RTX 3060)
 
@@ -118,9 +140,27 @@ Not paper numbers. One probe, XLA prefix attention.
 
 On this sequence, fast weights change chunk-1 NTP with KV held fixed. The effect is two orders of magnitude smaller than restored vs random. Do **not** generalize; do **not** treat chunk1 < chunk0 as a TTT win (text difficulty + KV both move).
 
+## Main experiment backend (A100)
+
+**MAIN EXPERIMENT BACKEND = cuDNN** (`--no-attention-cudnn-override`).
+
+On A100, exact `G_t` ranking vs the XLA override is effectively identical (top 1/5/10% exact sets identical). Same-backend JVP-vs-exact quality is unchanged. cuDNN matches the official TTT-E2E prefix SWA path (`implementation="cudnn"`).
+
+cuDNN prefix SDPA requires NVRTC at runtime. This is **not** in `e2e/uv.lock` and must not be added there.
+
+- Package (host venv only): `nvidia-cuda-nvrtc-cu12==12.8.93`
+- Library: `.venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12`
+- Loader: `libnvrtc.so.12` must be visible by **bare name**. The cuDNN plugin does not RPATH this directory, so set
+
+```bash
+export LD_LIBRARY_PATH="/home/solhnsol/workspace/TTT-MEMO/.venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+Without this, prefix SWA raises `No valid engine configs`.
+
 ## RTX 3060 attention override
 
-Prefix SWA: `e2e/ttt/model/attention.py` `SWA.full_sw_attention`, `implementation="cudnn"`. On this host that call raises `No valid engine configs`. Same shapes work with `"xla"`.
+Prefix SWA: `e2e/ttt/model/attention.py` `SWA.full_sw_attention`, `implementation="cudnn"`. On an RTX 3060 (and on A100 if NVRTC is not loader-visible) that call raises `No valid engine configs`. Same shapes work with `"xla"`.
 
 Implemented only in `AttentionOverride` (`common/runtime_helpers.py`).
 
@@ -128,15 +168,17 @@ Implemented only in `AttentionOverride` (`common/runtime_helpers.py`).
 - Rewrites **only** `implementation="cudnn"` → `"xla"`.
 - Suffix is already `None` when `force_flash=False`. JIT trace: 1 redirect (prefix scan body), 1 passthrough (suffix).
 - If someone sets `force_flash=True`, suffix would be redirected too.
-- Missing `nvidia-cuda-nvrtc-cu12` is an **unverified hypothesis**, not a finding.
+- This override is a **fallback**, not the main A100 experiment path.
 
 ## Environment
 
 Image `ttt-memo:py312-jax0.5.3-cu128`: `python:3.12-slim-bookworm` + `e2e/uv.lock` (`jax==0.5.3`) + `docker/requirements-research.txt`.
 
+On the lab A100 the working environment is the host venv at `.venv` (same lockfile). Do not modify `e2e/uv.lock`. NVRTC is an extra runtime library, documented above.
+
 Research extras must stay additive. Do not let `huggingface-hub` 1.x upgrade `click` (locked at 8.1.8). Tokenizer stack is `tokenizers==0.23.1` and `huggingface-hub==0.36.2`.
 
-`XLA_PYTHON_CLIENT_PREALLOCATE=false`. JAX cache: docker volume `jax-cache` → `/tmp/jax_cache`.
+`XLA_PYTHON_CLIENT_PREALLOCATE=false`. JAX cache: `/home/solhnsol/.cache/jax` on the A100 host (docker volume `jax-cache` → `/tmp/jax_cache` in compose).
 
 ## Rules of interpretation (carry these forward)
 
@@ -147,13 +189,16 @@ Research extras must stay additive. Do not let `huggingface-hub` 1.x upgrade `cl
 5. Inner-loop gradients ≠ outer-loop gradients. Say which loss, which params, when in the update, and the grain (token / chunk / layer).
 6. Fast weights in the checkpoint are **meta-learned initializers** of the prime FFN, not a stored KV.
 7. Prefer official functions (`loss_for_sequence`, `inner_loop_step`) over re-deriving CE. If you must orchestrate, compare against `forward_sanity --seq-len 2048` as a harness.
-8. Log raw values; do not overwrite them with normalized copies. Results under `results/raw/` are gitignored.
+8. Log raw values; do not overwrite them with normalized copies. Small analyzable outputs under `results/raw/baseline_125m/` may be committed; huge regenerated labels (`ruler_niah_labels/*.parquet`) stay local.
 
-## Reasonable next experiments (not decided)
+## Current status (after STEP 7A)
 
-- More documents / chunks before claiming a TTT effect size.
-- Gradient / fast-weight delta logging **after** a design pass (still outside `e2e/` if possible).
-- Evidence past the 8192 window.
-- Teacher saliency only with a prospective student; no future tokens at inference.
+Stopped after the 8K **in-SWA** mechanism pilot. Not a long-range memory result. Do not silently start 16K, 8000-example sweeps, a router, or architecture changes.
 
-Do not start a large TTT-MEMO implementation until the current baseline path is still green.
+**Done (A100 cuDNN, 125M 8K checkpoint):** official restore/forward; STEP 2/3 `G_t` estimator; STEP 6B labels (8000/8000); STEP 6C.1 `Ahat` vs exact `A` on DCLM chunk 0; STEP 6D one RULER pipeline sample; STEP 7A 20 `niah_single_2` + 20 `niah_multikey_1`.
+
+**7A descriptive takeaway (not H1/H2):** Spearman(Ghat, NLL) ≈ 0.80 on every sample. NLL-matched residual G on needles exists but is a 20-sample pilot with format/surprisal confounders. MK1 relevant vs distractor Ghat excess did not separate (10/20). `Ahat<0` on relevant value/key is rare. Do not use `Ihat` as exact `I`.
+
+**Local-only:** `data/ruler_niah/`, `checkpoints/`, `results/raw/baseline_125m/ruler_niah_labels/{examples,spans}.parquet` (~842MB). RTX 3060 copies live in `_ref_3060_*`.
+
+**Parked (discuss before running):** 16K needs a seq_len/RoPE-table decision (inspect already done; do not override casually). Out-of-SWA memory is a later question. Teacher saliency only with a prospective student.
