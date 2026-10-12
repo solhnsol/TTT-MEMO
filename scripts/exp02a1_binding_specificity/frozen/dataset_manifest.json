@@ -1,0 +1,13 @@
+{
+  "backbone_revision_sha": "cdbee75f17c01a7cc42f958dc650907174af0554",
+  "dataset_id": "exp02a1_binding_pairs_v1",
+  "n_exact_pairs": 32,
+  "n_pairs": 64,
+  "n_semantic_direct_pairs": 32,
+  "note": "Frozen before smoke scores. Mapping A/B are token-multiset matched. Do not regenerate after looking at results. Does not modify Exp 02A datasets.",
+  "path": "scripts/exp02a1_binding_specificity/frozen/dataset_pairs.jsonl",
+  "seed": 20260918,
+  "sha256": "43a9779d412e6b1c777bdaeef5dc62963904d271a2ac20d0bbf6dfcd40a19795",
+  "smoke_n_per_type": 4,
+  "spec_experiment_id": "exp02a1_binding_specificity"
+}

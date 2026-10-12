@@ -1,0 +1,42 @@
+{
+  "hypothesis": "Within a sample, does mean log(Ghat) add ranking signal for the needle window beyond mean NLL?",
+  "independent_variable": "scorer features {NLL, log Ghat, both}",
+  "dependent_metrics": [
+    "mrr",
+    "recall_at_1",
+    "recall_at_5",
+    "normalized_rank",
+    "recall_at_1pct",
+    "percentile_rank"
+  ],
+  "baseline": "M0 mean NLL linear scorer",
+  "controlled": [
+    "125M 8K checkpoint",
+    "official inner_loop_step trajectory",
+    "K=32 JVP Ghat",
+    "L=32",
+    "sample_id splits",
+    "in-SWA 8K"
+  ],
+  "confounders": [
+    "surprisal",
+    "needle format",
+    "window overlap in MK2",
+    "JVP noise in Ghat"
+  ],
+  "dataset": "RULER niah_single_2 and niah_multikey_2 validation 8k",
+  "n_samples": 200,
+  "context_length": "8k padded to 8192",
+  "model": "125m_ttt_e2e_pretrain_dclm_8k_1x_cc",
+  "seed": {
+    "split": 20260909,
+    "jvp": 0,
+    "shuffle": 20260909,
+    "bootstrap": 20260909
+  },
+  "precision": "official bf16 compute, Ghat from fp32 JVP accum",
+  "hardware": "A100 cuDNN (script default --no-attention-cudnn-override)",
+  "mini_batch": 1024,
+  "window": 32,
+  "K": 32
+}

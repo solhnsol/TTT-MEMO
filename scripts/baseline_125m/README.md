@@ -53,6 +53,9 @@ Official code has **no tokenizer**. `config.tokenizer_name` is dead and wrongly 
 | `experiments/token_grad_align_validation.py` | STEP 6C.1: DCLM T=1024 chunk-0 `Ahat`/`Ihat` vs 32-token exact (cuDNN). |
 | `experiments/ruler_niah_measurement_pilot.py` | STEP 6D: one RULER 8K S-NIAH sample × official TTT trajectory (pipeline sanity). |
 | `experiments/ruler_niah_mechanism_pilot_8k.py` | STEP 7A: 20+20 RULER 8K single_2 / MK1 mechanism pilot (in-SWA). |
+| `experiments/ruler_predictive_ranking_8k.py` | STEP 8A: within-sample L=32 ranking, M0/M1/M2 linear scorers (in-SWA). |
+| `common/ranking_windows.py` | STEP 8A window placement + pairwise logistic helpers. CPU. |
+| `sanity/test_ranking_windows.py` | Unit tests for L=32 placement, splits, shuffle. |
 | `experiments/token_grad_norm_trajectory_validation.py` | STEP 4: 8 sequential TTT chunks × 4 JVP seeds (A100 run exists; JSON has a flagged comparison — inspect before treating as clean). |
 | `common/ruler_niah_labels.py` | STEP 6B: RULER NIAH needle span / loss-index helpers. CPU, no TTT. |
 | `sanity/test_ruler_niah_labels.py` | Unit tests for `t=j-1`, padding mask, overlap, one real S1 row. |
@@ -191,14 +194,16 @@ Research extras must stay additive. Do not let `huggingface-hub` 1.x upgrade `cl
 7. Prefer official functions (`loss_for_sequence`, `inner_loop_step`) over re-deriving CE. If you must orchestrate, compare against `forward_sanity --seq-len 2048` as a harness.
 8. Log raw values; do not overwrite them with normalized copies. Small analyzable outputs under `results/raw/baseline_125m/` may be committed; huge regenerated labels (`ruler_niah_labels/*.parquet`) stay local.
 
-## Current status (after STEP 7A)
+## Current status (after STEP 8A)
 
-Stopped after the 8K **in-SWA** mechanism pilot. Not a long-range memory result. Do not silently start 16K, 8000-example sweeps, a router, or architecture changes.
+Stopped after the 8K **in-SWA** within-sample ranking test. Not a long-range memory result. Do not start a router, window-length sweep, or 16K run from this.
 
-**Done (A100 cuDNN, 125M 8K checkpoint):** official restore/forward; STEP 2/3 `G_t` estimator; STEP 6B labels (8000/8000); STEP 6C.1 `Ahat` vs exact `A` on DCLM chunk 0; STEP 6D one RULER pipeline sample; STEP 7A 20 `niah_single_2` + 20 `niah_multikey_1`.
+**Done (A100 cuDNN, 125M 8K checkpoint):** official restore/forward; STEP 2/3 `G_t` estimator; STEP 6B labels; STEP 6C.1; STEP 6D; STEP 7A; STEP 8A `niah_single_2` + `niah_multikey_2` (200+200, L=32, M0/M1/M2).
 
-**7A descriptive takeaway (not H1/H2):** Spearman(Ghat, NLL) ≈ 0.80 on every sample. NLL-matched residual G on needles exists but is a 20-sample pilot with format/surprisal confounders. MK1 relevant vs distractor Ghat excess did not separate (10/20). `Ahat<0` on relevant value/key is rare. Do not use `Ihat` as exact `I`.
+**8A takeaway (not H1, not a router):** On single_2, mean NLL already ranks the needle window well (test MRR 0.19 vs chance ~0.025). Adding log(Ghat) does **not** stably improve ΔMRR (95% CI includes 0). M1 < M0. Shuffle control ≈ M0. On MK2, all scorers are near chance (relevant vs format-matched distractors; query still in the future). Artifacts: `results/raw/baseline_125m/experiments/ruler_predictive_ranking_8k/`.
 
-**Local-only:** `data/ruler_niah/`, `checkpoints/`, `results/raw/baseline_125m/ruler_niah_labels/{examples,spans}.parquet` (~842MB). RTX 3060 copies live in `_ref_3060_*`.
+**7A descriptive takeaway (not H1/H2):** Spearman(Ghat, NLL) ≈ 0.80 at token grain. Do not use `Ihat` as exact `I`.
 
-**Parked (discuss before running):** 16K needs a seq_len/RoPE-table decision (inspect already done; do not override casually). Out-of-SWA memory is a later question. Teacher saliency only with a prospective student.
+**Local-only:** `data/ruler_niah/`, `checkpoints/`, `ruler_niah_labels/{examples,spans}.parquet`, STEP 8A `window_*.parquet` / `token_features_*.npz`.
+
+**Parked (discuss before running):** 16K seq_len/RoPE-table decision. Out-of-SWA memory. Teacher saliency only with a prospective student.

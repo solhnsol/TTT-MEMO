@@ -1,0 +1,49 @@
+{
+  "L": 32,
+  "seq_label": "8k",
+  "n_requested": 200,
+  "split_seed": 20260909,
+  "sanity": {
+    "niah_single_2": {
+      "kind": "single2",
+      "n_samples": 200,
+      "n_positive_windows": 200,
+      "n_negative_windows": 49527,
+      "kv_fully_inside_positive": 200,
+      "kv_fully_inside_rate": 1.0,
+      "positive_query_or_pad_overlap": 0,
+      "placement_failed_positive": 0,
+      "placement_failed_negative": 0,
+      "negative_windows_per_sample": {
+        "n": 200,
+        "min": 230,
+        "median": 249.0,
+        "max": 249,
+        "mean": 247.635
+      },
+      "problems": [],
+      "stop": false
+    },
+    "niah_multikey_2": {
+      "kind": "mk2",
+      "n_samples": 200,
+      "n_positive_windows": 200,
+      "n_negative_windows": 88125,
+      "kv_fully_inside_positive": 200,
+      "kv_fully_inside_rate": 1.0,
+      "positive_query_or_pad_overlap": 0,
+      "placement_failed_positive": 0,
+      "placement_failed_negative": 0,
+      "negative_windows_per_sample": {
+        "n": 200,
+        "min": 422,
+        "median": 447.0,
+        "max": 447,
+        "mean": 440.625
+      },
+      "problems": [],
+      "stop": false
+    }
+  },
+  "stop": false
+}

@@ -1,0 +1,10 @@
+# Exp 02A (Qwen3-4B BF16 + PEFT LoRA). Separate from the JAX TTT-E2E image.
+# Install into `.venv-exp02a` under the repo (inside $HOME).
+torch
+transformers
+peft
+accelerate
+safetensors
+pandas
+pyarrow
+huggingface_hub

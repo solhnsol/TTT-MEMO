@@ -30,6 +30,7 @@ __pycache__/
 dist/
 build/
 .venv/
+.venv-exp02a/
 venv/
 .env/
 .mypy_cache/

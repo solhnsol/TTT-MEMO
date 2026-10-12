@@ -1,0 +1,189 @@
+{
+  "backbone": {
+    "model_id": "Qwen/Qwen3-4B-Instruct-2507",
+    "precision": "bfloat16",
+    "revision_sha": "cdbee75f17c01a7cc42f958dc650907174af0554",
+    "thinking_mode": false,
+    "use_official_chat_template": true
+  },
+  "created_utc": "20260918T062025Z",
+  "dataset_id": "semantic_inferential_v3",
+  "descriptions": {
+    "S1": "installing wiring, replacing circuit breakers, and fixing faulty outlets in buildings",
+    "S2": "cataloging books, organizing collections, and helping visitors find reading materials",
+    "S3": "repairing leaking pipes, clearing blocked drains, and installing sinks and faucets",
+    "S4": "scanning purchased items, accepting payments, and giving receipts and change to customers at a checkout counter",
+    "S5": "dispensing prescribed medicines, checking doses and drug interactions, and advising people on safe use",
+    "S6": "diagnosing engine problems, replacing worn brakes, and repairing vehicle transmissions",
+    "S7": "operating passenger aircraft, following flight plans, and managing takeoff and landing",
+    "S8": "examining sick animals, prescribing treatments, and performing medical procedures on pets"
+  },
+  "design_choices": {
+    "canonical_query_only": "Core evaluation uses a single occupation_query: \"What is {entity}'s occupation?\\nReply with only the occupation title.\" The previous paraphrase Q2 is not part of dataset_v3. The query already contains the reply instruction, so the recall renderer does not append 'Reply with only the answer.'",
+    "carpenter_replaced_by_cashier": "S4 carpenter failed one source-present cell under the occupation query. It was replaced by cashier rather than tuning the carpenter description after observing that failure. Carpenter is not in the active v3 core.",
+    "chat_rendered_write_metadata": "Raw sentences are the dataset source of truth. Chat-rendered token spans are also stored using the Exp 02A convention (official chat template, user turn = 'Fact:\\n' + sentence, no assistant turn) so future NTP masking does not have to re-derive offsets. This wrapper is metadata only in this stage; no optimization is run.",
+    "independent_sequences": "Each mapping is two independent write sequences, never concatenated. Future LoRA will batch the two sequences and average their CE. Concatenation would introduce sentence-order / cross-sentence causal conditioning.",
+    "prefix_target_split": "Prefix/context = '{entity} spends most workdays' (no trailing space). Target = '{description}.' including the final period. The space between workdays and the description is a boundary token and is not part of the description substring; future CE labels use character-offset overlap with the description span plus the sentence-final period.",
+    "source_present_prompt": "Calibration puts BOTH mapping sentences in one user message (Fact:\\n + sentence1 + newline + sentence2), then the query. This is in-context semantic inference, not the write format, and not KV reuse.",
+    "static_source_free_diagnostic": "Same occupation-label scoring with descriptions absent and no LoRA. Diagnostic only; it does not select or rewrite the dataset."
+  },
+  "entities": [
+    "Norvik-17",
+    "Talven-03",
+    "Keldar-29",
+    "Vossin-41",
+    "Merak-52",
+    "Drelon-08",
+    "Sovik-36",
+    "Pelran-64"
+  ],
+  "final_calibration_analysis_utc": "20260918T062025Z",
+  "labels": {
+    "S1": "electrician",
+    "S2": "librarian",
+    "S3": "plumber",
+    "S4": "cashier",
+    "S5": "pharmacist",
+    "S6": "mechanic",
+    "S7": "pilot",
+    "S8": "veterinarian"
+  },
+  "lexical_audit_n_failures": 0,
+  "lexical_audit_passed": true,
+  "mapping_definitions": {
+    "A": {
+      "e1": "c1",
+      "e2": "c2"
+    },
+    "B": {
+      "e1": "c2",
+      "e2": "c1"
+    }
+  },
+  "n_independent_write_sequences": 16,
+  "n_pairs": 4,
+  "note": "Frozen only after lexical audit and source-present calibration. Do not alter in place. Future changes require dataset_v4.",
+  "pairs": [
+    {
+      "c1": "S1",
+      "c2": "S2",
+      "e1": "Norvik-17",
+      "e2": "Talven-03",
+      "label_c1": "electrician",
+      "label_c2": "librarian",
+      "pair_id": "P1"
+    },
+    {
+      "c1": "S3",
+      "c2": "S5",
+      "e1": "Keldar-29",
+      "e2": "Vossin-41",
+      "label_c1": "plumber",
+      "label_c2": "pharmacist",
+      "pair_id": "P2"
+    },
+    {
+      "c1": "S4",
+      "c2": "S8",
+      "e1": "Merak-52",
+      "e2": "Drelon-08",
+      "label_c1": "cashier",
+      "label_c2": "veterinarian",
+      "pair_id": "P3"
+    },
+    {
+      "c1": "S6",
+      "c2": "S7",
+      "e1": "Sovik-36",
+      "e2": "Pelran-64",
+      "label_c1": "mechanic",
+      "label_c2": "pilot",
+      "pair_id": "P4"
+    }
+  ],
+  "path": "scripts/exp02a2_semantic_v3/frozen/dataset_v3.jsonl",
+  "prior_dataset_v1_sha256": "431d14327bef0a48fa86da5d7148c982368d730ba8265730bf057561c96a3a32",
+  "prior_dataset_v2_sha256": "5a9c483e31e1856479369b1b5853972dc822b2a44e622e8156abdb445b776a01",
+  "query_templates": {
+    "occupation_query": "What is {entity}'s occupation?\nReply with only the occupation title."
+  },
+  "recalibration_version": "v2",
+  "revised_source_present_calibration": {
+    "calibration_rule_revised_before_source_free_ttt": true,
+    "original_16_of_16_top1_not_used_as_freeze_gate": true,
+    "original_top1": "15/16",
+    "pairs": [
+      {
+        "B_A": 11.152384042739868,
+        "B_B": 11.316495418548584,
+        "B_swap": 11.234439730644226,
+        "pair_id": "P1"
+      },
+      {
+        "B_A": 9.787358045578003,
+        "B_B": 10.402766585350037,
+        "B_swap": 10.09506231546402,
+        "pair_id": "P2"
+      },
+      {
+        "B_A": 7.1638723611831665,
+        "B_B": 7.094707250595093,
+        "B_swap": 7.12928980588913,
+        "pair_id": "P3"
+      },
+      {
+        "B_A": 3.42045259475708,
+        "B_B": 4.25800085067749,
+        "B_swap": 3.839226722717285,
+        "pair_id": "P4"
+      }
+    ],
+    "passed": true,
+    "rule": "lexical pass AND all 16 uplift_margin>0 AND all 4 B_swap>0"
+  },
+  "sha256": "07d5749cf7710bf6106c24e558e580d11ea11649af2aa4a519b5c12bb1f32b40",
+  "source_present_cellwise_top1": {
+    "accuracy": 0.9375,
+    "failures": [
+      {
+        "accuracy": 0,
+        "em": 0,
+        "entity": "Pelran-64",
+        "entity_key": "e2",
+        "gold": "pilot",
+        "gold_logp_mean": -9.729206085205078,
+        "gold_logp_sum": -19.458412170410156,
+        "gold_rank": 2,
+        "mapping": "mapping_A",
+        "margin_logp_mean": -0.02958202362060547,
+        "margin_logp_sum": 9.640459060668945,
+        "pair_id": "P4",
+        "paired_decoy": "mechanic",
+        "query_code": "occupation_query",
+        "raw_prediction": "Air traffic controller",
+        "source_induced_uplift": {
+          "decoy": "mechanic",
+          "decoy_logp_sum_with_source": -29.0988712310791,
+          "decoy_logp_sum_without_source": -20.51936912536621,
+          "decoy_score_with_source": -9.699624061584473,
+          "decoy_score_without_source": -6.839789867401123,
+          "decoy_uplift": -2.8598341941833496,
+          "gold": "pilot",
+          "gold_logp_sum_with_source": -19.458412170410156,
+          "gold_logp_sum_without_source": -16.799720764160156,
+          "gold_score_with_source": -9.729206085205078,
+          "gold_score_without_source": -8.399860382080078,
+          "gold_uplift": -1.329345703125,
+          "source_present_margin": -0.02958202362060547,
+          "uplift_margin": 1.5304884910583496
+        }
+      }
+    ],
+    "kept_in_manifest": true,
+    "n": 16,
+    "n_correct": 15,
+    "passed_16_of_16": false
+  },
+  "spec_experiment_id": "exp02a2_semantic_v3",
+  "write_scaffold": "{entity} spends most workdays {description}."
+}

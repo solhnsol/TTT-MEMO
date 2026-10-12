@@ -1,0 +1,21 @@
+{
+  "dataset_id": "exp02a_dataset_v2",
+  "expected_v1_sha256": "431d14327bef0a48fa86da5d7148c982368d730ba8265730bf057561c96a3a32",
+  "held_out_from_pilot": [
+    "semantic_inferential"
+  ],
+  "n_exact": 32,
+  "n_examples": 96,
+  "n_semantic_direct": 32,
+  "n_semantic_inferential": 32,
+  "note": "Frozen before v2 pilot scores. v1 jsonl was not rewritten. semantic_inferential is stored but not run in the K=8 pilot.",
+  "path": "scripts/exp02a_source_free_lora/frozen/dataset_v2.jsonl",
+  "pilot_types": [
+    "exact",
+    "semantic_direct"
+  ],
+  "seed": 20260918,
+  "sha256": "5a9c483e31e1856479369b1b5853972dc822b2a44e622e8156abdb445b776a01",
+  "source_v1_sha256": "431d14327bef0a48fa86da5d7148c982368d730ba8265730bf057561c96a3a32",
+  "spec_experiment_id": "exp02a_source_free_lora"
+}

@@ -1,0 +1,94 @@
+{
+  "niah_single_2": {
+    "M0": {
+      "mrr": 0.19231480067490128,
+      "recall_at_1": 0.05,
+      "recall_at_5": 0.25,
+      "recall_at_1pct": 0.125,
+      "normalized_rank": 0.030640591957454777,
+      "percentile_rank": 0.9693594080425452,
+      "rank": 8.575,
+      "n_candidates": 248.475,
+      "n_samples": 40.0
+    },
+    "M1": {
+      "mrr": 0.12679977655295566,
+      "recall_at_1": 0.025,
+      "recall_at_5": 0.15,
+      "recall_at_1pct": 0.125,
+      "normalized_rank": 0.11614918467882569,
+      "percentile_rank": 0.8838508153211743,
+      "rank": 29.8,
+      "n_candidates": 248.475,
+      "n_samples": 40.0
+    },
+    "M2": {
+      "mrr": 0.19867826617826617,
+      "recall_at_1": 0.05,
+      "recall_at_5": 0.35,
+      "recall_at_1pct": 0.125,
+      "normalized_rank": 0.029258702767939578,
+      "percentile_rank": 0.9707412972320604,
+      "rank": 8.225,
+      "n_candidates": 248.475,
+      "n_samples": 40.0
+    },
+    "M2_shuffled": {
+      "mrr": 0.19396335024624495,
+      "recall_at_1": 0.05,
+      "recall_at_5": 0.275,
+      "recall_at_1pct": 0.125,
+      "normalized_rank": 0.03064888600320299,
+      "percentile_rank": 0.9693511139967971,
+      "rank": 8.575,
+      "n_candidates": 248.475,
+      "n_samples": 40.0
+    }
+  },
+  "niah_multikey_2": {
+    "M0": {
+      "mrr": 0.011237682184519987,
+      "recall_at_1": 0.0,
+      "recall_at_5": 0.0,
+      "recall_at_1pct": 0.0,
+      "normalized_rank": 0.465054019953985,
+      "percentile_rank": 0.534945980046015,
+      "rank": 206.0,
+      "n_candidates": 441.75,
+      "n_samples": 40.0
+    },
+    "M1": {
+      "mrr": 0.014217178307107722,
+      "recall_at_1": 0.0,
+      "recall_at_5": 0.0,
+      "recall_at_1pct": 0.0,
+      "normalized_rank": 0.44315552869578123,
+      "percentile_rank": 0.5568444713042189,
+      "rank": 195.85,
+      "n_candidates": 441.75,
+      "n_samples": 40.0
+    },
+    "M2": {
+      "mrr": 0.011878563382382978,
+      "recall_at_1": 0.0,
+      "recall_at_5": 0.0,
+      "recall_at_1pct": 0.0,
+      "normalized_rank": 0.462487939607918,
+      "percentile_rank": 0.537512060392082,
+      "rank": 204.85,
+      "n_candidates": 441.75,
+      "n_samples": 40.0
+    },
+    "M2_shuffled": {
+      "mrr": 0.011106933027900523,
+      "recall_at_1": 0.0,
+      "recall_at_5": 0.0,
+      "recall_at_1pct": 0.0,
+      "normalized_rank": 0.47499734936437754,
+      "percentile_rank": 0.5250026506356225,
+      "rank": 210.575,
+      "n_candidates": 441.75,
+      "n_samples": 40.0
+    }
+  }
+}

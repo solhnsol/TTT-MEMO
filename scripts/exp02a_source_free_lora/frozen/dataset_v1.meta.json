@@ -1,0 +1,12 @@
+{
+  "dataset_id": "exp02a_dataset_v1",
+  "n_exact": 32,
+  "n_examples": 64,
+  "n_semantic": 32,
+  "note": "Frozen before model scores. Do not regenerate after looking at results.",
+  "path": "scripts/exp02a_source_free_lora/frozen/dataset_v1.jsonl",
+  "seed": 20260918,
+  "sha256": "431d14327bef0a48fa86da5d7148c982368d730ba8265730bf057561c96a3a32",
+  "smoke_n_per_type": 8,
+  "spec_experiment_id": "exp02a_source_free_lora"
+}

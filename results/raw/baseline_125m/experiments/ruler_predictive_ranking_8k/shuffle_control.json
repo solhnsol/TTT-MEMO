@@ -1,0 +1,24 @@
+{
+  "niah_single_2": {
+    "mrr": 0.19396335024624495,
+    "recall_at_1": 0.05,
+    "recall_at_5": 0.275,
+    "recall_at_1pct": 0.125,
+    "normalized_rank": 0.03064888600320299,
+    "percentile_rank": 0.9693511139967971,
+    "rank": 8.575,
+    "n_candidates": 248.475,
+    "n_samples": 40.0
+  },
+  "niah_multikey_2": {
+    "mrr": 0.011106933027900523,
+    "recall_at_1": 0.0,
+    "recall_at_5": 0.0,
+    "recall_at_1pct": 0.0,
+    "normalized_rank": 0.47499734936437754,
+    "percentile_rank": 0.5250026506356225,
+    "rank": 210.575,
+    "n_candidates": 441.75,
+    "n_samples": 40.0
+  }
+}
