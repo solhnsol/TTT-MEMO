@@ -94,3 +94,4 @@ Then resume from the latest state in `experiments/<exp>/` (each exp's `scripts/<
 - Round-trip test: on the PC `pull_from_a100.sh --restore-test`, then on the A100 `scripts/backup/verify_restore_test.sh`.
 - The PC script reaches the A100 through an ssh alias `a100` in the PC's `~/.ssh/config` (host, user, key live there, not in this public repo).
 - The repo is **public**: autosnap only picks up untracked files under `scripts/ env/ docker/ upstream/` and top-level `*.md`, < 5 MB, and respects `.gitignore`. Keep secrets and raw data out of those paths.
+- Lab PC WSL must mount drives as the backup user (`/etc/wsl.conf` `[automount] options = "metadata,uid=1000,gid=1000,umask=022"`, set by `scripts/backup/windows/fix_drvfs_owner.sh`); with uid=0 rsync cannot set mtimes and every pull re-reads all 45 GB. Verified 2026-10-15: incremental pull takes ~10 s.
