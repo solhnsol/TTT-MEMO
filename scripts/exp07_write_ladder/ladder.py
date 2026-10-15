@@ -95,7 +95,7 @@ class Ladder:
             s_=lr*m.get_ilr_multiplier(st_all.get(m.step_index))*scale
             newp=jax.tree.map(lambda q,x:(q+(-s_*coef*x).astype(q.dtype)).astype(q.dtype),m.inner_parameters(),g)
             return newp,new_st
-        self.prefix_iso=prefix_iso;self.step=step;self.native_scaled=native_scaled
+        self.prefix_iso=prefix_iso;self.step=step;self.native_scaled=native_scaled;self.Batch=Batch
     def set_inner(self,m,newp):
         inner,outer=eqx.partition(m,self.f)
         assert jax.tree_util.tree_structure(inner)==jax.tree_util.tree_structure(newp)
@@ -158,12 +158,19 @@ class Ladder:
         _,_,spans=gw.realize(self.T.w,swap);enc=lambda t:stage2.enc(self.T.tok,t).ids;tri={t['id']:t for t in self.T.w['triples']}
         rows=[]
         if variant in ('plain','fill'):rows=[(x,(0,len(x)-1)) for x in (enc('\n\n'+s_['text']) for s_ in spans)]
-        if variant=='ctx':
+        if variant in ('ctx','irr'):
             by={}
             for s_ in spans:by.setdefault((tri[s_['t']]['pair'],s_['round']),[]).append(s_['text'])
+            npairs=self.T.w['pairs']
             for s_ in spans:
                 cur=enc('\n\n'+s_['text']);r=s_['round'];pr=tri[s_['t']]['pair']
                 ctx=enc('\n\n'+'\n\n'.join(by[(pr,r-1)])) if r>=2 else []
+                if variant=='irr' and ctx:
+                    # same-length context made of OTHER pairs' sentences from the same previous round (no name/place of pair pr)
+                    k=int(pr[1:]);irr=[];j=1
+                    while len(irr)<len(ctx):
+                        irr+=enc('\n\n'+'\n\n'.join(by[(f'p{(k+j)%npairs}',r-1)]));j+=1
+                    ctx=irr[:len(ctx)]
                 rows.append((ctx+cur,(max(len(ctx)-1,0),len(ctx)+len(cur)-1)))
         if variant=='fill':
             for t in self.T.w['texts']:
@@ -219,6 +226,25 @@ class Ladder:
                     cum+=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5
                 st_all=st[0];del pref
                 log.append({'epoch':ps,'chunks':len(full)//CH,'cum_update_norm':cum,'margins':self.evaluate(m)});print(f'  {tag} pass {ps}',flush=True)
+        return log
+    def run_L0_masked(self,swap,passes):
+        """context-masked write (method pilot): the stream is read as usual, but every inner update is computed as if its
+        chunk were alone (prefix recomputed on the chunk only, positions from 0, empty suffix KV): no earlier exposure
+        outside the chunk is visible to the write. Same step rule (native lr x ilr multiplier, clip 1.0), one step per
+        chunk, passes re-read the full stream; evaluation after each pass."""
+        rt=self.rt;W=int(rt.cfg.model.sliding_window_size);Pw=self.T.P[swap];ids=np.asarray(Pw.ids);log=[];m=rt.base;st_all=clone_state(rt.state_all);cum=0.0
+        seg=np.zeros(CH,np.int32);loc=np.arange(CH,dtype=np.int32);pm=jnp.asarray(packing.prefix_mask(seg,W))
+        with rt.mesh:
+            log.append({'epoch':0,'margins':self.evaluate(m)})
+            for ps in range(1,passes+1):
+                for k in range(NCH):
+                    c=ids[k*CH:(k+1)*CH];tg=np.concatenate([ids[k*CH+1:(k+1)*CH+1],[rt.eos]])[:CH].astype(np.int32)
+                    mk=np.ones(CH,bool);mk[-1]=(k+1)*CH<len(ids)
+                    pref=self.prefix_iso(rt.base,jnp.asarray(c),jnp.asarray(loc),pm)
+                    newp,_=self.native_scaled(m,st_all,clone_state(rt.state_suffix),self.Batch(input_ids=jnp.asarray(c),target_tokens=jnp.asarray(tg),loss_masks=jnp.asarray(mk)),pref,jnp.float32(1.0))
+                    old=m;m=self.set_inner(m,newp)
+                    cum+=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5
+                log.append({'epoch':ps,'cum_update_norm':cum,'margins':self.evaluate(m)});print(f'  L0mw {"B" if swap else "A"} pass {ps}',flush=True)
         return log
     def run_L0_oracle(self,swap,passes):
         """(a) oracle: pass 1 = the full native stream; passes 2.. re-read ONLY the exposure sentences, in stream order,
@@ -279,8 +305,8 @@ class Ladder:
         return log
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB')
-    ap.add_argument('--epochs',type=int,default=32);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='main');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--mode',choices=['full','save','eval'],default='full');ap.add_argument('--save-epochs',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--k',type=int,default=1);ap.add_argument('--l1-variant',default='plain',choices=['plain','ctx','fill'])
+    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k','L0mw'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB')
+    ap.add_argument('--epochs',type=int,default=32);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='main');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--mode',choices=['full','save','eval'],default='full');ap.add_argument('--save-epochs',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--k',type=int,default=1);ap.add_argument('--l1-variant',default='plain',choices=['plain','ctx','fill','irr'])
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     vp=ROOT/'experiments/exp05_write_dynamics/run3_readouts/verify_packing_fp32.log'
@@ -311,6 +337,7 @@ def main():
         if a.level=='L1':log=L.run_L1(w=='B',a.epochs,a.seed,save_epochs=se,save_dir=SD/w,variant=a.l1_variant)
         elif a.level=='L0mp':log=L.run_L0_multipass(w=='B',a.passes)
         elif a.level=='L0or':log=L.run_L0_oracle(w=='B',a.passes)
+        elif a.level=='L0mw':log=L.run_L0_masked(w=='B',a.passes)
         elif a.level=='L0fs':log=L.run_L0_fillerswap(w=='B',a.passes)
         elif a.level=='L0x':log=L.run_L0_scaled(w=='B',a.scale)
         elif a.level=='L0k':log=L.run_L0_ksteps(w=='B',a.k)

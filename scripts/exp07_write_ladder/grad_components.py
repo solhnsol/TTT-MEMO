@@ -131,6 +131,44 @@ def run_nsweep(ns):
         q=[np.mean(x['b'])/np.mean(x['r']) for x in res if x['N']==N];md.append(f'| {N} | {np.mean(q):+.4f} (range {min(q):+.4f} .. {max(q):+.4f}) | {len(q)} |')
     md.append(f"\n**slope s = {s:+.2f} [{lo:+.2f}, {hi:+.2f}] -> {v}** (excluded subsets with b or r <= 0: {nexcl})")
     (ns['OUT']/'nsweep_s101.md').write_text('\n'.join(md)+'\n');print('\n'.join(md),flush=True)
+def run_ctx3(ns):
+    """Training-free shadowing check at W0 (PROTOCOL_stage01.md): NTP write direction on the exposure sentences when the
+    sentence is written alone (plain), with the previous round's same-pair sentences in context (ctx = same fact), or with
+    a same-length context of other pairs' sentences (irr). Loss on the current sentence only. b, r per pair, |g|, and
+    the mean current-sentence loss."""
+    import json as _j
+    rt32=ns['rt32'];L=ns['L'];W=ns['W'];prefix32=ns['prefix32'];loss_grad=ns['loss_grad'];margin_grad=ns['margin_grad']
+    dot=ns['dot'];norm=ns['norm'];inp=ns['inp'];pairs=ns['pairs'];m0=rt32.base;Batch=ns['Batch'];res={}
+    @eqx.filter_jit
+    def loss_val(m,ids_,tg_,mk_,pref_,seg_,loc_):
+        packing.PACK_SUF['seg']=seg_;packing.PACK_SUF['loc']=loc_
+        try:return MetaModel.lm_loss(m,Batch(input_ids=ids_,target_tokens=tg_,loss_masks=mk_),clone_state(rt32.state_suffix),prefix_outputs=pref_)[0]
+        finally:packing.PACK_SUF.clear()
+    with rt32.mesh,jax.default_matmul_precision('highest'):
+        for v in ('plain','ctx','irr'):
+            a={};gn={};lv={}
+            for w in 'AB':
+                ch,where=packing.pack_rows(L.l1_rows(w=='B',v));mks=[np.zeros(1024,bool) for _ in ch]
+                for c_,a_,b_ in where:mks[c_][a_:b_]=True
+                g=None;ls=[]
+                for (ids,seg,loc),mk in zip(ch,mks):
+                    tg=np.concatenate([ids[1:],[rt32.eos]]).astype(np.int32)
+                    pref=prefix32(m0,jnp.asarray(ids),jnp.asarray(loc),jnp.asarray(packing.prefix_mask(seg,W)))
+                    args=(jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc))
+                    gi=loss_grad(m0,*args);g=gi if g is None else jax.tree.map(lambda x,y:x+y,g,gi);del gi;ls.append(float(loss_val(m0,*args)))
+                g=jax.tree.map(lambda x:x/len(ch),g);gn[w]=norm(g);lv[w]=float(np.mean(ls))
+                for fam in ('L3','FN'):
+                    for p in pairs:u=margin_grad(m0,*inp[(fam,p)]);a[(w,fam,p)]=-dot(u,g);del u
+                del g
+            b=[(a[('A','L3',p)]-a[('B','L3',p)])/2 for p in pairs];r=[(a[('A','FN',p)]+a[('B','FN',p)])/2 for p in pairs]
+            res[v]={'b':b,'r':r,'gnorm':gn,'loss':lv};print(v,'b',np.mean(b),'r',np.mean(r),'|g|',gn,'loss',lv,flush=True)
+            _j.dump(res,open(ns['OUT']/'ctx3_w0_s101.json','w'),indent=1)
+    rng=np.random.default_rng(23)
+    def ci(x):
+        x=np.asarray(x);bs=[x[rng.integers(0,len(x),len(x))].mean() for _ in range(4000)];return f'{x.mean():+.3f} [{np.percentile(bs,2.5):+.3f}, {np.percentile(bs,97.5):+.3f}]'
+    md=['# W0 write direction under three write contexts (seed 101)\n','| context | binding b | familiarity r | b / r | mean |g| | mean current-sentence loss |','|---|---|---|---|---|---|']
+    for v,x in res.items():md.append(f"| {v} | {ci(x['b'])} | {ci(x['r'])} | {np.mean(x['b'])/np.mean(x['r']):+.4f} | {(x['gnorm']['A']+x['gnorm']['B'])/2:.3f} | {(x['loss']['A']+x['loss']['B'])/2:.3f} |")
+    (ns['OUT']/'ctx3_w0_s101.md').write_text('\n'.join(md)+'\n');print('\n'.join(md),flush=True)
 def main():
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     rt=Runtime();L=LD.Ladder(rt,101);rt32=L.rt32;W=int(rt32.cfg.model.sliding_window_size);T=L.T
@@ -261,6 +299,8 @@ def main():
         return jax.tree.map(lambda x:x/nch,g)
     if os.environ.get('GRAD_CHECK')=='1':
         ns=dict(locals());ns['OUT']=OUT;run_checks(ns);return
+    if os.environ.get('CTX3')=='1':
+        ns=dict(locals());ns['OUT']=OUT;run_ctx3(ns);return
     if os.environ.get('NSWEEP')=='1':
         ns=dict(locals());ns['OUT']=OUT;run_nsweep(ns);return
     SD=OUT/'states'/'L1_ck_s101';res={}

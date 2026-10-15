@@ -106,3 +106,26 @@ Gradient-only, at W0, seed 101, with the same checked functions (loss_grad, marg
 
 ### W0 place bias (descriptive, computed before EM from existing logs)
 At W0 both worlds have identical weights, so the per-item L3 margin there is a pure name-independent place preference: mean |m| = 3.75 nat under R1 vs 2.46 under R1-alt (s101); 4.80 vs 3.29 (s102); W0 2-way accuracy 0.50 (R1) and 0.53 / 0.50 (R1-alt). The common-mode magnitude |(m_A + m_B)/2| is still 3.67 (R1) vs 2.19 (R1-alt) at L1 epoch 8 (s101). The lower R1 accuracy of L1 is therefore explained by a place bias that exists before any update and is larger in the fiction-tail context.
+
+## Shadowing controls and S-branches (registered 2026-10-15 22:00 KST, before any of these runs; reviewer M1 verdict, Hans's go)
+Facts recorded before running (from existing data):
+- Native stream: 390 of 450 repeat exposures (0.87) have the previous exposure of the same triple inside the 8K window, all three seeds.
+- L1-ctx (s101, epoch 8) also lowers familiarity: name +6.69 vs plain +9.88 (-32%), place +5.32 vs +7.26 (-27%), against binding -80% (R 0.20). **Dissociation criterion:** the binding reduction (1 - R_D) is at least 2x the name-familiarity reduction; s101: 0.80 vs 0.32 -> met.
+New runs:
+- **L1-irr** (most important control): like L1-ctx but the context is a same-length span of OTHER pairs' sentences from the same previous round (no name or place of the written pair). s101, then s102/s103; 8 epochs.
+- **L1-ctx on s102/s103** (seed repeats of the L1-ctx result).
+- **W0 three-context check** (training-free, `CTX3=1 grad_components.py`, checked functions): binding b, familiarity r, |g| and the current-sentence loss of the NTP write direction at W0 when the sentence is written alone / with the same fact in context / with the irrelevant same-length context.
+Predictions:
+- Shadowing (M1): L1-irr no effect (R >= 0.70); L1-ctx strong reduction on the other seeds; at W0 b(ctx) << b(plain) with loss(ctx) < loss(plain), while b(irr) and loss(irr) stay near plain.
+- Context change (not shadowing): L1-irr also strongly reduced (R <= 0.30); at W0 b(irr) is reduced like b(ctx).
+Decision branches added to the 2026-10-18 rule (they take precedence over the Qwen/125M branches for choosing the method line):
+- **S1** L1-irr no effect on s101 AND L1-ctx strong reduction on >= 2 of the 3 seeds AND the dissociation criterion holds on >= 2 seeds -> shadowing is the established cause of non-accumulation; the context-masked write (inner-loss attention restricted) becomes the main method line, with lr re-tuning and long-context loss measured; Qwen code proceeds in parallel and runs only if the GPU is free (otherwise after 10-26); 125M later.
+- **S2** L1-irr also strongly reduced -> the effect is context change, not shadowing; the masked-write premise fails; re-plan with the reviewer.
+- **S3** anything else -> more controls before any method pilot.
+Method note: the write-signal screening of today was done without context, so it says nothing about the masked write.
+
+## Overnight branch: context-masked write pilot (registered 2026-10-15 22:10 KST, before any run; Hans: keep the GPU busy until 09:00 KST, branching allowed)
+- **L0mw (masked write):** the stream is read normally, but each inner update is computed as if its 1024-token chunk were alone (prefix recomputed on the chunk only, positions from 0, empty suffix KV), so no earlier exposure outside the chunk is visible to the write; same step rule, one step per chunk; 8 passes over the full stream; evaluation after each pass with R1, R1-alt and both canaries. Seed 101.
+- **Branch condition (run only if):** L1-irr s101 is NOT a strong reduction, i.e. R(L1-irr) > 0.30 (registered L1-variant rule). If L1-irr is a strong reduction (S2 direction), L0mw is not run and the GPU time goes to the stage-1a replication instead.
+- **Rule for L0mw:** as stage 1 (damaged passes excluded, k* = last undamaged pass): R* = D(L0mw, k*)/D(L1, k*) on R1, R1-alt reported. Also reported against L0mp at the same pass. Prediction if shadowing blocks accumulation: L0mw well above L0mp at matched passes and R* >= 0.30 (recovery class). This is a pilot: its result informs, but does not replace, the 2026-10-18 decision.
+- **Filler of the remaining time:** stage-1a replication (L0or on s102 and s103, same rules).

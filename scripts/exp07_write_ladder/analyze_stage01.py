@@ -41,7 +41,7 @@ def main():
         R=ratio(cm[8][2]['D'],c1[8][2]['D']);res['Ralt']=R
         v='native repetition does NOT write binding (robust to readout damage)' if (R[0]<0.3 and R[2]<0.5) else ('binding written but unreadable in the damaged R1 context' if (R[0]>=0.7 and R[1]>=0.5) else 'mixed')
         md.append(f'\n**0b verdict: Ralt = {R[0]:.2f} [{R[1]:.2f}, {R[2]:.2f}] -> {v}**');res['0b']=v
-    for lev,name in (('L0or','1a. oracle exposure-only re-reads'),('L0fs','1b. filler swap')):
+    for lev,name in (('L0or','1a. oracle exposure-only re-reads'),('L0fs','1b. filler swap'),('L0mw','MW. context-masked write pilot')):
         X=load(lev,'main')
         if not (X and c1):continue
         cx=curve(*X);md.append(f'\n## {name}\n\n| pass | D (R1) | D (R1-alt) | acc/flip | max canary rise |\n|---|---|---|---|---|')
