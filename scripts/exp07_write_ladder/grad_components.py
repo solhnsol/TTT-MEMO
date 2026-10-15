@@ -48,11 +48,16 @@ def run_checks(ns):
         inner,outer=eqx.partition(m0,L.f32);lv,td=jax.tree_util.tree_flatten(inner);key=jax.random.PRNGKey(7)
         vs=[jax.random.normal(k_,x.shape,jnp.float32) for k_,x in zip(jax.random.split(key,len(lv)),lv)];vn=float(np.sqrt(sum(float(jnp.sum(v*v)) for v in vs)));vs=[v/vn for v in vs]
         vtree=jax.tree_util.tree_unflatten(td,vs)
-        for kind,nm in ((0,'ctxKL'),(1,'logitMSE')):
-            g=distill_grad(m0,*inp0,tgt,mask,jnp.int32(kind));gv=dot(g,vtree);del g
-            eps=1e-3;mp=eqx.combine(jax.tree.map(lambda x,v:x+eps*v,inner,vtree),outer);mm=eqx.combine(jax.tree.map(lambda x,v:x-eps*v,inner,vtree),outer)
+        # fp32 loss values have ~5e-7 resolution at loss ~4, so the step must move the loss by many ulps: direction 1 =
+        # the normalised gradient itself (eps 1e-3), direction 2 = a random unit direction with a larger step (eps 1.0).
+        def fd_check(g,dirn,eps,kind):
+            gv=dot(g,dirn);mp=eqx.combine(jax.tree.map(lambda x,v:x+eps*v,inner,dirn),outer);mm=eqx.combine(jax.tree.map(lambda x,v:x-eps*v,inner,dirn),outer)
             fd=(float(distill_value(mp,*inp0,tgt,mask,jnp.int32(kind)))-float(distill_value(mm,*inp0,tgt,mask,jnp.int32(kind))))/(2*eps);del mp,mm
-            R[f'C2a_{nm}']={'grad_dot_v':gv,'finite_diff':fd,'rel':abs(gv-fd)/max(abs(fd),1e-12)};R[f'C2a_{nm}_pass']=R[f'C2a_{nm}']['rel']<=2e-2
+            return {'grad_dot_v':gv,'finite_diff':fd,'eps':eps,'rel':abs(gv-fd)/max(abs(fd),1e-12)}
+        for kind,nm in ((0,'ctxKL'),(1,'logitMSE')):
+            g=distill_grad(m0,*inp0,tgt,mask,jnp.int32(kind));gn_=norm(g);gdir=jax.tree.map(lambda x:x/gn_,g)
+            r1=fd_check(g,gdir,1e-3,kind);r2=fd_check(g,vtree,1.0,kind);del g,gdir
+            R[f'C2a_{nm}']={'gradient_direction':r1,'random_direction':r2};R[f'C2a_{nm}_pass']=r1['rel']<=2e-2 and r2['rel']<=5e-2
         # C2b: teacher == student (teacher logits = the student's own logits on the same isolated input) -> zero gradient
         own=logits_fn(m0,*inp0)
         for kind,nm in ((0,'ctxKL'),(1,'logitMSE')):
