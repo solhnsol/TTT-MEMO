@@ -29,6 +29,7 @@ EXCLUDES=(
 
 if [ "${1:-}" = "--restore-test" ]; then
   # Round trip: A100 -> PC (done by a normal pull) -> A100 scratch dir.
+  $SSH "$A100" "mkdir -p /tmp/ttt_restore_test/experiments"
   for d in experiments/exp05_write_dynamics results scripts; do
     rsync -rlt --rsync-path="$REMOTE_RSYNC" -e "$SSH" "$DEST$d/" "$A100:/tmp/ttt_restore_test/$d/"
   done
@@ -41,11 +42,16 @@ fi
   rsync -rlt --partial --human-readable --stats \
     --backup --backup-dir="../_previous/$(date +%F)" \
     --bwlimit="$BWLIMIT" --rsync-path="ionice -c3 nice -n19 $REMOTE_RSYNC" \
-    -e "$SSH" "${EXCLUDES[@]}" "$A100:$SRC" "$DEST"
+    -e "$SSH" "${EXCLUDES[@]}" "$A100:$SRC" "$DEST" && rc=0 || rc=$?
+  # 23/24 = some files skipped or vanished mid-run (e.g. still being written); retried next run.
+  [ "$rc" -eq 0 ] || [ "$rc" -eq 23 ] || [ "$rc" -eq 24 ] || exit "$rc"
   # Small extras outside the repo: Claude memory for this project.
   rsync -rlt -e "$SSH" --rsync-path="nice $REMOTE_RSYNC" \
     "$A100:.claude/projects/-home-solhnsol-workspace-TTT-MEMO/memory/" "$DEST/../_claude_memory/" || true
   find "$DEST/../_previous" -mindepth 1 -maxdepth 1 -mtime +14 -exec rm -rf {} + 2>/dev/null || true
-  date '+%F %T' > "$DEST/../LAST_OK"
-  echo "=== $(date '+%F %T') pull ok"
+  if [ "$rc" -eq 0 ]; then
+    date '+%F %T' > "$DEST/../LAST_OK"; echo "=== $(date '+%F %T') pull ok"
+  else
+    echo "$(date '+%F %T') rsync code $rc" > "$DEST/../LAST_PARTIAL"; echo "=== $(date '+%F %T') pull partial (code $rc)"
+  fi
 } >>"$LOG" 2>&1
