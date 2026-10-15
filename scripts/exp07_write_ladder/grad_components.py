@@ -80,6 +80,75 @@ def run_checks(ns):
     R['ALL_PASS']=all(v for k,v in R.items() if k.endswith('_pass'))
     _j.dump(R,open(ns['OUT']/'grad_checks_s101.json','w'),indent=1,default=str);print(_j.dumps(R,indent=1,default=str),flush=True)
     if not R['ALL_PASS']:sys.exit(3)
+def run_onestep(ns):
+    """W0 one-step realization test (PROTOCOL_stage01.md, registered 2026-10-16 00:35 KST). One step from W0 along the NTP
+    mean gradient g_w (stage-2 g) or along its binding-only part g_b,w = (<g_w,U>/<U,U>) U, U = sum_p grad M_p (L3, R0, W0),
+    with the native step size eta (lr x ilr multiplier) and the clip coefficient of g_w, times s in {1,2,4,8}. Full readout
+    (R1, R1-alt, canaries) per point, plus the R0 margins and the first-order prediction. Unit checks O1-O4 run first."""
+    import json as _j
+    rt=ns['rt'];rt32=ns['rt32'];L=ns['L'];W=ns['W'];loss_grad=ns['loss_grad'];margin_grad=ns['margin_grad'];margin_val=ns['margin_val']
+    dot=ns['dot'];norm=ns['norm'];inp=ns['inp'];pairs=ns['pairs'];xpairs=ns['xpairs'];sent=ns['sent'];OUT=ns['OUT'];m0=rt32.base
+    SC=(1,2,4,8);R={}
+    inner0,_=eqx.partition(rt.base,L.f);td=jax.tree_util.tree_structure(inner0);p0=jax.tree_util.tree_leaves(inner0)
+    def make(v,step):
+        """W0 - step * v as a model of the bf16-compute runtime (same cast rule as the inner step in ladder.py)."""
+        vl=jax.tree_util.tree_leaves(v);assert len(vl)==len(p0)
+        return L.set_inner(rt.base,jax.tree_util.tree_unflatten(td,[(p+(-step*x).astype(p.dtype)).astype(p.dtype) for p,x in zip(p0,vl)]))
+    def r0(m):
+        m32=L.to_fp32(m);out={}
+        with rt32.mesh,jax.default_matmul_precision('highest'):
+            for fam,pl in (('L3',pairs),('FN',pairs),('XP',xpairs)):out[fam]=[float(margin_val(m32,*inp[(fam,p)])) for p in pl]
+        return out
+    with rt.mesh:eta=float(L.lr*rt.base.get_ilr_multiplier(clone_state(rt.state_all).get(rt.base.step_index)))
+    R['eta']=eta;g={};gb={};coef={};gn={}
+    with rt32.mesh,jax.default_matmul_precision('highest'):
+        U=None
+        for p in pairs:u=margin_grad(m0,*inp[('L3',p)]);U=u if U is None else jax.tree.map(lambda x,y:x+y,U,u);del u
+        UU=dot(U,U)
+        for w in 'AB':
+            gg=None
+            for c_ in sent[w]:
+                gi=loss_grad(m0,*c_);gg=gi if gg is None else jax.tree.map(lambda x,y:x+y,gg,gi);del gi
+            g[w]=jax.tree.map(lambda x:x/len(sent[w]),gg);del gg;gn[w]=norm(g[w]);coef[w]=min(1.0,L.clip/max(gn[w],1e-30))
+            k=dot(g[w],U)/UU;gb[w]=jax.tree.map(lambda x:k*x,U);R[f'gU_{w}']=dot(g[w],U);R[f'gb_norm_{w}']=norm(gb[w])
+            # O3: projection identity <g_b,U> == <g,U>
+            R[f'O3_{w}_rel']=abs(dot(gb[w],U)-R[f'gU_{w}'])/max(abs(R[f'gU_{w}']),1e-30)
+        # first-order per-pair predictions per unit step (a = -<u_p, v>) for both directions
+        pred={}
+        for fam,pl in (('L3',pairs),('FN',pairs),('XP',xpairs)):
+            for p in pl:
+                u=margin_grad(m0,*inp[(fam,p)])
+                for w in 'AB':pred[('g',w,fam,p)]=-dot(u,g[w]);pred[('gb',w,fam,p)]=-dot(u,gb[w])
+                del u
+    R['gnorm']=gn;R['coef']=coef;R['O3_pass']=all(R[f'O3_{w}_rel']<=1e-4 for w in 'AB')
+    # O1: make(v, 0) reproduces W0 exactly
+    R['O1_pass']=reuse._hash_pytree(make(g['A'],0.0).inner_parameters())[0]==reuse._hash_pytree(rt.base.inner_parameters())[0]
+    # O2: eta equals the step size the native-rule inner step (ladder.py step) actually applies on one exposure chunk
+    ch,_=packing.pack_rows([(x,(0,0)) for x in L.sentences(False)]);ids,seg,loc=ch[0]
+    tg=np.concatenate([ids[1:],[rt.eos]]).astype(np.int32);mk=(seg>=0)&(np.concatenate([seg[1:],[-1]])==seg)
+    with rt.mesh:
+        pref=L.prefix_iso(rt.base,jnp.asarray(ids),jnp.asarray(loc),jnp.asarray(packing.prefix_mask(seg,W)))
+        newp,gn1,cf1,_=L.step(rt.base,clone_state(rt.state_all),jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc))
+        dl=float(np.sqrt(sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(newp),jax.tree.leaves(rt.base.inner_parameters())))))
+    R['O2_native_step']=dl/(float(gn1)*float(cf1));R['O2_rel']=abs(R['O2_native_step']-eta)/eta;R['O2_pass']=R['O2_rel']<=1e-2;del newp
+    # O4: the measured R0 change along g_b matches the first-order prediction for a small step (central difference)
+    base_r0=r0(rt.base);tot=sum(pred[('gb','A','L3',p)] for p in pairs);h=min(1.0,0.2/max(abs(tot),1e-30))
+    mp_=r0(make(gb['A'],h));mm_=r0(make(gb['A'],-h));fd=sum((a-b)/(2*h) for a,b in zip(mp_['L3'],mm_['L3']))
+    R['O4']={'h':h,'pred':tot,'finite_diff':fd,'rel':abs(fd-tot)/max(abs(tot),1e-30)};R['O4_pass']=R['O4']['rel']<=5e-2
+    R['ALL_PASS']=all(v for k,v in R.items() if k.endswith('_pass'))
+    _j.dump(R,open(OUT/'onestep_checks_s101.json','w'),indent=1,default=str);print(_j.dumps(R,indent=1,default=str),flush=True)
+    if not R['ALL_PASS']:sys.exit(3)
+    meta={'eta':eta,'coef':coef,'gnorm':gn,'scales':SC,'pred':{'|'.join(k):v for k,v in pred.items()},'r0_base':base_r0,'pairs':pairs,'xpairs':xpairs}
+    _j.dump(meta,open(OUT/'onestep_meta_s101.json','w'),indent=1)
+    e0=L.evaluate(rt.base)                                   # W0 is the same model for both worlds and both directions
+    for vn,V in (('gb',gb),('g',g)):
+        logs={}
+        for w in 'AB':
+            logs[w]=[{'state':0,'margins':e0,'r0':base_r0}]
+            for sc in SC:
+                m=make(V[w],eta*coef[w]*sc);logs[w].append({'state':sc,'step':eta*coef[w]*sc,'margins':L.evaluate(m),'r0':r0(m)});del m
+                print('onestep',vn,w,sc,'done',flush=True)
+                _j.dump({'log':logs[w],'meta':{'v':vn,'eta':eta,'coef':coef[w]}},open(OUT/f'ONESTEP_{vn}_s101_{w}.json','w'),indent=1)
 def run_nsweep(ns):
     """N-sweep (PROTOCOL_stage01.md): NTP g on the exposure sentences of N pairs only; b, r for those pairs, at W0."""
     import json as _j,random as _r
@@ -190,17 +259,19 @@ def main():
             for c in (it['gold'],it['foil']):
                 ids,span=stage2.item_ids(T.tok,stage2.make_slot(T.tok,None),it['prefix'],c);rows.append((ids,(span[0]-1,span[1]-1)))
         return rows
+    def margin_fn(m,ids_,tg_,pref_,seg_,loc_,wg_,wf_):
+        """sum(lp * wg) - sum(lp * wf) under the empty-context readout (R0): weights mark gold / foil span positions."""
+        packing.PACK_SUF['seg']=seg_;packing.PACK_SUF['loc']=loc_
+        try:
+            r=m.language_model.suffix_call(prefix_outputs=pref_,state=clone_state(rt32.state_suffix),seq=Batch(input_ids=ids_,target_tokens=tg_,loss_masks=jnp.ones_like(ids_,dtype=bool)))
+            lg=r.logits.astype(jnp.float32);lp=jnp.take_along_axis(lg,tg_[:,None],axis=-1)[:,0]-jax.nn.logsumexp(lg,axis=-1)
+        finally:packing.PACK_SUF.clear()
+        return jnp.sum(lp*wg_)-jnp.sum(lp*wf_)
+    margin_val=eqx.filter_jit(margin_fn)
     @eqx.filter_jit
-    def margin_grad(m,ids_,tg_,pref_,seg_,loc_,wg_,wf_):
-        """gradient (inner params) of sum(lp * wg) - sum(lp * wf): weights mark gold / foil span positions."""
-        def f(m):
-            packing.PACK_SUF['seg']=seg_;packing.PACK_SUF['loc']=loc_
-            try:
-                r=m.language_model.suffix_call(prefix_outputs=pref_,state=clone_state(rt32.state_suffix),seq=Batch(input_ids=ids_,target_tokens=tg_,loss_masks=jnp.ones_like(ids_,dtype=bool)))
-                lg=r.logits.astype(jnp.float32);lp=jnp.take_along_axis(lg,tg_[:,None],axis=-1)[:,0]-jax.nn.logsumexp(lg,axis=-1)
-            finally:packing.PACK_SUF.clear()
-            return jnp.sum(lp*wg_)-jnp.sum(lp*wf_)
-        return eqx.filter_grad(f)(m).inner_parameters()
+    def margin_grad(m,*args):
+        """gradient (inner params) of margin_fn."""
+        return eqx.filter_grad(lambda m:margin_fn(m,*args))(m).inner_parameters()
     @eqx.filter_jit
     def loss_grad(m,ids_,tg_,mk_,pref_,seg_,loc_):
         packing.PACK_SUF['seg']=seg_;packing.PACK_SUF['loc']=loc_
@@ -301,6 +372,8 @@ def main():
         ns=dict(locals());ns['OUT']=OUT;run_checks(ns);return
     if os.environ.get('CTX3')=='1':
         ns=dict(locals());ns['OUT']=OUT;run_ctx3(ns);return
+    if os.environ.get('ONESTEP')=='1':
+        ns=dict(locals());ns['OUT']=OUT;run_onestep(ns);return
     if os.environ.get('NSWEEP')=='1':
         ns=dict(locals());ns['OUT']=OUT;run_nsweep(ns);return
     SD=OUT/'states'/'L1_ck_s101';res={}

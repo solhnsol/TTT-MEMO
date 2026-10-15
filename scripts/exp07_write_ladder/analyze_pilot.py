@@ -1,4 +1,4 @@
-"""Masked-write pilot analysis (PROTOCOL_stage01.md, 23:10 KST spec). Usage: analyze_pilot.py SEED [125m]"""
+"""Masked-write pilot analysis (PROTOCOL_stage01.md, 23:10 KST spec; amended 2026-10-16 00:35 KST). Usage: analyze_pilot.py SEED [125m]"""
 import sys,os
 from pathlib import Path
 import numpy as np
@@ -36,7 +36,9 @@ def main():
         if not ok:md.append(f'\n**{g}: no undamaged lr at pass 1 -> NEGATIVE (damage-limited)**');continue
         sel=max(ok,key=lambda t:float(t.split('x')[-1]));c,k,R=rows[sel]
         a=AL.ci(c[1][2]['D']);nb=AL.ci(nat[2]['D']) if nat else (0,0,0)
-        pos=(R[0]>=0.30) and (a[0]>nb[0]+(nb[2]-nb[1])/2)
-        md.append(f"\n**{g}: selected lr x{sel.split('x')[-1]}; R* = {R[0]:.2f}; one-pass D_alt {a[0]:+.3f} vs native {nb[0]:+.3f} -> {'POSITIVE' if pos else 'NEGATIVE'}**")
+        prim=R[0]>=0.30;sec=a[0]>nb[0]+(nb[2]-nb[1])/2;orig=prim and sec
+        # amendment 2026-10-16 00:35 KST (before any result): primary = R* only; the one-pass clause is secondary
+        md.append(f"\n**{g}: selected lr x{sel.split('x')[-1]}; R* = {R[0]:.2f}; one-pass D_alt {a[0]:+.3f} vs native {nb[0]:+.3f} (secondary clause {'met' if sec else 'not met'})**")
+        md.append(f"- amended verdict (primary, R* >= 0.30): {'POSITIVE' if prim else 'NEGATIVE'}\n- original verdict (R* and one-pass clause): {'ORIG_POS' if orig else 'ORIG_NEG'}")
     out=(S.OUT/f"pilot_report_{'125m_' if M125 else ''}s{SEED}.md");out.write_text('\n'.join(md)+'\n');print('\n'.join(md))
 if __name__=='__main__':main()
