@@ -7,13 +7,13 @@ Use this when the A100 (`/home/solhnsol/workspace/TTT-MEMO`) is gone, wiped, or 
 | What | Primary copy | Backup | How it gets there |
 |---|---|---|---|
 | Code, protocols, `env/` freezes | GitHub `solhnsol/TTT-MEMO` | branch `autosnap/a100` (hourly, includes uncommitted edits) | cron on A100 → `scripts/backup/code_autosnap.sh` |
-| `experiments/`, `results/`, `data/`, `checkpoints/`, `.git` | A100 | lab PC `~/a100-backup/TTT-MEMO/` | PC pulls every 15 min → `scripts/backup/pull_from_a100.sh` |
-| Files overwritten/deleted on the A100 | — | lab PC `~/a100-backup/_previous/<date>/` (kept 14 days) | same pull |
-| Claude project memory | A100 `~/.claude/projects/...` | lab PC `~/a100-backup/_claude_memory/` | same pull |
+| `experiments/`, `results/`, `data/`, `checkpoints/`, `.git` | A100 | lab PC `D:\Project\KFAI\2026\TTT_ACL\TTT-MEMO\` (WSL: `/mnt/d/Project/KFAI/2026/TTT_ACL/TTT-MEMO/`) | Windows Task Scheduler (WSL rsync) pulls every 15 min → `scripts/backup/pull_from_a100.sh`, set up by `scripts/backup/windows/setup_pc.ps1` |
+| Files overwritten/deleted on the A100 | — | lab PC `/mnt/d/Project/KFAI/2026/TTT_ACL/_previous/<date>/` (kept 14 days) | same pull |
+| Claude project memory | A100 `~/.claude/projects/...` | lab PC `/mnt/d/Project/KFAI/2026/TTT_ACL/_claude_memory/` | same pull |
 
 Not backed up (rebuild instead): `.venv`, `.venv-exp02a` (≈12 GB, see step 3), HF model cache (≈38 GB, step 5), JAX compile cache.
 
-Check the backup is fresh: `cat ~/a100-backup/LAST_OK` on the PC; logs in `~/a100-backup/_logs/`.
+Check the backup is fresh: `cat /mnt/d/Project/KFAI/2026/TTT_ACL/LAST_OK` on the PC; logs in `/mnt/d/Project/KFAI/2026/TTT_ACL/_logs/`.
 
 ## 1. Code
 
@@ -24,14 +24,14 @@ git checkout autosnap/a100                     # newest snapshot, incl. uncommit
 # (or `main` / a feature branch if you only want committed history)
 ```
 
-The PC backup also holds the full repo with `.git`, so `~/a100-backup/TTT-MEMO` is itself a working checkout if GitHub is unreachable.
+The PC backup also holds the full repo with `.git`, so `/mnt/d/Project/KFAI/2026/TTT_ACL/TTT-MEMO` is itself a working checkout if GitHub is unreachable.
 
 ## 2. Data, results, checkpoints
 
-From the lab PC to the new machine (`NEW` = `user@host`, run on the PC):
+From the lab PC to the new machine (`NEW` = `user@host`, run in WSL on the PC):
 
 ```bash
-rsync -a --info=progress2 ~/a100-backup/TTT-MEMO/{data,checkpoints,experiments,results} NEW:~/workspace/TTT-MEMO/
+rsync -a --info=progress2 /mnt/d/Project/KFAI/2026/TTT_ACL/TTT-MEMO/{data,checkpoints,experiments,results} NEW:~/workspace/TTT-MEMO/
 ```
 
 Sizes at setup (2026-10-15): data 9.9 GB, checkpoints 11 GB, experiments 21 GB (exp07 13 GB, exp04 4.1 GB, exp08 3.6 GB), results 0.9 GB.
