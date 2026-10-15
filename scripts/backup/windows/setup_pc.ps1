@@ -38,4 +38,4 @@ Register-ScheduledTask -TaskName "TTT-MEMO A100 backup" -Action $action -Trigger
 
 Write-Host "`nTask registered: every $Minutes min -> $Root\TTT-MEMO (logs: $Root\_logs, last success: $Root\LAST_OK)"
 Write-Host "Send this public key to Claude so it can be added on the A100:`n"
-wsl.exe -e cat ~/.ssh/a100_backup.pub
+wsl.exe -e bash -lc "cat ~/.ssh/a100_backup.pub"
