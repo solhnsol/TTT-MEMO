@@ -15,4 +15,7 @@ if [ "$R" != "NA" ] && $PY -c "import sys;sys.exit(0 if float('$R')>0.30 else 1)
   $PY $S/analyze_stage01.py 101 > $OUT/analyze_stage01_s101_mw.log 2>&1; lg ANALYZED mw
 else lg "BRANCH -> L0mw skipped (L1-irr strong reduction or missing)"; fi
 for ws in 102 103; do two --level L0or --world-seed $ws --passes 8; $PY $S/analyze_stage01.py $ws > $OUT/analyze_stage01_s${ws}_or.log 2>&1; lg ANALYZED or $ws; done
+if grep -q "BRANCH -> run L0mw pilot" $OUT/queue.log; then
+  for ws in 102 103; do two --level L0mw --world-seed $ws --passes 8; $PY $S/analyze_stage01.py $ws > $OUT/analyze_stage01_s${ws}_mw.log 2>&1; lg ANALYZED mw $ws; done
+fi
 lg NIGHT_DONE

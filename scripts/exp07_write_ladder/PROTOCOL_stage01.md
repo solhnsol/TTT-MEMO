@@ -129,3 +129,16 @@ Method note: the write-signal screening of today was done without context, so it
 - **Branch condition (run only if):** L1-irr s101 is NOT a strong reduction, i.e. R(L1-irr) > 0.30 (registered L1-variant rule). If L1-irr is a strong reduction (S2 direction), L0mw is not run and the GPU time goes to the stage-1a replication instead.
 - **Rule for L0mw:** as stage 1 (damaged passes excluded, k* = last undamaged pass): R* = D(L0mw, k*)/D(L1, k*) on R1, R1-alt reported. Also reported against L0mp at the same pass. Prediction if shadowing blocks accumulation: L0mw well above L0mp at matched passes and R* >= 0.30 (recovery class). This is a pilot: its result informs, but does not replace, the 2026-10-18 decision.
 - **Filler of the remaining time:** stage-1a replication (L0or on s102 and s103, same rules).
+- Addendum (22:55 KST, before any branch result): if the L0mw branch runs, L0mw is also run on s102 and s103 after the L0or replication (same rule), to fill the GPU until ~09:00 KST.
+
+## Reordered night queue and pilot specification (registered 2026-10-15 23:10 KST, before any pilot run; reviewer queue verdict, Hans's go)
+Order: N-sweep (running) -> L1-irr s101 (weights saved at epoch 8) -> W0 three-context -> **3B L0mw pilot s101** (only if L1-irr R > 0.30) -> L1-ctx and L1-irr s102/s103 -> pilot s102 at the selected lr if the s101 pilot is positive -> 125M masked-write grid -> EM -> L0or s102/s103 only if time remains. This replaces the 22:10 order; the L0mw-on-s102/s103 addendum is limited to s102 at the selected lr.
+**3B pilot (L0mw):**
+- Write window: block = 1024 (the chunk alone; positions restart; empty suffix KV); attention inside the block is unchanged.
+- lr levels: native x1 and x2 (two runs, 8 passes each, worlds A and B). A x4 level is not run on 3B (K = 4 / x8 already overshoot).
+- Measured every pass: D (R1, R1-alt), familiarity, both canaries (pg11 memorized text and the scrubbed pg1342 7K-token stream; both are long-context NLLs read with carried KV over 7-8 chunks), cumulative update norm.
+- Selection rule: the largest lr level with no damage (canary <= 0.10) at pass 1; its pass-1 value (one-pass, the deployable setting) and its value at k* (last undamaged pass) are reported; R* vs L1 and the ratio vs L0mp at the same pass.
+- Positive pilot: R* >= 0.30 at k* for the selected lr AND the one-pass D (R1-alt) above native L0's one-pass D by more than the CI half-width.
+**125M grid (05:00-09:00 slot):** L0mw on 125M s101, block {1024, 256} x lr {x1, x2, x4}, 8 passes, same measurements; compared with 125M L1 ck (R*) and 125M native L0; selection rule as above per block. Purpose: separate lr from window effects cheaply.
+**If S2 (pilot skipped):** L1-ctx and L1-irr weights are read out with the same context attached as during writing (key-mismatch check); this readout code is written in the morning, so the S2 slot is used for the 125M grid instead.
+Interpretation notes adopted: 87% of native repeat exposures are shadowed; write "binding is masked much more strongly than familiarity" (familiarity also -30% in L1-ctx); the K axis is closed (K = 4 overshoot).
