@@ -83,3 +83,16 @@ Two offline rungs between L1 and native, seed 101, 8 epochs each, same step rule
 - **L1-fill:** the plain L1 rows plus all background paragraphs of the world's own stream as further isolated rows (loss on all tokens), i.e. the native filler share inside the offline write; no context, shuffled.
 - **Rule:** R = D(variant, epoch 8) / D(plain L1 ck, epoch 8) on R1, pair bootstrap. R >= 0.70 (CI lower >= 0.50): no effect; R <= 0.30 (CI upper <= 0.50): strong reduction; otherwise partial. Prediction: if in-context shadowing is the main factor, L1-ctx shows a strong reduction and L1-fill no effect.
 - Check amendment (2026-10-15 14:10 KST, after the first check run, before any screening output): C2a failed (rel 0.76 / 0.42) because with eps = 1e-3 along a random unit direction the loss moves by ~2e-7, below fp32 resolution at loss ~4 (the finite differences equal one or two ulps). C2a now uses (i) the normalised gradient direction with eps = 1e-3 (pass <= 2%) and (ii) a random unit direction with eps = 1.0 (pass <= 5%). C1 (0.0), C2b (ratio 8e-8 / 0), C2c (450 rows, context = the two previous pair sentences) and C3 (binding +7.06 [+5.34, +9.17], null/b 0.04) passed in the first run.
+
+## Amended decision rules (registered 2026-10-15 15:10 KST, before the seed 102/103 results, the N-sweep and any Qwen run; reviewer verdict + Hans's go)
+Reason for the change: the earlier rule "no passing signal -> 125M outer loop is the main line" assumed W0 is the cause. That assumption can be tested more cheaply with a TTT family that has no outer loop (NTP-LoRA-TTT on Qwen), which is also the required second family. This is a change of order, not a re-reading of results.
+- Order: finish the 3B queue -> **N-sweep** (below) -> port the pipeline to Qwen NTP-LoRA-TTT (L0 and L1 with the same worlds, readouts and nulls) -> decision on 2026-10-18.
+- Decision on 2026-10-18:
+  1. Seed replication fails (Ralt >= 0.30 on seed 102 or 103) -> rewrite the core observation first.
+  2. Qwen one-pass R* >= 0.30 (vs Qwen L1 at matched exposures) -> W0 (meta-learned initialization) is a cause candidate; the 125M outer-loop experiment becomes the main line after 2026-10-26.
+  3. Qwen also fails (R* < 0.30) and the N-sweep slope is near -1 (95% CI includes -1 and excludes 0) -> the cause is the one-step structure shared by both families; methods are sought in the inner update; 125M becomes optional.
+  4. Other combinations: reported and re-planned with the reviewer.
+- 125M read-objective outer-loop code may be written 2026-10-19..25 without GPU use.
+
+## N-sweep (registered 2026-10-15 15:10 KST, before the run)
+Gradient-only, at W0, seed 101, with the same checked functions (loss_grad, margin_grad; checks passed at sha256 5c2cf579...): the NTP update direction g_S is computed on the exposure sentences of a subset S of N pairs only, and b(p), r(p) are measured for p in S. N in {1, 2, 4, 8, 15}; 6 random subsets for N = 1, 2, 4, 8 (seeded), the full set for N = 15. Quantity: q(N) = mean over subsets of mean_p b(p) / mean_p r(p). Fit: log q(N) = a + s log N (least squares over the subset-level values; pair-bootstrap within subsets for the CI of s). **Supports the statistical-dominance explanation** iff the 95% CI of s includes -1 and excludes 0; **no N dependence** iff the CI of s includes 0. Otherwise reported as is.

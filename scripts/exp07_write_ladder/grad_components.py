@@ -80,6 +80,57 @@ def run_checks(ns):
     R['ALL_PASS']=all(v for k,v in R.items() if k.endswith('_pass'))
     _j.dump(R,open(ns['OUT']/'grad_checks_s101.json','w'),indent=1,default=str);print(_j.dumps(R,indent=1,default=str),flush=True)
     if not R['ALL_PASS']:sys.exit(3)
+def run_nsweep(ns):
+    """N-sweep (PROTOCOL_stage01.md): NTP g on the exposure sentences of N pairs only; b, r for those pairs, at W0."""
+    import json as _j,random as _r
+    rt32=ns['rt32'];L=ns['L'];T=ns['T'];W=ns['W'];prefix32=ns['prefix32'];loss_grad=ns['loss_grad'];margin_grad=ns['margin_grad']
+    dot=ns['dot'];inp=ns['inp'];pairs=ns['pairs'];m0=rt32.base
+    tri={t['id']:t for t in T.w['triples']};res=[]
+    def chunks_for(w,S):
+        _,_,spans=gw.realize(T.w,w=='B');sents=L.sentences(w=='B');keep=[x for x,s_ in zip(sents,spans) if tri[s_['t']]['pair'] in S]
+        ch,_=packing.pack_rows([(x,(0,0)) for x in keep]);out=[]
+        for ids,seg,loc in ch:
+            tg=np.concatenate([ids[1:],[rt32.eos]]).astype(np.int32);mk=(seg>=0)&(np.concatenate([seg[1:],[-1]])==seg)
+            pref=prefix32(m0,jnp.asarray(ids),jnp.asarray(loc),jnp.asarray(packing.prefix_mask(seg,W)))
+            out.append((jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc)))
+        return out
+    rng=_r.Random(11);plan=[]
+    for N in (1,2,4,8):
+        for i in range(6):plan.append((N,sorted(rng.sample(pairs,N),key=lambda s:int(s[1:]))))
+    plan.append((15,list(pairs)))
+    with rt32.mesh,jax.default_matmul_precision('highest'):
+        for N,S in plan:
+            a={}
+            for w in 'AB':
+                g=None;ch=chunks_for(w,set(S))
+                for c_ in ch:
+                    gi=loss_grad(m0,*c_);g=gi if g is None else jax.tree.map(lambda x,y:x+y,g,gi);del gi
+                g=jax.tree.map(lambda x:x/len(ch),g)
+                for fam in ('L3','FN'):
+                    for p in S:u=margin_grad(m0,*inp[(fam,p)]);a[(w,fam,p)]=-dot(u,g);del u
+                del g
+            b=[(a[('A','L3',p)]-a[('B','L3',p)])/2 for p in S];r=[(a[('A','FN',p)]+a[('B','FN',p)])/2 for p in S]
+            res.append({'N':N,'pairs':S,'b':b,'r':r});print('N',N,S,'b/r',np.mean(b)/np.mean(r),flush=True)
+            _j.dump(res,open(ns['OUT']/'nsweep_s101.json','w'),indent=1)
+    # fit log q = a + s log N on subset-level ratios (subsets with mean r <= 0 are excluded and counted)
+    pts=[(np.log(x['N']),np.log(np.mean(x['b'])/np.mean(x['r']))) for x in res if np.mean(x['r'])>0 and np.mean(x['b'])>0]
+    nexcl=len(res)-len(pts);X=np.asarray([p[0] for p in pts]);Y=np.asarray([p[1] for p in pts])
+    s=float(np.polyfit(X,Y,1)[0]);bs=[]
+    rr=np.random.default_rng(5)
+    for _ in range(4000):
+        q=[]
+        for x in res:
+            i=rr.integers(0,len(x['b']),len(x['b']));mb=np.mean(np.asarray(x['b'])[i]);mr=np.mean(np.asarray(x['r'])[i])
+            if mb>0 and mr>0:q.append((np.log(x['N']),np.log(mb/mr)))
+        if len(q)>=3:q=np.asarray(q);bs.append(np.polyfit(q[:,0],q[:,1],1)[0])
+    lo,hi=np.percentile(bs,[2.5,97.5]);v='supports statistical dominance (slope ~ -1)' if (lo<=-1<=hi and hi<0) else ('no N dependence' if lo<=0<=hi else 'other')
+    out={'slope':s,'ci':[float(lo),float(hi)],'excluded_subsets':nexcl,'verdict':v}
+    _j.dump({'subsets':res,'fit':out},open(ns['OUT']/'nsweep_s101.json','w'),indent=1)
+    md=['# N-sweep (seed 101, W0, NTP)\n','| N | mean b/r over subsets | subsets |','|---|---|---|']
+    for N in (1,2,4,8,15):
+        q=[np.mean(x['b'])/np.mean(x['r']) for x in res if x['N']==N];md.append(f'| {N} | {np.mean(q):+.4f} (range {min(q):+.4f} .. {max(q):+.4f}) | {len(q)} |')
+    md.append(f"\n**slope s = {s:+.2f} [{lo:+.2f}, {hi:+.2f}] -> {v}** (excluded subsets with b or r <= 0: {nexcl})")
+    (ns['OUT']/'nsweep_s101.md').write_text('\n'.join(md)+'\n');print('\n'.join(md),flush=True)
 def main():
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     rt=Runtime();L=LD.Ladder(rt,101);rt32=L.rt32;W=int(rt32.cfg.model.sliding_window_size);T=L.T
@@ -210,6 +261,8 @@ def main():
         return jax.tree.map(lambda x:x/nch,g)
     if os.environ.get('GRAD_CHECK')=='1':
         ns=dict(locals());ns['OUT']=OUT;run_checks(ns);return
+    if os.environ.get('NSWEEP')=='1':
+        ns=dict(locals());ns['OUT']=OUT;run_nsweep(ns);return
     SD=OUT/'states'/'L1_ck_s101';res={}
     for k in STATES:
         t0=time.monotonic();a={};gn={}
