@@ -96,3 +96,13 @@ Reason for the change: the earlier rule "no passing signal -> 125M outer loop is
 
 ## N-sweep (registered 2026-10-15 15:10 KST, before the run)
 Gradient-only, at W0, seed 101, with the same checked functions (loss_grad, margin_grad; checks passed at sha256 5c2cf579...): the NTP update direction g_S is computed on the exposure sentences of a subset S of N pairs only, and b(p), r(p) are measured for p in S. N in {1, 2, 4, 8, 15}; 6 random subsets for N = 1, 2, 4, 8 (seeded), the full set for N = 15. Quantity: q(N) = mean over subsets of mean_p b(p) / mean_p r(p). Fit: log q(N) = a + s log N (least squares over the subset-level values; pair-bootstrap within subsets for the CI of s). **Supports the statistical-dominance explanation** iff the 95% CI of s includes -1 and excludes 0; **no N dependence** iff the CI of s includes 0. Otherwise reported as is.
+
+## Greedy EM (registered 2026-10-15 17:30 KST, before any EM output exists; reviewer EM verdict, Hans's go)
+- Method: greedy exact match of the place name continuing the L3 probe, computed as "every gold place token is the full-vocabulary arg-max at its position" (identical to greedy decoding while all earlier tokens match). Same packed fp32 readouts.
+- **Primary readout: R1-alt. Primary number: flip-EM** = fraction of the 30 L3 items whose greedy continuation is the world-correct place in world A AND whose probe gives the partner place in world B.
+- Reported with: per-world EM; the W0 value; candidate-set baselines (uniform over the 30 world places = 1/30 per world; uniform over the probed pair's two places = 1/2, i.e. the 2-way level); and, for wrong greedy first tokens, the share that is the first token of (i) the partner's place, (ii) another pair's place, (iii) anything else.
+- Runs: L1 s101 ck (saved epochs 1, 2, 4, 8, 32), native L0 s101 (re-streamed with the verified L0x scale-1 path: states 16, 32, 48, 63) and L0fs s101 (re-streamed, passes 1-8); weights are re-saved because the earlier scored states were deleted after scoring. s102 L1 EM is deferred until after 2026-10-18. EM is part of the Qwen readout from the start.
+- Not a decision input for 2026-10-18.
+
+### W0 place bias (descriptive, computed before EM from existing logs)
+At W0 both worlds have identical weights, so the per-item L3 margin there is a pure name-independent place preference: mean |m| = 3.75 nat under R1 vs 2.46 under R1-alt (s101); 4.80 vs 3.29 (s102); W0 2-way accuracy 0.50 (R1) and 0.53 / 0.50 (R1-alt). The common-mode magnitude |(m_A + m_B)/2| is still 3.67 (R1) vs 2.19 (R1-alt) at L1 epoch 8 (s101). The lower R1 accuracy of L1 is therefore explained by a place bias that exists before any update and is larger in the fiction-tail context.
