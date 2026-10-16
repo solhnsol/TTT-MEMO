@@ -341,7 +341,7 @@ def run_onestep2(ns):
         for sn in sig:lam[sn]=(gn['A']+gn['B'])/(norm(sig[sn]['A'])+norm(sig[sn]['B']))
         R['lam']=lam;del g
     elif STAGE=='keystat':   # KEYSTAT/PoE 1-step screen v1 (PROTOCOL 2026-10-17): per-chunk transforms of the chunk-NTP gradient
-        import keystat as KS,taps as TP;Batch_=ns['Batch'];CELLS=os.environ.get('KS_CELLS','c0,a,a_s,b1,b4,b16,c_hi,c_lo,p05,p10').split(',')
+        import keystat as KS,taps as TP;Batch_=ns['Batch'];CELLS=os.environ.get('KS_CELLS','c0,a,a_s,b1,b4,b16,wr0h,wr0,c_hi,c_lo,wr1,p05,p10,muon,topk8').split(',');ACC=list(CELLS)   # Muon / top-k8 per chunk (design 01:18 KST), like the key transforms
         plan=[('gbc_nm','gb','nm',(1,2,4,8))];sig['gb']=gb
         for nm_ in CELLS:plan+=[(nm_+'_nm',nm_,'nm',(1,2,4,8)),(nm_+'_lr',nm_,'lr',(1,8))]
         deltas,acts,NLk,dm,dff=TP.make_taps(m0,rt32,Batch_)
@@ -350,6 +350,15 @@ def run_onestep2(ns):
         Pinv={}
         for nm_,f_ in (('c_hi',1.0),('c_lo',0.1)):
             if nm_ in CELLS:Pinv[nm_]=(jnp.linalg.inv(Cin+f_*al_in[:,None,None]*jnp.eye(dm)[None]),jnp.linalg.inv(Cmid+f_*al_mid[:,None,None]*jnp.eye(dff)[None]))
+        C0e=None
+        if 'wr1' in CELLS:C0e=(jnp.linalg.eigh(Cin),jnp.linalg.eigh(Cmid))   # (Lambda, Q) per layer
+        WR={'wr0h':(0,1.0),'wr0':(0,0.1),'wr1':(1,0.1)}
+        def wridge(G,xi,xm,lam_,a_):
+            outs=[]
+            for gi,(Gm,X) in enumerate(zip(G,(xi,xi,xm))):
+                ce=None if lam_==0 else (C0e[0 if gi<2 else 1][1],C0e[0 if gi<2 else 1][0])
+                outs.append(jnp.stack([KS.t_wridge(Gm[l],X[l],lam_,a_,None if ce is None else (ce[0][l],ce[1][l])) for l in range(Gm.shape[0])]))
+            return tuple(outs)
         ffp=lambda t:t.language_model.model.h.suffix_blocks.feed_forward_prime
         @jax.jit
         def chunk_G(xi,xm,d1,d3,d2):return jnp.einsum('ltd,ltf->ldf',xi,d1),jnp.einsum('ltd,ltf->ldf',xi,d3),jnp.einsum('ltf,ltd->lfd',xm,d2)
@@ -374,7 +383,7 @@ def run_onestep2(ns):
         with rt32.mesh,jax.default_matmul_precision('highest'):
             for w in 'AB':
                 sw=w=='B';rows,_=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'ntp');stream=list(np.concatenate([r_[0] for r_ in rows]))+[rt32.eos]
-                accu={c:None for c in CELLS};ntot=0;xs_in=None;xs_mid=None;nprev=0;V_=int(m0.language_model.config.vocab_size)
+                accu={c:None for c in ACC};ntot=0;xs_in=None;xs_mid=None;nprev=0;V_=int(m0.language_model.config.vocab_size)
                 for ri,(ids,mk,n,inf_) in enumerate(rows):
                     k=inf_['k'];lo=k*1024;tg=np.concatenate([ids[1:],[rt32.eos]]).astype(np.int32);pref=prefix32(m0,jnp.asarray(ids),jnp.asarray(loc0),pm0)
                     a_=(jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg0),jnp.asarray(loc0))
@@ -393,19 +402,23 @@ def run_onestep2(ns):
                         for r_ in (1,4,16):
                             if f'b{r_}' in CELLS:add(f'b{r_}',(t_b(G[0],Ui,r_),t_b(G[1],Ui,r_),t_b(G[2],Um,r_)))
                         del Ui,Um
+                    if 'muon' in CELLS:add('muon',tuple(jnp.stack([KS.muon(M[l]) for l in range(M.shape[0])]) for M in G))
+                    if 'topk8' in CELLS:add('topk8',tuple(jnp.stack([KS.topk_zero(M[l],0.08) for l in range(M.shape[0])]) for M in G))   # zeroing on -eta G_c = zeroing on G_c
+                    for c_,(lm_,a__) in WR.items():
+                        if c_ in CELLS:add(c_,wridge(G,xi,xm,lm_,a__))
                     for c_,(Pi,Pm) in Pinv.items():add(c_,(jnp.einsum('lde,lef->ldf',Pi,G[0]),jnp.einsum('lde,lef->ldf',Pi,G[1]),jnp.einsum('lfe,led->lfd',Pm,G[2])))
                     for c_,beta in (('p05',0.5),('p10',1.0)):
                         if c_ in CELLS:bias,_=KS.poe_bias(stream,lo,1024,V_,beta,0.1);add(c_,poe_grad(m0,*a_,bias));del bias
                     ntot+=n;s_in=xi.sum(1);s_mid=xm.sum(1);xs_in=s_in if xs_in is None else xs_in+s_in;xs_mid=s_mid if xs_mid is None else xs_mid+s_mid;nprev+=xi.shape[1]
                     del d1,d3,d2,xi,xm,G
-                for c_ in CELLS:
+                for c_ in ACC:
                     W1,W3,W2=(x_/ntot for x_ in accu[c_]);v_=eqx.tree_at(lambda t:(ffp(t).w1.weight,ffp(t).w3.weight,ffp(t).w2.weight),tpl,(W1,W3,W2))
                     sig.setdefault(c_,{})[w]=host(v_);del v_,W1,W2,W3
                 accu=None;info[w]={'chunks':len(rows),'loss_tokens':ntot};memlog(f'keystat {w}')
             if SEED==101 and 'c0' in sig:   # mechanism diagnostics (descriptive), per matrix type
                 Gb=jax.tree.map(lambda a_,b_:(jnp.asarray(a_)-jnp.asarray(b_))/2,sig['c0']['A'],sig['c0']['B'])
                 def per(t):q=ffp(t);return {'w1':q.w1.weight,'w3':q.w3.weight,'w2':q.w2.weight}
-                for c_ in CELLS:
+                for c_ in [c for c in CELLS if c in sig]:
                     for w in 'AB':
                         G_=per(sig['c0'][w]);T_=per(sig[c_][w]);B_=per(Gb)
                         diag[f'{c_}|{w}']={mt:{'rel_change':float(jnp.linalg.norm(jnp.asarray(G_[mt])-jnp.asarray(T_[mt]))/jnp.linalg.norm(jnp.asarray(G_[mt]))),

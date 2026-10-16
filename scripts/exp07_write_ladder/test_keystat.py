@@ -31,4 +31,17 @@ for t in range(CH):
 ids2=ids.copy();ids2[lo+5]=(ids2[lo+5]+1)%V;b2,_=K.poe_bias(ids2,lo,CH,V,1.0,0.1)
 same_before=np.abs(np.asarray(b2[:5])-np.asarray(b[:5])).max()<1e-12;diff_at=np.abs(np.asarray(b2[5])-np.asarray(b[5])).max()>1e-6
 check('4 poe_bias = explicit causal counts; a token change at lo+5 leaves positions < 5 unchanged and changes position 5',ok and same_before and diff_at)
+# amendment v1.1
+Xk=jnp.asarray(r.normal(size=(30,din)));Gk=jnp.asarray(r.normal(size=(din,dout)));N=30
+Ch=Xk.T@Xk/N
+for a_ in (1.0,0.1):
+    al=a_*jnp.trace(Ch)/din;ref=jnp.linalg.solve(Ch+al*jnp.eye(din),Gk)
+    check(f'5 W-ridge lam=0 a={a_} Woodbury = direct solve',np.abs(np.asarray(K.t_wridge(Gk,Xk,0,a_)-ref)).max()<1e-8)
+C0=jnp.asarray(np.cov(r.normal(size=(300,din)).T));Lm,Q=jnp.linalg.eigh(C0)
+al=0.1*(jnp.trace(C0)+jnp.trace(Ch))/din;ref=jnp.linalg.solve(C0+Ch+al*jnp.eye(din),Gk)
+check('5b W-ridge lam=1 Woodbury = direct solve',np.abs(np.asarray(K.t_wridge(Gk,Xk,1,0.1,(Q,Lm))-ref)).max()<1e-8)
+Gm=jnp.asarray(r.normal(size=(40,15)));P=K.muon(Gm,steps=12);sv=np.linalg.svd(np.asarray(P),compute_uv=False);Uu,_,Vv=np.linalg.svd(np.asarray(Gm),full_matrices=False)
+check('6 Muon NS: singular values near 1 (quintic band ~0.7-1.2), same singular vectors as polar(G)',sv.min()>0.6 and sv.max()<1.3 and np.abs(np.sort(np.abs(np.diag(Uu.T@np.asarray(P)@Vv.T)))-np.sort(sv)).max()<1e-6 and np.abs(Uu.T@np.asarray(P)@Vv.T-np.diag(np.diag(Uu.T@np.asarray(P)@Vv.T))).max()<1e-6,f'sv {sv.min():.2f}-{sv.max():.2f}')
+Dm=jnp.asarray(r.normal(size=(50,20)));Z=K.topk_zero(Dm,0.08);nz=int((np.asarray(Z)==0).sum())
+check('7 top-k8 zeroes exactly the 8% largest |entries|',nz==80 and np.abs(np.asarray(Z)).max()<=np.sort(np.abs(np.asarray(Dm)).ravel())[-81]+1e-12,f'{nz} zeroed of 1000')
 print(f'{sum(res)}/{len(res)} passed');sys.exit(0 if all(res) else 1)

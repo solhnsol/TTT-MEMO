@@ -99,7 +99,7 @@ elif mode=='lfv2':   # lfv2: label-free v2 (PROTOCOL 2026-10-17 00:33 KST): judg
     md.append(f"\n**V2: {'CANDIDATE(S) '+', '.join(cand) if cand else 'NO CANDIDATE -> A-probe stands'}**")
 else:   # keystat stage 1 (PROTOCOL KEYSTAT/PoE v1): s101, all cells; per family the best by max damage-free D_alt / max(thresholds)
     seeds=[int(x) for x in (sys.argv[2].split(',') if len(sys.argv)>2 else ['101'])]
-    md=['# KEYSTAT/PoE 1-step screen (W0 one step, chunk condition)\n'];FAM={'P1':['a','a_s','b1','b4','b16','c_hi','c_lo'],'P3':['p05','p10']};ORDER=['a','a_s','b1','b4','b16','c_hi','c_lo','p05','p10']
+    md=['# KEYSTAT/PoE 1-step screen (W0 one step, chunk condition)\n'];FAM={'P1':['a','a_s','b1','b4','b16','wr0h','wr0','c_hi','c_lo','wr1'],'P3':['p05','p10'],'baseline':['muon','topk8']};ORDER=['a','a_s','b1','b4','b16','wr0h','wr0','c_hi','c_lo','wr1','p05','p10','muon','topk8']   # v1.1 tie order
     for sd in seeds:
         AL,S=mods(sd);md+=[f'\n## seed {sd}\n']+H;P={'g_lr':pts(S,AL,'g_lr')}
         for t in ('gbc_nm',)+tuple(f'{c}_{b}' for c in ['c0']+ORDER for b in ('nm','lr')):
@@ -121,8 +121,11 @@ else:   # keystat stage 1 (PROTOCOL KEYSTAT/PoE v1): s101, all cells; per family
         if sd==101:
             md.append('\n## Stage 1 selection (s101)')
             for fam,cells in FAM.items():
-                cand=[r for r in rows if r[0] in cells and r[2]]
+                cand=[r for r in rows if r[0] in cells and (r[2] or fam=='baseline')]
                 if not cand:md.append(f'- {fam}: no cell above the kill line -> FAMILY FAILS');continue
+                if fam=='baseline':
+                    top=max(r[1] for r in cand);pick=min([r for r in cand if abs(r[1]-top)<1e-12],key=lambda r:ORDER.index(r[0]))
+                    md.append(f"- selected baseline: {pick[0]} (score {pick[1]:.2f}); runs on the confirmation seeds too (not a method candidate)");continue
                 top=max(r[1] for r in cand);bestc=[r for r in cand if abs(r[1]-top)<1e-12];pick=min(bestc,key=lambda r:ORDER.index(r[0]))
                 md.append(f"- {fam}: advances {pick[0]} (score {pick[1]:.2f}; meets all criteria on s101: {pick[3]}); hyperparameters frozen before s102/103")
 OUT=mods(101)[1].OUT;(OUT/f'onestep2_{mode}.md').write_text('\n'.join(md)+'\n');print('\n'.join(md))
