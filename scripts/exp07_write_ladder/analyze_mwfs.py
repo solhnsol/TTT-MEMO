@@ -18,11 +18,13 @@ if sys.argv[1]=='select':
 sd,tag=int(sys.argv[1]),sys.argv[2];AL,S=mods(sd)
 c=S.curve(*S.load('L0mwfs',tag));L1=S.curve(*S.load('L1','ck'))
 ln=S.OUT/f'longnll_L0mwfs_{tag}_s{sd}.json';ln=json.load(open(ln)) if ln.exists() else None
-md=[f'# L0mw-fs {tag}, seed {sd}\n','| pass | D (R1) | D (R1-alt) | max canary rise | long-ctx NLL rise (>8K, A/B) |','|---|---|---|---|---|']
+md=[f'# L0mw-fs {tag}, seed {sd}\n','| pass | D (R1) | D (R1-alt) | max canary rise | long-ctx NLL rise (>8K, A/B) | early-chunk NLL rise (chunk 0, A/B; descriptive) |','|---|---|---|---|---|---|']
 for ep,s,sa,d in c:
-    lr=''
-    if ln and ep>0:lr=' / '.join(f"{x['rise_beyond']:+.3f}" for w in 'AB' for x in ln[w] if x['epoch']==ep)
-    md.append(f"| {ep} | {AL.f3(AL.ci(s['D']))} | {AL.f3(AL.ci(sa['D']))} | {d:+.3f} | {lr} |")
+    lr='';ec=''
+    if ln and ep>0:
+        lr=' / '.join(f"{x['rise_beyond']:+.3f}" for w in 'AB' for x in ln[w] if x['epoch']==ep)
+        ec=' / '.join(f"{x['chunk0']-ln['W0']['chunk0']:+.3f}" for w in 'AB' for x in ln[w] if x['epoch']==ep)
+    md.append(f"| {ep} | {AL.f3(AL.ci(s['D']))} | {AL.f3(AL.ci(sa['D']))} | {d:+.3f} | {lr} | {ec} |")
 k=0
 for ep,_,_,d in c[1:]:
     if d>THR:break
@@ -35,6 +37,6 @@ if k>=1:
     if k<len(L1):R=S.ratio(c[k][1]['D'],L1[k][1]['D']);crit[f'R*={R[0]:.2f} [{R[1]:.2f},{R[2]:.2f}] >=0.30']=R[0]>=0.30
     if ln:rb=max(x['rise_beyond'] for w in 'AB' for x in ln[w] if x['epoch']==k);crit[f'long-NLL rise at k* {rb:+.3f} <=0.10']=rb<=0.10
     else:crit['long-NLL measured']=False
-md.append(f'\nk* = {k}');md+= [f'- {kk}: {"yes" if v else "NO"}' for kk,v in crit.items()]
+md.append(f'\nk* = {k} (damage judge: the canaries, both <= 0.10 at every pass 1..k*)');md+= [f'- {kk}: {"yes" if v else "NO"}' for kk,v in crit.items()]
 md.append(f"\n**Q3 seed {sd}: {'PASS' if all(crit.values()) else 'FAIL'}**")
 (S.OUT/f'mwfs_report_{tag}_s{sd}.md').write_text('\n'.join(md)+'\n');print('\n'.join(md))

@@ -1,4 +1,4 @@
-"""Exp09 runtime: Qwen3 base (bf16) + PEFT LoRA fast weights (fp32) on the MLP projections of the last N layers.
+"""Exp09 runtime: Qwen3-4B-Base by default (Instruct-2507 selectable), base weights bf16 + PEFT LoRA fast weights (fp32) on the MLP projections of the last N layers.
 Patterns from scripts/exp02a2_semantic_v3/model_runtime.py (LoRA fp32 over a bf16 base, frozen-weight watch, LoRA state
 save/restore), with the TTT-E2E-like placement: gate/up/down_proj of the last 9 of 36 layers, r=16, alpha=32, B=0 init."""
 from __future__ import annotations
@@ -8,18 +8,35 @@ import torch
 from peft import LoraConfig,TaskType,get_peft_model
 
 HF_CACHE=Path(os.environ.get('HF_HOME',Path.home()/'.cache/huggingface'))/'hub'
-QWEN_ID='Qwen/Qwen3-4B-Instruct-2507'
+BASE_ID='Qwen/Qwen3-4B-Base'                 # default (approved 2026-10-16)
+INSTRUCT_ID='Qwen/Qwen3-4B-Instruct-2507'    # --model-id instruct
+MODEL_IDS={'base':BASE_ID,'instruct':INSTRUCT_ID}
+QWEN_ID=BASE_ID
 
-def qwen_snapshot_dir(model_id=QWEN_ID):
+def cached_snapshot(model_id):
+    """local snapshot dir of model_id in the HF hub cache, or None (never downloads)."""
     d=sorted(glob.glob(str(HF_CACHE/('models--'+model_id.replace('/','--'))/'snapshots'/'*')))
-    if not d:raise FileNotFoundError(f'{model_id} not in the HF cache {HF_CACHE}')
-    return Path(d[-1])
+    return Path(d[-1]) if d else None
+def qwen_snapshot_dir(model_id=INSTRUCT_ID):
+    d=cached_snapshot(model_id)
+    if d is None:raise FileNotFoundError(f'{model_id} not in the HF cache {HF_CACHE}')
+    return d
+def resolve_model(model_id_or_path):
+    """a local dir (given, or the cached snapshot) or, if absent, the hub id itself (from_pretrained downloads it)."""
+    p=Path(model_id_or_path)
+    if p.is_dir():return p
+    return cached_snapshot(model_id_or_path) or model_id_or_path
+def tokenizer_file(model):
+    """tokenizer.json of a local dir, or downloaded from the hub (GPU pod; network required)."""
+    if isinstance(model,Path) or Path(str(model)).is_dir():return Path(model)/'tokenizer.json'
+    from huggingface_hub import hf_hub_download
+    return Path(hf_hub_download(str(model),'tokenizer.json'))
 
 def is_lora(name):return 'lora_A' in name or 'lora_B' in name or 'lora_embedding' in name
 
-def load_base(model_dir,device,dtype=torch.bfloat16,attn='sdpa'):
+def load_base(model,device,dtype=torch.bfloat16,attn='sdpa'):
     from transformers import AutoModelForCausalLM
-    m=AutoModelForCausalLM.from_pretrained(str(model_dir),dtype=dtype,low_cpu_mem_usage=True,attn_implementation=attn)
+    m=AutoModelForCausalLM.from_pretrained(str(model),dtype=dtype,low_cpu_mem_usage=True,attn_implementation=attn)
     dts={p.dtype for p in m.parameters()}
     if any('float8' in str(d) for d in dts):raise RuntimeError(f'FP8 weights loaded: {dts}')
     return m.to(device)
@@ -27,7 +44,7 @@ def load_base(model_dir,device,dtype=torch.bfloat16,attn='sdpa'):
 def tiny_qwen(model_dir=None,seed=0,layers=4,hidden=128,inter=256,heads=4,kv=2,head_dim=32,attn='sdpa',dtype=torch.float32):
     """randomly initialised small Qwen3 with the real vocabulary/rope/norm settings (tests and smoke runs only)."""
     from transformers import AutoConfig,Qwen3ForCausalLM
-    cfg=AutoConfig.from_pretrained(str(model_dir or qwen_snapshot_dir()))
+    cfg=AutoConfig.from_pretrained(str(model_dir or qwen_snapshot_dir(INSTRUCT_ID)))   # architecture only; weights random
     cfg.num_hidden_layers=layers;cfg.hidden_size=hidden;cfg.intermediate_size=inter;cfg.num_attention_heads=heads
     cfg.num_key_value_heads=kv;cfg.head_dim=head_dim;cfg.max_window_layers=layers
     if hasattr(cfg,'layer_types') and cfg.layer_types is not None:cfg.layer_types=cfg.layer_types[:layers]

@@ -1,7 +1,10 @@
-"""Exp09: the Exp07 write ladder on Qwen3-4B-Instruct-2507 with LoRA fast weights (NTP test-time training).
+"""Exp09: the Exp07 write ladder on Qwen3-4B-Base (default; Instruct-2507 via --model-id instruct) with LoRA fast
+weights (NTP test-time training). Design approved 2026-10-16.
 Levels (same meaning as scripts/exp07_write_ladder/ladder.py):
-  L0     native online TTT, one pass; chunk k (CH tokens) read with the previous `--window-chunks` chunks as context
-         (sliding window, recomputed per step, no KV cache), one clipped SGD step per chunk on the LoRA params
+  L0     native online TTT, one pass; one clipped SGD step per chunk on the LoRA params. --native-ctx detached (default,
+         TTT-E2E structure): one forward of chunk k after the detached, carried KV of the previous `--window-chunks`
+         chunks (computed with the weights of their own steps, re-rotated to window positions [0, 8192)); --native-ctx
+         recompute: the window is recomputed with the current weights each step, gradient through the whole window
   L0mp   L0 re-read for --passes passes, weights carried, every pass restarts at the stream start
   L0mw   context-masked write: chunk k alone (positions from 0, no earlier context), --passes passes
   L0mwfs L0mw with new background filler every pass (pass 1 = original stream)
@@ -17,8 +20,11 @@ import torch
 import world_text as WT,qwen_runtime as QR,inner as IN,readout as RO
 
 def build(a):
-    dev=torch.device(a.device);mdir=Path(a.model) if a.model else QR.qwen_snapshot_dir()
-    tok=WT.load_tokenizer(mdir/'tokenizer.json')
+    dev=torch.device(a.device);mid=QR.MODEL_IDS.get(a.model_id,a.model_id)
+    if a.tiny:   # architecture + tokenizer from whatever Qwen3 is cached (no download); weights random
+        mdir=Path(a.model) if a.model else (QR.cached_snapshot(mid) or QR.qwen_snapshot_dir(QR.INSTRUCT_ID))
+    else:mdir=Path(a.model) if a.model else QR.resolve_model(mid)
+    tok=WT.load_tokenizer(QR.tokenizer_file(mdir))
     bos={'endoftext':tok.token_to_id('<|endoftext|>'),'none':None}[a.bos]
     if a.tiny:base=QR.tiny_qwen(mdir,seed=a.tiny_seed,attn=a.attn)
     else:base=QR.load_base(mdir,dev,{'bf16':torch.bfloat16,'fp32':torch.float32}[a.base_dtype],a.attn)
@@ -57,7 +63,14 @@ class Run:
         a=self.a;log=[self.evaluate({'epoch':0})];self.cum=0.0
         for ps,ids in enumerate(streams,1):
             stats=[];t0=time.monotonic()
-            for k in range(self.nchunks(ids)):
+            if mode=='native' and a.native_ctx=='detached':
+                Wr=IN.DetachedWriter(self.model,self.CH,a.window_chunks,self.dev)   # fresh KV every pass
+                for k in range(self.nchunks(ids)):
+                    st=Wr.step(ids,k,a.lr,a.scale,a.clip)
+                    if st:stats.append(st);self.cum+=st['update_norm']
+                ids_n=None
+            else:ids_n=ids
+            for k in (range(self.nchunks(ids)) if ids_n is not None else []):
                 b=IN.native_batch(ids,k,self.CH,a.window_chunks,self.dev) if mode=='native' else IN.masked_batch(ids,k,self.CH,self.dev)
                 if b[2].numel()==0:continue
                 self.step(b,stats)
@@ -67,9 +80,14 @@ class Run:
         return log
     def run_L0(self,swap):
         a=self.a;ids=self.stream(swap);log=[self.evaluate({'state':0})];self.cum=0.0;stats=[];n=self.nchunks(ids)
+        Wr=IN.DetachedWriter(self.model,self.CH,a.window_chunks,self.dev)
         for k in range(n):
-            b=IN.native_batch(ids,k,self.CH,a.window_chunks,self.dev)
-            if b[2].numel():self.step(b,stats)
+            if a.native_ctx=='detached':
+                st=Wr.step(ids,k,a.lr,a.scale,a.clip)
+                if st:stats.append(st);self.cum+=st['update_norm']
+            else:
+                b=IN.native_batch(ids,k,self.CH,a.window_chunks,self.dev)
+                if b[2].numel():self.step(b,stats)
             if (k+1)%a.eval_every==0 or k+1==n:log.append(self.evaluate({'state':k+1,'cum_update_norm':self.cum,'ce':stats[-1]['ce']}));print(f'  L0 state {k+1}',flush=True)
         return log
     def run_L1(self,swap):
@@ -98,7 +116,7 @@ class Run:
                 'epochs':a.epochs,'passes':a.passes,'seed':a.seed,'args':vars(a),'lora':self.lcfg,'model_dir':str(self.mdir),
                 'bos':self.bos,'pseudo':W.pseudo,'tail_sha':W.tail_sha,'tail_len':len(W.tail_ids),'alt_len':len(W.alt_ids),'gen_len':len(W.gen_ids),
                 'stream_tokens':{'A':len(W.stream_ids(False)),'B':len(W.stream_ids(True))},'stream_used':{'A':len(sA),'B':len(sB)},
-                'stream_chunks':{'A':self.nchunks(sA),'B':self.nchunks(sB)},
+                'stream_chunks':{'A':self.nchunks(sA),'B':self.nchunks(sB)},'model_id':QR.MODEL_IDS.get(a.model_id,a.model_id),
                 'qwen_token_len':{'names':sorted({tl(t['X']) for t in W.w['triples']}),'places':sorted({tl(t['P']) for t in W.w['triples']}),
                                   'pseudo_names':sorted({tl(x) for x in W.pseudo['persons']}),'pseudo_places':sorted({tl(x) for x in W.pseudo['places']})},
                 'n_probe_rows':len(self.rows),'frozen_hash':self.fhash,'versions':{'torch':torch.__version__,'python':platform.python_version(),
@@ -113,16 +131,18 @@ def parser():
     ap.add_argument('--lr',type=float,default=1e-3);ap.add_argument('--scale',type=float,default=1.0,help='step multiplier (all levels)')
     ap.add_argument('--clip',type=float,default=1.0);ap.add_argument('--seed',type=int,default=0,help='L1 shuffle seed')
     ap.add_argument('--tag',default='main');ap.add_argument('--device',default='cuda');ap.add_argument('--out',default=str(ROOT/'experiments/exp09_qwen_ttt'))
-    ap.add_argument('--model',default='',help='model dir (default: cached Qwen3-4B-Instruct-2507 snapshot)')
+    ap.add_argument('--model-id',default='base',help="'base' (Qwen/Qwen3-4B-Base, default), 'instruct' (Qwen/Qwen3-4B-Instruct-2507) or a hub id")
+    ap.add_argument('--model',default='',help='local model dir (overrides --model-id)')
+    ap.add_argument('--native-ctx',default='detached',choices=['detached','recompute'],help='native write context (L0, L0mp)')
     ap.add_argument('--base-dtype',default='bf16',choices=['bf16','fp32']);ap.add_argument('--attn',default='sdpa',choices=['sdpa','eager'])
     ap.add_argument('--lora-r',type=int,default=16);ap.add_argument('--lora-alpha',type=int,default=32)
     ap.add_argument('--lora-targets',default='gate_proj,up_proj,down_proj');ap.add_argument('--lora-layers',type=int,default=9,help='LoRA on the last N layers')
     ap.add_argument('--chunk',type=int,default=1024);ap.add_argument('--window-chunks',type=int,default=7,help='native context: previous chunks')
-    ap.add_argument('--stream-chunks',default='cover',help="'cover' = all chunks covering the whole text, or an int (63 = JAX truncation)")
+    ap.add_argument('--stream-chunks',default='63',help="int (63 = JAX stream length, default) or 'cover' = all chunks covering the whole text")
     ap.add_argument('--max-chunks',type=int,default=0,help='truncate the stream (smoke tests)')
     ap.add_argument('--bos',default='endoftext',choices=['endoftext','none'])
     ap.add_argument('--tail-len',type=int,default=7168);ap.add_argument('--canary-len',type=int,default=8192)
-    ap.add_argument('--readout-batch',type=int,default=8);ap.add_argument('--readout-dtype',default='bf16',choices=['bf16','fp32'],help='frozen base dtype during readout (logits are always fp32)')
+    ap.add_argument('--readout-batch',type=int,default=4);ap.add_argument('--readout-dtype',default='fp32',choices=['bf16','fp32'],help='frozen base dtype during readout (logits are always fp32)')
     ap.add_argument('--eval-every',type=int,default=16,help='L0: evaluate every N chunks');ap.add_argument('--eval-every-epoch',type=int,default=1)
     ap.add_argument('--deterministic',action='store_true');ap.add_argument('--tiny',action='store_true',help='tiny random Qwen3 (CPU smoke only)')
     ap.add_argument('--tiny-seed',type=int,default=0);ap.add_argument('--threads',type=int,default=0,help='torch CPU threads (0 = torch default)')
