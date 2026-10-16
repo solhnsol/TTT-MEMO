@@ -46,6 +46,7 @@ htmlcov/
 !/data/.gitkeep
 !/data/README.md
 !/data/_probe_val_head.bin
+!/data/natural_text/
 /checkpoints/*
 !/checkpoints/.gitkeep
 !/checkpoints/README.md
@@ -86,3 +87,7 @@ results/raw/baseline_125m/ruler_niah_labels/_*/
 # Slurm / cluster
 slurm-*.out
 *.sbatch.bak
+
+# Exp10 natural text: the real-name map must never be committed
+data/natural_text/private/
+**/real_name_map*.json
