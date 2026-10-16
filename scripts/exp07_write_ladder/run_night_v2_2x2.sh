@@ -20,6 +20,9 @@ if [ -f /home/solhnsol/workspace/TTT-MEMO-dumps/keystat_C.npz ]; then
 fi
 K=$(grep -o "S2X2 KAPPA SELECTED [0-9.]*" $OUT/queue.log | tail -1 | awk '{print $4}')
 if [ -z "$K" ]; then lg "SKIP 2x2 main: no kappa selected"; lg NIGHT_DONE; exit 0; fi
+# power flag (2x2 amendment 03:20 KST): rho at W0, then the flag, before any 2x2 D is read
+lg START rho2x2; $PY $S/rho2x2.py 101 102 103 > $OUT/rho2x2.log 2>&1 && lg DONE rho2x2 || lg FAILED rho2x2
+$PY $S/analyze_rho2x2.py $K > $OUT/rho2x2_flag.log 2>&1 && lg "DONE rho2x2 flag" || lg "FAILED rho2x2 flag"
 c(){ cell=$1;k=$2;sd=$3;for w in A B; do lg START s2x2 $cell k$k s$sd $w
   $PY $S/stream2x2.py --cell $cell --kappa $k --world-seed $sd --worlds $w --mode save > $OUT/n_s2x2_${cell}_k${k}_s${sd}_$w.log 2>&1 && \
   $PY $S/stream2x2.py --cell $cell --kappa $k --world-seed $sd --worlds $w --mode eval > $OUT/n_s2x2e_${cell}_k${k}_s${sd}_$w.log 2>&1 && lg DONE s2x2 $cell k$k s$sd $w || lg FAILED s2x2 $cell k$k s$sd $w; done; }
