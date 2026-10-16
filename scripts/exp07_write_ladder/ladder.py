@@ -227,18 +227,22 @@ class Ladder:
                 st_all=st[0];del pref
                 log.append({'epoch':ps,'chunks':len(full)//CH,'cum_update_norm':cum,'margins':self.evaluate(m)});print(f'  {tag} pass {ps}',flush=True)
         return log
-    def run_L0_masked(self,swap,passes,block=1024,scale=1.0):
+    def run_L0_masked(self,swap,passes,block=1024,scale=1.0,streams=None):
         """context-masked write (method pilot): the stream is read as usual, but every inner update is computed with
         attention restricted to blocks of `block` tokens inside its chunk (block = 1024: the chunk alone; prefix recomputed
         on the chunk, positions restart per block, empty suffix KV), so no earlier exposure outside the block is visible
         to the write. Loss on tokens whose target is in the same block. Step = native rule x `scale`; one step per chunk;
-        passes re-read the full stream; evaluation after each pass."""
-        rt=self.rt;W=int(rt.cfg.model.sliding_window_size);Pw=self.T.P[swap];ids=np.asarray(Pw.ids);log=[];m=rt.base;st_all=clone_state(rt.state_all);cum=0.0
+        passes re-read the full stream; evaluation after each pass. `streams` (L0mwfs): one token list per pass, each
+        NCH*CH long, instead of the same stream every pass."""
+        rt=self.rt;W=int(rt.cfg.model.sliding_window_size);Pw=self.T.P[swap];log=[];m=rt.base;st_all=clone_state(rt.state_all);cum=0.0
+        if streams is None:streams=[Pw.ids]*passes
+        assert len(streams)==passes
         seg=(np.arange(CH)//block).astype(np.int32);loc=(np.arange(CH)%block).astype(np.int32);pm=jnp.asarray(packing.prefix_mask(seg,W))
         samenext=np.concatenate([seg[1:]==seg[:-1],[False]])
         with rt.mesh:
             log.append({'epoch':0,'margins':self.evaluate(m)})
             for ps in range(1,passes+1):
+                ids=np.asarray(streams[ps-1])
                 for k in range(NCH):
                     c=ids[k*CH:(k+1)*CH];tg=np.concatenate([ids[k*CH+1:(k+1)*CH+1],[rt.eos]])[:CH].astype(np.int32)
                     mk=samenext.copy()
@@ -257,6 +261,9 @@ class Ladder:
     def run_L0_fillerswap(self,swap,passes):
         """(b) every pass reads the same exposure sentences at the same schedule positions in the text list, with the
         background paragraphs replaced by a different draw (pass 1 = the original stream)."""
+        return self._native_passes(self.fs_streams(swap,passes),'L0fs')
+    def fs_streams(self,swap,passes):
+        """the L0fs streams: pass 1 = the original stream, pass p >= 2 = same texts with background draw 7000+p."""
         import copy
         Pw=self.T.P[swap];streams=[Pw.ids];w0=self.T.w
         for ps in range(2,passes+1):
@@ -268,7 +275,14 @@ class Ladder:
             while len(ids)<NCH*CH:
                 w['texts'].append({'kind':'bg','text':pool[bi%len(pool)]});bi+=1;ids=[self.rt.bos]+stage2.enc(self.T.tok,gw.realize(w,swap)[0]).ids
             streams.append(ids[:NCH*CH])
-        return self._native_passes(streams,'L0fs')
+        # check (L0mwfs registration F2): every pass is NCH*CH tokens, keeps every exposure sentence, and has new filler
+        _,_,spans=gw.realize(w0,swap)
+        for ps,ids in enumerate(streams,1):
+            assert len(ids)>=NCH*CH,(ps,len(ids));txt=self.T.tok.decode(list(ids[:NCH*CH]))
+            miss=[s_['text'] for s_ in spans if s_['text'] not in txt];assert not miss,(ps,len(miss),miss[:2])
+            if ps>1:assert list(ids[:NCH*CH])!=list(streams[0][:NCH*CH]),ps
+        print('fs_streams check passed:',passes,'passes,',len(spans),'exposure sentences each',flush=True)
+        return streams
     def run_L0_ksteps(self,swap,K,eval_every=16):
         """one pass, K native inner steps on every chunk (same chunk, same incoming KV); KV for the next chunk from the
         last step's forward. K sweep (reviewer stage 3); canary rule applies."""
@@ -307,7 +321,7 @@ class Ladder:
         return log
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k','L0mw'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB')
+    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k','L0mw','L0mwfs'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB')
     ap.add_argument('--epochs',type=int,default=32);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='main');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--mode',choices=['full','save','eval'],default='full');ap.add_argument('--save-epochs',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--k',type=int,default=1);ap.add_argument('--l1-variant',default='plain',choices=['plain','ctx','fill','irr']);ap.add_argument('--block',type=int,default=1024)
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
@@ -341,6 +355,7 @@ def main():
         elif a.level=='L0or':log=L.run_L0_oracle(w=='B',a.passes)
         elif a.level=='L0mw':log=L.run_L0_masked(w=='B',a.passes,a.block,a.scale)
         elif a.level=='L0fs':log=L.run_L0_fillerswap(w=='B',a.passes)
+        elif a.level=='L0mwfs':log=L.run_L0_masked(w=='B',a.passes,a.block,a.scale,streams=L.fs_streams(w=='B',a.passes))
         elif a.level=='L0x':log=L.run_L0_scaled(w=='B',a.scale)
         elif a.level=='L0k':log=L.run_L0_ksteps(w=='B',a.k)
         else:log=L.run_L0(w=='B',set(range(NCH+1)))
