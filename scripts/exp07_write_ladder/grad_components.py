@@ -213,15 +213,19 @@ def run_onestep2(ns):
         newp,gn1,cf1,_=L.step(rt.base,clone_state(rt.state_all),jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc))
         dl=float(np.sqrt(sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(newp),jax.tree.leaves(rt.base.inner_parameters())))))
     R['O2_rel']=abs(dl/(float(gn1)*float(cf1))-eta)/eta;R['O2_pass']=R['O2_rel']<=1e-2;del newp
-    def step_for(v,w,basis,s):return eta*coef[w]*s*(1.0 if basis=='lr' else gn[w]/norm(v))
-    # O5: the realised update norm of a norm-matched step equals eta*c*s*|g| (checked on g_b, s = 1)
-    st=step_for(gb['A'],'A','nm',1);m_=make(gb['A'],st)
+    # norm-matched basis (amended 2026-10-16 15:00 KST): ONE scale per signal for both worlds, lam = (|g_A|+|g_B|)/(|v_A|+|v_B|),
+    # so the A/B asymmetry that carries binding is kept (per-world normalisation erased it for v = g_b, a multiple of U).
+    lam={}
+    def step_for(v,w,basis,s,sn=None):return eta*coef[w]*s*(1.0 if basis=='lr' else lam[sn])
+    lam['gb']=(gn['A']+gn['B'])/(norm(gb['A'])+norm(gb['B']))
+    # O5: the realised update norm of a norm-matched step equals eta*c*s*lam*|v| (checked on g_b, world A, s = 1)
+    st=step_for(gb['A'],'A','nm',1,'gb');m_=make(gb['A'],st)
     dn=float(np.sqrt(sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m_.inner_parameters()),jax.tree.leaves(rt.base.inner_parameters())))));del m_
-    R['O5']={'realised':dn,'target':eta*coef['A']*gn['A']};R['O5_pass']=abs(dn-R['O5']['target'])/R['O5']['target']<=1e-3
+    R['O5']={'realised':dn,'target':eta*coef['A']*lam['gb']*norm(gb['A'])};R['O5_pass']=abs(dn-R['O5']['target'])/R['O5']['target']<=1e-3
     sig={}
-    if STAGE=='rep':plan=[('g_lr','g','lr',(1,2,4,8)),('gb_lr','gb','lr',(1,2,4,8)),('gb_nm','gb','nm',(1,2,4,8))];sig['g']=g;sig['gb']=gb
+    if STAGE=='rep':plan=[('g_lr','g','lr',(1,2,4,8)),('gb_lr','gb','lr',(1,2,4,8)),('gbc_nm','gb','nm',(1,2,4,8))];sig['g']=g;sig['gb']=gb
     else:
-        plan=[]
+        plan=[('gbc_nm','gb','nm',(1,2,4,8))];sig['gb']=gb   # the screen's reference, common-scale norm basis
         for nm_ in ('c1iso','c2iso','c1ch','c2ch'):plan+=[(nm_+'_nm',nm_,'nm',(1,2,4,8)),(nm_+'_lr',nm_,'lr',(1,8))]
         plan.append(('gntpch_nm','gntpch','nm',(1,2,4,8)))
         info={}
@@ -242,7 +246,8 @@ def run_onestep2(ns):
                 del gx;rows,_=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'ntp');sig.setdefault('gntpch',{})[w],_=wgrad(chunk_chunks(rows))
         R['signal_norms']={c_:{w:norm(v[w]) for w in 'AB'} for c_,v in sig.items()};R['signal_dot_U']={c_:{w:dot(v[w],U) for w in 'AB'} for c_,v in sig.items()}
         R['cos_with_g']={c_:{w:dot(v[w],g[w])/(norm(v[w])*gn[w]) for w in 'AB'} for c_,v in sig.items()};R['loss_tokens']={f'{k[0]}|{k[1]}':v for k,v in info.items()}
-        del g,gb
+        for sn in sig:lam[sn]=(gn['A']+gn['B'])/(norm(sig[sn]['A'])+norm(sig[sn]['B']))
+        R['lam']=lam;del g
     R['ALL_PASS']=all(v for k,v in R.items() if k.endswith('_pass'))
     _j.dump(R,open(OUT/f'onestep2_{STAGE}_checks_s{SEED}.json','w'),indent=1,default=str);print(_j.dumps(R,indent=1,default=str),flush=True)
     if not R['ALL_PASS']:sys.exit(3)
@@ -251,8 +256,8 @@ def run_onestep2(ns):
         logs={w:[{'state':0,'margins':e0,'r0':base0}] for w in 'AB'}
         for s in scales:
             for w in 'AB':
-                v=sig[sn][w];st=step_for(v,w,basis,s);m=make(v,st);logs[w].append({'state':s,'step':st,'margins':L.evaluate(m),'r0':r0(m)});del m
-                _j.dump({'log':logs[w],'meta':{'signal':sn,'basis':basis,'eta':eta,'coef':coef[w],'gnorm':gn[w],'vnorm':norm(v)}},open(OUT/f'OS2_{tag}_s{SEED}_{w}.json','w'),indent=1)
+                v=sig[sn][w];st=step_for(v,w,basis,s,sn);m=make(v,st);logs[w].append({'state':s,'step':st,'margins':L.evaluate(m),'r0':r0(m)});del m
+                _j.dump({'log':logs[w],'meta':{'signal':sn,'basis':basis,'eta':eta,'coef':coef[w],'gnorm':gn[w],'vnorm':norm(v),'lam':lam.get(sn)}},open(OUT/f'OS2_{tag}_s{SEED}_{w}.json','w'),indent=1)
             rise=max(logs[w][-1]['margins'][k]-e0[k] for w in 'AB' for k in ('_gen_nll','_tail_nll'))
             print('os2',tag,s,'canary rise',round(rise,4),flush=True)
             if rise>0.10:print('os2',tag,'damaged at s',s,'-> larger s skipped',flush=True);break

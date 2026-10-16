@@ -11,15 +11,18 @@ def pts(S,AL,tag):
     """{s: (mean D_alt, ci, mean D_R1, canary rise, F_name R1, F_name alt)} or None"""
     X=S.load('OS2',tag)
     if not X:return None
-    out={}
-    for ep,s1,sa,d in S.curve(*X)[1:]:out[ep]=dict(Dalt=float(sa['D'].mean()),ci=AL.ci(sa['D']),DR1=float(s1['D'].mean()),rise=d,Fn=float(s1['F_name'].mean()),Fn_alt=float(sa['F_name'].mean()))
+    out={};raw={w:json.load(open(S.OUT/f'OS2_{tag}_s{S.SEED}_{w}.json')) for w in 'AB'}
+    for i,(ep,s1,sa,d) in enumerate(S.curve(*X)[1:],1):
+        pw={w:max(raw[w]['log'][i]['margins'][k]-raw[w]['log'][0]['margins'][k] for k in ('_gen_nll','_tail_nll')) for w in 'AB'}
+        sn={w:raw[w]['log'][i]['step']*raw[w]['meta']['vnorm'] for w in 'AB'}
+        out[ep]=dict(Dalt=float(sa['D'].mean()),ci=AL.ci(sa['D']),DR1=float(s1['D'].mean()),rise=d,Fn=float(s1['F_name'].mean()),Fn_alt=float(sa['F_name'].mean()),rise_w=pw,step_w=sn)
     return out
-def row(tag,p):return [f"| {tag} | {s} | {AL.f3(v['ci'])} | {v['DR1']:+.3f} | {v['Fn']:+.3f} / {v['Fn_alt']:+.3f} | {v['rise']:+.3f}{' (damaged)' if v['rise']>THR else ''} |" for s,v in p.items()]
-H=['| signal | s | D (R1-alt) [CI] | D (R1) | familiarity F_name R1 / alt | max canary rise |','|---|---|---|---|---|---|']
+def row(tag,p):return [f"| {tag} | {s} | {AL.f3(v['ci'])} | {v['DR1']:+.3f} | {v['Fn']:+.3f} / {v['Fn_alt']:+.3f} | {v['rise']:+.3f}{' (damaged)' if v['rise']>THR else ''} | {v['rise_w']['A']:+.3f} / {v['rise_w']['B']:+.3f} | {v['step_w']['A']:.3f} / {v['step_w']['B']:.3f} |" for s,v in p.items()]
+H=['(gb_nm = superseded per-world-normalised g_b, diagnostic only; gbc_nm = common-scale norm basis, the screen reference)\n','| signal | s | D (R1-alt) [CI] | D (R1) | familiarity F_name R1 / alt | max canary rise | canary rise A / B | step norm A / B |','|---|---|---|---|---|---|---|---|']
 if mode=='gate':
     md=['# One-step replication gate (g / g_b, s102 and s103)\n'];res={}
     for sd in (101,102,103):
-        AL,S=mods(sd);md+=[f'\n## seed {sd}\n']+H;P={t:pts(S,AL,t) for t in ('g_lr','gb_lr','gb_nm')}
+        AL,S=mods(sd);md+=[f'\n## seed {sd}\n']+H;P={t:pts(S,AL,t) for t in ('g_lr','gb_lr','gb_nm','gbc_nm')}
         for t,p in P.items():
             if p:md+=row(t,p)
         p=P['gb_lr']
@@ -32,17 +35,17 @@ else:
     md=['# Suppression-signal screen (W0 one step)\n'];per={}
     for sd in (101,102,103):
         AL,S=mods(sd);md+=[f'\n## seed {sd}\n']+H;P={}
-        for t in ('g_lr','gb_nm','gntpch_nm')+tuple(f'{c}{cond}_{b}' for c in ('c1','c2') for cond in ('iso','ch') for b in ('nm','lr')):
+        for t in ('g_lr','gbc_nm','gntpch_nm')+tuple(f'{c}{cond}_{b}' for c in ('c1','c2') for cond in ('iso','ch') for b in ('nm','lr')):
             P[t]=pts(S,AL,t)
             if P[t]:md+=row(t,P[t])
-        g=P['g_lr'] or {};gmax=max([v['Dalt'] for v in g.values() if v['rise']<=THR],default=float('nan'));gb=P['gb_nm'] or {}
+        g=P['g_lr'] or {};gmax=max([v['Dalt'] for v in g.values() if v['rise']<=THR],default=float('nan'));gb=P['gbc_nm'] or {}
         for c in ('c1','c2'):
             for cond in ('ch','iso'):
                 p=P[f'{c}{cond}_nm'] or {};ok=[(s,v) for s,v in p.items() if v['rise']<=THR]
                 if not ok:per[(sd,c,cond)]=dict(dmax=None,pass_=False,kill=True);md.append(f'- {c} {cond}: no damage-free scale');continue
                 s_,v=max(ok,key=lambda x:x[1]['Dalt']);ref=gb[s_]['Dalt'] if s_ in gb else (max(x['Dalt'] for x in gb.values()) if gb else float('nan'))
                 pr=v['Dalt']>=0.3*ref;fl=v['Dalt']>=2*gmax;per[(sd,c,cond)]=dict(dmax=v['Dalt'],s=s_,ref=ref,gmax=gmax,pass_=pr and fl,kill=v['Dalt']<1.5*gmax)
-                md.append(f"- {c} {cond}: max damage-free D_alt {v['Dalt']:+.3f} at s={s_}; g_b (norm-matched) at that s {ref:+.3f} -> ratio {v['Dalt']/ref:.2f} (>= 0.3: {pr}); g max {gmax:+.3f} -> x{v['Dalt']/gmax:.2f} (>= 2: {fl})")
+                md.append(f"- {c} {cond}: max damage-free D_alt {v['Dalt']:+.3f} at s={s_}; g_b (common-scale norm basis) at that s {ref:+.3f} -> ratio {v['Dalt']/ref:.2f} (>= 0.3: {pr}); g max {gmax:+.3f} -> x{v['Dalt']/gmax:.2f} (>= 2: {fl})")
     md.append('\n## Verdict (chunk-only condition decides)')
     anyp=False
     for c in ('c1','c2'):
