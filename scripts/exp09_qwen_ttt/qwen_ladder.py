@@ -92,12 +92,13 @@ class Run:
         return log
     def run_L1(self,swap):
         a=self.a;rows=self.W.l1_rows(swap,a.variant,fill_len=self.CH);rng=random.Random(a.seed);log=[self.evaluate({'epoch':0,'step':0})];nstep=0;self.cum=0.0
+        EV={int(x) for x in a.eval_epochs.split(',') if x}   # explicit readout epochs (e.g. 1,2,4,8,16,32); empty = every eval_every_epoch
         for ep in range(1,a.epochs+1):
             order=list(range(len(rows)));rng.shuffle(order);steps=IN.pack_rows([rows[i] for i in order],self.CH);t0=time.monotonic()
             for s_ in steps:
                 st=[];self.step(IN.packed_batch(s_,self.dev),st);nstep+=1
                 log.append(dict(st[0],epoch=ep,step=nstep,cum_update_norm=self.cum,tokens=len(s_[0]),loss_tokens=len(s_[2])))
-            if ep%a.eval_every_epoch==0 or ep==a.epochs:log.append(self.evaluate({'epoch':ep,'step':nstep,'sec_epoch':time.monotonic()-t0}))
+            if (ep in EV) if EV else (ep%a.eval_every_epoch==0 or ep==a.epochs):log.append(self.evaluate({'epoch':ep,'step':nstep,'sec_epoch':time.monotonic()-t0}))
             print(f'  L1 epoch {ep}: {len(steps)} steps, last ce {log[-2]["ce"] if "ce" in log[-2] else float("nan"):.3f}, {time.monotonic()-t0:.0f}s',flush=True)
         return log
     def run(self,level,swap):
@@ -128,6 +129,7 @@ def parser():
     ap.add_argument('--variant',default='plain',choices=['plain','ctx','irr','fill'],help='L1 rows (ladder.l1_rows)')
     ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--worlds',default='AB')
     ap.add_argument('--passes',type=int,default=8);ap.add_argument('--epochs',type=int,default=8)
+    ap.add_argument('--eval-epochs',default='',help='L1: comma list of epochs to evaluate (overrides --eval-every-epoch; epoch 0 always)')
     ap.add_argument('--lr',type=float,default=1e-3);ap.add_argument('--scale',type=float,default=1.0,help='step multiplier (all levels)')
     ap.add_argument('--clip',type=float,default=1.0);ap.add_argument('--seed',type=int,default=0,help='L1 shuffle seed')
     ap.add_argument('--tag',default='main');ap.add_argument('--device',default='cuda');ap.add_argument('--out',default=str(ROOT/'experiments/exp09_qwen_ttt'))

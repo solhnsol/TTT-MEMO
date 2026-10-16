@@ -163,12 +163,18 @@ def run_onestep2(ns):
     inner0,_=eqx.partition(rt.base,L.f);td=jax.tree_util.tree_structure(inner0);p0=jax.tree_util.tree_leaves(inner0)
     def make(v,step):
         vl=jax.tree_util.tree_leaves(v);assert len(vl)==len(p0)
-        return L.set_inner(rt.base,jax.tree_util.tree_unflatten(td,[(p+(-step*x).astype(p.dtype)).astype(p.dtype) for p,x in zip(p0,vl)]))
+        return L.set_inner(rt.base,jax.tree_util.tree_unflatten(td,[(p+(-step*jnp.asarray(x)).astype(p.dtype)).astype(p.dtype) for p,x in zip(p0,vl)]))
     def r0(m):
         m32=L.to_fp32(m)
         with rt32.mesh,jax.default_matmul_precision('highest'):return [float(margin_val(m32,*inp[('L3',p)])) for p in pairs]
     def add(a,b):return b if a is None else jax.tree.map(lambda x,y:x+y,a,b)
     def scal(a,k):return jax.tree.map(lambda x:x*k,a)
+    # OOM fix (2026-10-16, after the screen s101 RESOURCE_EXHAUSTED): stored gradient pytrees live in host memory as exact
+    # fp32 copies; every arithmetic op still runs on the device on the same values, so no registered quantity changes.
+    def host(a):return jax.tree.map(lambda x:np.asarray(jax.device_get(x)),a)
+    def memlog(tag):
+        try:st=jax.devices()[0].memory_stats() or {};print('mem',tag,round(st.get('bytes_in_use',0)/2**30,2),'GiB in use, peak',round(st.get('peak_bytes_in_use',0)/2**30,2),flush=True)
+        except Exception as e:print('mem',tag,'n/a',e,flush=True)
     def wgrad(chunks):
         """token-weighted mean gradient over packed chunks: sum_c n_c * grad(mean loss of c) / sum_c n_c."""
         g=None;n=0
@@ -205,6 +211,10 @@ def run_onestep2(ns):
             gb[w]=scal(U,dot(g[w],U)/UU)
             R[f'O3_{w}_rel']=abs(dot(gb[w],U)-dot(g[w],U))/max(abs(dot(g[w],U)),1e-30)
     R.update(eta=eta,gnorm=gn,coef=coef,gb_norm={w:norm(gb[w]) for w in 'AB'});R['O3_pass']=all(R[f'O3_{w}_rel']<=1e-4 for w in 'AB')
+    U=host(U);g={w:host(g[w]) for w in 'AB'};gb={w:host(gb[w]) for w in 'AB'};memlog('after U/g/gb offload')
+    if STAGE=='screen':   # O6 (OOM-fix check): |g_w| and <g_w,U> equal the pre-fix rep run of the same seed (same code path)
+        _rp=_j.load(open(OUT/f'onestep2_rep_checks_s{SEED}.json'))
+        R['O6']={w:abs(gn[w]-float(_rp['gnorm'][w]))/float(_rp['gnorm'][w]) for w in 'AB'};R['O6_pass']=all(v<=1e-5 for v in R['O6'].values())
     R['O1_pass']=reuse._hash_pytree(make(g['A'],0.0).inner_parameters())[0]==reuse._hash_pytree(rt.base.inner_parameters())[0]
     ch,_=packing.pack_rows([(x,(0,0)) for x in L.sentences(False)]);ids,seg,loc=ch[0]
     tg=np.concatenate([ids[1:],[rt.eos]]).astype(np.int32);mk=(seg>=0)&(np.concatenate([seg[1:],[-1]])==seg)
@@ -237,18 +247,18 @@ def run_onestep2(ns):
                 a,_=wgrad(iso_chunks([rx[i]]));b,_=wgrad(iso_chunks([r0_[i]]));k3[nm_]=norm(jax.tree.map(lambda x,y:x-y,a,b))/max(norm(a),1e-30);del a,b
             R['K3']=k3;R['K3_pass']=k3['P_first']<=1e-6 and k3['X_first']>=1e-3
             for w in 'AB':
-                sw=w=='B';gx,nx=wgrad(iso_chunks(SP.iso_rows(T.w,sw,T.tok,'X')))
+                sw=w=='B';gx,nx=wgrad(iso_chunks(SP.iso_rows(T.w,sw,T.tok,'X')));gx=host(gx);memlog(f'iso X {w}')
                 for c_,kind in (('c1iso','null'),('c2iso','Y')):
-                    gk,nk=wgrad(iso_chunks(SP.iso_rows(T.w,sw,T.tok,kind)));sig.setdefault(c_,{})[w]=jax.tree.map(lambda x,y:x-y,gx,gk);info[(c_,w)]=(nx,nk);del gk
-                del gx;rows,skx=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'X');gx,nx=wgrad(chunk_chunks(rows))
+                    gk,nk=wgrad(iso_chunks(SP.iso_rows(T.w,sw,T.tok,kind)));sig.setdefault(c_,{})[w]=host(jax.tree.map(lambda x,y:jnp.asarray(x)-y,gx,gk));info[(c_,w)]=(nx,nk);del gk
+                del gx;rows,skx=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'X');gx,nx=wgrad(chunk_chunks(rows));gx=host(gx);memlog(f'chunk X {w}')
                 for c_,kind in (('c1ch','null'),('c2ch','Y')):
-                    rows,sk=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,kind);gk,nk=wgrad(chunk_chunks(rows));sig.setdefault(c_,{})[w]=jax.tree.map(lambda x,y:x-y,gx,gk);info[(c_,w)]=(nx,nk,sk);del gk
-                del gx;rows,_=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'ntp');sig.setdefault('gntpch',{})[w],_=wgrad(chunk_chunks(rows))
+                    rows,sk=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,kind);gk,nk=wgrad(chunk_chunks(rows));sig.setdefault(c_,{})[w]=host(jax.tree.map(lambda x,y:jnp.asarray(x)-y,gx,gk));info[(c_,w)]=(nx,nk,sk);del gk
+                del gx;rows,_=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'ntp');_gn,_=wgrad(chunk_chunks(rows));sig.setdefault('gntpch',{})[w]=host(_gn);del _gn;memlog(f'signals {w}')
         R['signal_norms']={c_:{w:norm(v[w]) for w in 'AB'} for c_,v in sig.items()};R['signal_dot_U']={c_:{w:dot(v[w],U) for w in 'AB'} for c_,v in sig.items()}
         R['cos_with_g']={c_:{w:dot(v[w],g[w])/(norm(v[w])*gn[w]) for w in 'AB'} for c_,v in sig.items()};R['loss_tokens']={f'{k[0]}|{k[1]}':v for k,v in info.items()}
         for sn in sig:lam[sn]=(gn['A']+gn['B'])/(norm(sig[sn]['A'])+norm(sig[sn]['B']))
         R['lam']=lam;del g
-    R['ALL_PASS']=all(v for k,v in R.items() if k.endswith('_pass'))
+    memlog('before checks');R['ALL_PASS']=all(v for k,v in R.items() if k.endswith('_pass'))
     _j.dump(R,open(OUT/f'onestep2_{STAGE}_checks_s{SEED}.json','w'),indent=1,default=str);print(_j.dumps(R,indent=1,default=str),flush=True)
     if not R['ALL_PASS']:sys.exit(3)
     e0=L.evaluate(rt.base);base0=r0(rt.base)
