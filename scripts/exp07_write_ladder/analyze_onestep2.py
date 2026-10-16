@@ -7,11 +7,11 @@ def mods(sd):
     sys.argv=['x',str(sd)]
     for k in ('analyze_ladder','analyze_stage01'):sys.modules.pop(k,None)
     return importlib.import_module('analyze_ladder'),importlib.import_module('analyze_stage01')
-def pts(S,AL,tag):
+def pts(S,AL,tag,pre='OS2'):
     """{s: (mean D_alt, ci, mean D_R1, canary rise, F_name R1, F_name alt)} or None"""
-    X=S.load('OS2',tag)
+    X=S.load(pre,tag)
     if not X:return None
-    out={};raw={w:json.load(open(S.OUT/f'OS2_{tag}_s{S.SEED}_{w}.json')) for w in 'AB'}
+    out={};raw={w:json.load(open(S.OUT/f'{pre}_{tag}_s{S.SEED}_{w}.json')) for w in 'AB'}
     for i,(ep,s1,sa,d) in enumerate(S.curve(*X)[1:],1):
         pw={w:max(raw[w]['log'][i]['margins'][k]-raw[w]['log'][0]['margins'][k] for k in ('_gen_nll','_tail_nll')) for w in 'AB'}
         sn={w:raw[w]['log'][i]['step']*raw[w]['meta']['vnorm'] for w in 'AB'}
@@ -31,7 +31,7 @@ if mode=='gate':
         c1=all(v['rise']<=THR for v in p.values());c2=all(v['ci'][1]>0 for v in p.values());c3=p[8]['Dalt']/p[1]['Dalt']>=4 if p[1]['Dalt']>0 else False
         res[sd]=c1 and c2 and c3;md.append(f'\n- seed {sd}: no damage {c1}; CI lower > 0 at every s {c2}; D(8)/D(1) = {p[8]["Dalt"]/p[1]["Dalt"]:.2f} >= 4 {c3} -> {"replicated" if res[sd] else "NOT replicated"}')
     md.append(f"\n**GATE {'PASS' if all(res.get(s,False) for s in (102,103)) else 'FAIL'}**")
-else:
+elif mode=='screen':
     md=['# Suppression-signal screen (W0 one step)\n'];per={}
     for sd in (101,102,103):
         AL,S=mods(sd);md+=[f'\n## seed {sd}\n']+H;P={}
@@ -53,4 +53,26 @@ else:
         ni=sum(per.get((sd,c,'iso'),{}).get('pass_',False) for sd in (101,102,103));anyp|=n>=2
         md.append(f"- {c}: chunk-only passes on {n}/3 seeds -> {'PASS' if n>=2 else ('KILL' if kill else 'FAIL')}; isolated-sentence condition passes on {ni}/3 (reported)")
     md.append(f"\n**SCREEN {'PASS' if anyp else 'FAIL'}**")
+else:   # lfscreen: label-free suppression screen (PROTOCOL 2026-10-16 22:15 KST), chunk condition only, two-part threshold
+    md=['# Label-free suppression screen (W0 one step, chunk condition; LF-swap decides A-method)\n'];per={}
+    for sd in (101,102,103):
+        AL,S=mods(sd);md+=[f'\n## seed {sd}\n']+H;P={'g_lr':pts(S,AL,'g_lr'),'c2ch_nm':pts(S,AL,'c2ch_nm')}
+        for t in ('gbc_nm',)+tuple(f'{c}_{b}' for c in ('lfswap','bridge','lfablate') for b in ('nm','lr')):
+            P[t]=pts(S,AL,t,'OS2LF')
+            if P[t]:md+=row('LF '+t,P[t])
+        g=P['g_lr'] or {};gmax=max([v['Dalt'] for v in g.values() if v['rise']<=THR],default=float('nan'));gb=P['gbc_nm'] or {}
+        gbmax=max([v['Dalt'] for v in gb.values() if v['rise']<=THR],default=float('nan'))
+        c2=P['c2ch_nm'] or {};c2max=max([v['Dalt'] for v in c2.values() if v['rise']<=THR],default=float('nan'))
+        for c in ('lfswap','bridge','lfablate'):
+            p=P[f'{c}_nm'] or {};ok=[(s,v) for s,v in p.items() if v['rise']<=THR]
+            if not ok:per[(sd,c)]=dict(pass_=False);md.append(f'- {c}: no damage-free scale');continue
+            s_,v=max(ok,key=lambda x:x[1]['Dalt']);ref=gb[s_]['Dalt'] if s_ in gb else float('nan')
+            i1=v['Dalt']>=0.3*ref;i2=v['Dalt']>=0.3*gbmax;fl=v['Dalt']>=2*gmax;per[(sd,c)]=dict(pass_=i1 and i2 and fl)
+            md.append(f"- {c}: max damage-free D_alt {v['Dalt']:+.3f} at s={s_}; (i) vs gbc_nm at that s {ref:+.3f}: {i1}; (ii) vs 0.3 x g_b max damage-free {gbmax:+.3f}: {i2}; floor 2 x g max {gmax:+.3f}: {fl}; retention vs c2ch max {c2max:+.3f}: {v['Dalt']/c2max:.2f} -> {'pass' if per[(sd,c)]['pass_'] else 'fail'}")
+    md.append('\n## Verdict')
+    for c in ('lfswap','bridge','lfablate'):
+        n=sum(per.get((sd,c),{}).get('pass_',False) for sd in (101,102,103))
+        md.append(f"- {c}: passes on {n}/3 seeds -> {'PASS' if n>=2 else 'FAIL'}{' (decides: A-method if PASS, A-probe if FAIL)' if c=='lfswap' else ' (descriptive)'}")
+    n=sum(per.get((sd,'lfswap'),{}).get('pass_',False) for sd in (101,102,103))
+    md.append(f"\n**LF-SWAP {'PASS -> A-method' if n>=2 else 'FAIL -> A-probe'}**")
 OUT=mods(101)[1].OUT;(OUT/f'onestep2_{mode}.md').write_text('\n'.join(md)+'\n');print('\n'.join(md))

@@ -212,7 +212,7 @@ def run_onestep2(ns):
             R[f'O3_{w}_rel']=abs(dot(gb[w],U)-dot(g[w],U))/max(abs(dot(g[w],U)),1e-30)
     R.update(eta=eta,gnorm=gn,coef=coef,gb_norm={w:norm(gb[w]) for w in 'AB'});R['O3_pass']=all(R[f'O3_{w}_rel']<=1e-4 for w in 'AB')
     U=host(U);g={w:host(g[w]) for w in 'AB'};gb={w:host(gb[w]) for w in 'AB'};memlog('after U/g/gb offload')
-    if STAGE=='screen':   # O6 (OOM-fix check): |g_w| and <g_w,U> equal the pre-fix rep run of the same seed (same code path)
+    if STAGE in ('screen','lfscreen'):   # O6 (OOM-fix check): |g_w| and <g_w,U> equal the pre-fix rep run of the same seed (same code path)
         _rp=_j.load(open(OUT/f'onestep2_rep_checks_s{SEED}.json'))
         R['O6']={w:abs(gn[w]-float(_rp['gnorm'][w]))/float(_rp['gnorm'][w]) for w in 'AB'};R['O6_pass']=all(v<=1e-5 for v in R['O6'].values())
     R['O1_pass']=reuse._hash_pytree(make(g['A'],0.0).inner_parameters())[0]==reuse._hash_pytree(rt.base.inner_parameters())[0]
@@ -234,7 +234,7 @@ def run_onestep2(ns):
     R['O5']={'realised':dn,'target':eta*coef['A']*lam['gb']*norm(gb['A'])};R['O5_pass']=abs(dn-R['O5']['target'])/R['O5']['target']<=1e-3
     sig={}
     if STAGE=='rep':plan=[('g_lr','g','lr',(1,2,4,8)),('gb_lr','gb','lr',(1,2,4,8)),('gbc_nm','gb','nm',(1,2,4,8))];sig['g']=g;sig['gb']=gb
-    else:
+    elif STAGE=='screen':
         plan=[('gbc_nm','gb','nm',(1,2,4,8))];sig['gb']=gb   # the screen's reference, common-scale norm basis
         for nm_ in ('c1iso','c2iso','c1ch','c2ch'):plan+=[(nm_+'_nm',nm_,'nm',(1,2,4,8)),(nm_+'_lr',nm_,'lr',(1,8))]
         plan.append(('gntpch_nm','gntpch','nm',(1,2,4,8)))
@@ -258,6 +258,33 @@ def run_onestep2(ns):
         R['cos_with_g']={c_:{w:dot(v[w],g[w])/(norm(v[w])*gn[w]) for w in 'AB'} for c_,v in sig.items()};R['loss_tokens']={f'{k[0]}|{k[1]}':v for k,v in info.items()}
         for sn in sig:lam[sn]=(gn['A']+gn['B'])/(norm(sig[sn]['A'])+norm(sig[sn]['B']))
         R['lam']=lam;del g
+    elif STAGE=='lfscreen':   # label-free suppression screen (PROTOCOL 2026-10-16 22:15 KST): chunk condition only
+        plan=[('gbc_nm','gb','nm',(1,2,4,8))];sig['gb']=gb;CELLS=('lfswap','bridge','lfablate')
+        for nm_ in CELLS:plan+=[(nm_+'_nm',nm_,'nm',(1,2,4,8)),(nm_+'_lr',nm_,'lr',(1,8))]
+        ext=SP.external_names(T.w,SP.gw.ntok,T.w['name_len']);info={}
+        def spans_for(cell,w):
+            if cell=='bridge':return SP.gold_spans(T.w,w=='B')
+            return [(a_,b_) for a_,b_,_ in _j.load(open(OUT/f'ner_spans_s{SEED}_{w}.json'))['spans']]
+        def pair_rows(cell,w):return SP.lf_chunk_pairs(T.w,w=='B',T.tok,rt.bos,rt.eos,cell,spans_for(cell,w),ext,SEED)
+        with rt32.mesh,jax.default_matmul_precision('highest'):
+            # K3-LF: on the first edited chunk of lfswap (world A), the contrast restricted to targets before the first edit is
+            # exactly zero (causality), and restricted to targets after it is nonzero.
+            pr,_=pair_rows('lfswap','A');(o,e_)=pr[0];inf=o[3];e0=inf['edit_starts'][0];k3={}
+            for nm_,sel in (('before_edit',lambda j:j<e0),('after_edit',lambda j:j>e0)):
+                Tj=[j for j in inf['targets'] if sel(j)];mo=np.zeros(1024,bool);me=np.zeros(1024,bool)
+                for j in Tj:mo[j-inf['lo']-1]=True;me[inf['pmap'][j]-1]=True
+                a_,_=wgrad(chunk_chunks([(o[0],mo,len(Tj),None)]));b_,_=wgrad(chunk_chunks([(e_[0],me,len(Tj),None)]))
+                k3[nm_]=norm(jax.tree.map(lambda x,y:x-y,a_,b_))/max(norm(a_),1e-30);del a_,b_
+            R['K3LF']=k3;R['K3LF_pass']=k3['before_edit']<=1e-6 and k3['after_edit']>=1e-3
+            for w in 'AB':
+                for c_ in CELLS:
+                    pr,cnt=pair_rows(c_,w);go,no=wgrad(chunk_chunks([x[0] for x in pr]));go=host(go)
+                    ge,ne=wgrad(chunk_chunks([x[1] for x in pr]));sig.setdefault(c_,{})[w]=host(jax.tree.map(lambda x,y:jnp.asarray(x)-y,go,ge));del ge,go
+                    assert no==ne;info[(c_,w)]={'loss_tokens':no,**cnt};memlog(f'{c_} {w}')
+        R['signal_norms']={c_:{w:norm(v[w]) for w in 'AB'} for c_,v in sig.items()};R['signal_dot_U']={c_:{w:dot(v[w],U) for w in 'AB'} for c_,v in sig.items()}
+        R['cos_with_g']={c_:{w:dot(v[w],g[w])/(norm(v[w])*gn[w]) for w in 'AB'} for c_,v in sig.items()};R['lf_counts']={f'{k[0]}|{k[1]}':v for k,v in info.items()}
+        for sn in sig:lam[sn]=(gn['A']+gn['B'])/(norm(sig[sn]['A'])+norm(sig[sn]['B']))
+        R['lam']=lam;R['n_external_names']=len(ext);del g
     memlog('before checks');R['ALL_PASS']=all(v for k,v in R.items() if k.endswith('_pass'))
     _j.dump(R,open(OUT/f'onestep2_{STAGE}_checks_s{SEED}.json','w'),indent=1,default=str);print(_j.dumps(R,indent=1,default=str),flush=True)
     if not R['ALL_PASS']:sys.exit(3)
@@ -267,7 +294,7 @@ def run_onestep2(ns):
         for s in scales:
             for w in 'AB':
                 v=sig[sn][w];st=step_for(v,w,basis,s,sn);m=make(v,st);logs[w].append({'state':s,'step':st,'margins':L.evaluate(m),'r0':r0(m)});del m
-                _j.dump({'log':logs[w],'meta':{'signal':sn,'basis':basis,'eta':eta,'coef':coef[w],'gnorm':gn[w],'vnorm':norm(v),'lam':lam.get(sn)}},open(OUT/f'OS2_{tag}_s{SEED}_{w}.json','w'),indent=1)
+                _j.dump({'log':logs[w],'meta':{'signal':sn,'basis':basis,'eta':eta,'coef':coef[w],'gnorm':gn[w],'vnorm':norm(v),'lam':lam.get(sn)}},open(OUT/(f'OS2LF_{tag}_s{SEED}_{w}.json' if STAGE=='lfscreen' else f'OS2_{tag}_s{SEED}_{w}.json'),'w'),indent=1)
             rise=max(logs[w][-1]['margins'][k]-e0[k] for w in 'AB' for k in ('_gen_nll','_tail_nll'))
             print('os2',tag,s,'canary rise',round(rise,4),flush=True)
             if rise>0.10:print('os2',tag,'damaged at s',s,'-> larger s skipped',flush=True);break

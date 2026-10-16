@@ -86,3 +86,76 @@ def chunk_rows(w,swap,tok,bos,eos,kind):
         L0=len(newids);newids=(newids+[eos]*CH)[:CH]   # net-longer chunks lose their last (filler) tokens; shorter ones are padded
         out.append((np.asarray(newids,np.int32),mk,n,{'k':k,'n_edits':len(edits),'len':L0}))
     return out,skipped
+
+# ---- label-free suppression screen (PROTOCOL_stage01.md "Label-free suppression screen", 2026-10-16 22:15 KST) ----
+# cells: 'lfswap' (NER PER spans -> external name), 'lfablate' (NER PER spans -> "the person"), 'bridge' (gold name
+# occurrences -> external name); all-token loss on the target set shared by the original and the edited chunk.
+SYLX1=['Bar','Cel','Dav','Ern','Fal','Gor','Hen','Ilv','Jas','Kor','Lam','Mes','Nor','Oth','Par','Rin','Sev','Tir','Ur','Vas','Wil','Xan','Yel','Zor',
+       'Ald','Bry','Cyr','Dun','Ev','Fyn','Gil','Hal','Ivo','Kas','Lor','Mil','Ned','Ost','Pry','Rol','Sab','Tam','Ulf','Vin','Wes','Aur','Bas','Cad',
+       'Dem','Eir','Fil','Gwen','Hug','Ivan','Kip','Lys','Mad','Nil','Odo','Rud']
+SYLX2=['on','ia','us','el','ar','in','ey','os','an','ira','ert','ald','ent','ola','ian','ott','ina','ius','ery','ond','ica','as','ew','olt','ys',
+       'ek2','ul','em','ino','ach','ett','eda','ion','ith','ulf','ida','ost','ana','err','yn']
+SYLX2=[s for s in SYLX2 if s.isalpha()]
+SENT_RE=re.compile(r'(?<=[.!?])\s+|\n\n')
+def external_names(w,ntok_fn,L):
+    """synthetic single-word names from syllables disjoint from gen_world's (SYL1/SYL2), filtered to llama3 token length L
+    (the world's name length rule); asserted disjoint from every gen_world person-name combination and the world's places."""
+    assert not set(SYLX1)&set(gw.SYL1) and not set(SYLX2)&set(gw.SYL2)
+    world_like={a+b for a in gw.SYL1 for b in gw.SYL2};places={t['P'] for t in w['triples']}|set(w['ctrl_places'])
+    out=sorted({a+b for a in SYLX1 for b in SYLX2 if ntok_fn(a+b)==L})
+    assert not set(out)&world_like and not set(out)&places and not set(out)&({t['X'] for t in w['triples']}|set(w['ctrl_persons']))
+    return out
+def sentence_starts(text):
+    st=[0]+[m.end() for m in SENT_RE.finditer(text)];return st
+def lf_chunk_pairs(w,swap,tok,bos,eos,cell,spans_char,ext,seed):
+    """per chunk with >= 1 replaceable span fully inside: ((orig_ids, mk, n, info), (edit_ids, mk2, n, info)) with the SAME
+    target set (original token indices) in both; plus counters. spans_char: list of (c0, c1) in the realized text."""
+    import bisect
+    text,_,_=gw.realize(w,swap);e=tok.encode(text,add_special_tokens=False);ids=[bos]+list(e.ids);offs=[(0,0)]+list(e.offsets)
+    ss=sentence_starts(text);cnt={'spans':len(spans_char),'cross_chunk':0,'retok_skip':0,'used':0,'chunks':0,'cut_targets':0}
+    def sidx(c):return bisect.bisect_right(ss,c)-1
+    out=[];ends=[b_ for _,b_ in offs];starts=[a_ for a_,_ in offs];sp_tt=[]
+    for c0,c1 in spans_char:   # tokens overlapping [c0,c1) (offsets are sorted), computed once
+        j0=max(1,bisect.bisect_right(ends,c0));j1=bisect.bisect_left(starts,c1,lo=j0);sp_tt.append((c0,c1,[j for j in range(j0,j1) if ends[j]>c0 and starts[j]<c1]))
+    for k in range(NCH):
+        lo,hi=k*CH,(k+1)*CH;edits=[]
+        for c0,c1,tt in sp_tt:
+            if not tt or tt[-1]<lo-CH or tt[0]>=hi+CH:continue
+            if tt[0]<lo or tt[-1]>=hi:
+                if tt[0]<hi and tt[-1]>=lo:cnt['cross_chunk']+=1
+                continue
+            a,b=offs[tt[0]][0],offs[tt[-1]][1];sub=text[a:b]
+            if tok.encode(sub,add_special_tokens=False).ids!=ids[tt[0]:tt[-1]+1]:cnt['retok_skip']+=1;continue
+            si=sidx(c0)
+            if cell=='lfablate':r='The person' if c0==ss[si] else 'the person'
+            else:r=random.Random(seed*7919+si).choice(ext)
+            new=sub[:c0-a]+r+sub[c1-a:];edits.append((tt[0],tt[-1]+1,tok.encode(new,add_special_tokens=False).ids))
+        if not edits:continue
+        edits.sort()
+        for x,y in zip(edits,edits[1:]):assert x[1]<=y[0],'overlapping edits'
+        newids=[];pmap={};j=lo;ei=0;inedit=set()
+        while j<hi:
+            if ei<len(edits) and edits[ei][0]==j:
+                inedit|=set(range(edits[ei][0],edits[ei][1]));newids+=edits[ei][2];j=edits[ei][1];ei+=1;continue
+            pmap[j]=len(newids);newids.append(ids[j]);j+=1
+        T=[]
+        for j in range(lo+1,hi):
+            if j in inedit or j not in pmap:continue
+            q=pmap[j]
+            if not (1<=q<CH):cnt['cut_targets']+=1;continue
+            assert newids[q]==ids[j];T.append(j)
+        L0=len(newids);newids=(newids+[eos]*CH)[:CH]
+        mk=np.zeros(CH,bool);mk2=np.zeros(CH,bool)
+        for j in T:mk[j-lo-1]=True;mk2[pmap[j]-1]=True
+        assert mk.sum()==mk2.sum()==len(T)
+        # same target set: the target token at every masked position is identical in both inputs
+        to=[ids[lo+p+1] for p in np.flatnonzero(mk)];tn=[newids[p+1] for p in np.flatnonzero(mk2)];assert to==tn
+        cnt['used']+=len(edits);cnt['chunks']+=1
+        info={'k':k,'n_edits':len(edits),'len':L0,'targets':T,'edit_starts':[x[0] for x in edits],'lo':lo,'pmap':pmap}
+        out.append(((np.asarray(ids[lo:hi],np.int32),mk,len(T),info),(np.asarray(newids,np.int32),mk2,len(T),info)))
+    return out,cnt
+def gold_spans(w,swap):
+    """gold person-name occurrences (every name of the world) in the realized text."""
+    text,name,_=gw.realize(w,swap);g=[]
+    for n in set(name.values()):g+=[(m.start(),m.end()) for m in re.finditer(r'\b'+re.escape(n)+r'\b',text)]
+    return sorted(g)

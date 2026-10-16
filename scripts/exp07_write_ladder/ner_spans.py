@@ -37,7 +37,7 @@ def gold(world,swap):
     return text,sorted(g),spans
 def main():
     from transformers import pipeline
-    nlp=pipeline('token-classification',model=MODEL,revision=REV,aggregation_strategy='simple',device=-1)
+    nlp=pipeline('token-classification',model=MODEL,revision=REV,aggregation_strategy='simple',device=int(os.environ.get('NER_DEVICE','-1')))
     for seed in map(int,sys.argv[1:]):
         w=gw.build_world(seed)
         for wn,swap in (('A',False),('B',True)):
