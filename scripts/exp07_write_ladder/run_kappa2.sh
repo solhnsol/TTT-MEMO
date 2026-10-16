@@ -3,7 +3,7 @@
 cd /home/solhnsol/workspace/TTT-MEMO
 OUT=experiments/exp07_write_ladder;S=scripts/exp07_write_ladder;PY=.venv/bin/python;lg(){ echo "$(date -u +%FT%TZ) $*" >> $OUT/queue.log; }
 export LD_LIBRARY_PATH="$PWD/.venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib" XLA_PYTHON_CLIENT_ALLOCATOR=platform XLA_FLAGS="--xla_gpu_deterministic_ops=true" EXP07_OUT="$PWD/$OUT"
-q(){ cell=$1;k=$2;w=$3; $PY $S/stream2x2.py --cell $cell --kappa $k --world-seed 101 --worlds $w --mode save --canary-only > $OUT/n_s2x2cq_${cell}_k${k}_$w.log 2>&1 || lg FAILED s2x2cq $cell k$k $w; }
+q(){ local cell=$1 k=$2 w=$3; $PY $S/stream2x2.py --cell $cell --kappa $k --world-seed 101 --worlds $w --mode save --canary-only > $OUT/n_s2x2cq_${cell}_k${k}_$w.log 2>&1 || lg FAILED s2x2cq $cell k$k $w; }
 rd(){ $PY - "$@" <<'PY'
 import json,sys;k=sys.argv[1];ws=sys.argv[2];o='experiments/exp07_write_ladder/';worst=0;msg=[]
 for cell in ('natc2','mskc2'):
