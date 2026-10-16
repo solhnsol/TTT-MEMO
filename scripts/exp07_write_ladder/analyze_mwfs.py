@@ -1,4 +1,4 @@
-"""M3 L0mw-fs rules (PROTOCOL_stage01.md 2026-10-16). Usage: analyze_mwfs.py select | analyze_mwfs.py SEED TAG"""
+"""Q3 (formerly M3) L0mw-fs rules (PROTOCOL_stage01.md 2026-10-16). Usage: analyze_mwfs.py select | analyze_mwfs.py SEED TAG"""
 import sys,json,importlib
 from pathlib import Path
 import numpy as np
@@ -36,5 +36,5 @@ if k>=1:
     if ln:rb=max(x['rise_beyond'] for w in 'AB' for x in ln[w] if x['epoch']==k);crit[f'long-NLL rise at k* {rb:+.3f} <=0.10']=rb<=0.10
     else:crit['long-NLL measured']=False
 md.append(f'\nk* = {k}');md+= [f'- {kk}: {"yes" if v else "NO"}' for kk,v in crit.items()]
-md.append(f"\n**M3 seed {sd}: {'PASS' if all(crit.values()) else 'FAIL'}**")
+md.append(f"\n**Q3 seed {sd}: {'PASS' if all(crit.values()) else 'FAIL'}**")
 (S.OUT/f'mwfs_report_{tag}_s{sd}.md').write_text('\n'.join(md)+'\n');print('\n'.join(md))

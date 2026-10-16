@@ -1,4 +1,4 @@
-"""Long-context NLL after a write (PROTOCOL_stage01.md, main-track must-haves, M2). A held-out 32-chunk (32,768-token)
+"""Long-context NLL after a write (PROTOCOL_stage01.md, main-track must-haves, Q2 (formerly M2)). A held-out 32-chunk (32,768-token)
 book excerpt is read by native TTT-E2E (inner update on, NLL measured before each chunk's own update) starting from the
 written weights instead of W0. Reported: mean NLL over all tokens and over positions >= 8192 (beyond the 8K window;
 primary). Usage: longctx_nll.py SEED LEVEL TAG  (states listed in OUT/LEVEL_TAG_sSEED_{A,B}.saved.json, kept files)."""
@@ -37,7 +37,7 @@ def main():
             if 'margins' not in e or '_file' not in e['margins']:continue
             m=L.load_state(e['margins']['_file']);assert reuse._hash_pytree(m.inner_parameters())[0]==e['margins']['_hash']
             r=nll(m,ids);assert rt.base is orig
-            if not res['checks']:
+            if not res['checks'] and e.get('epoch',e.get('state'))!=0:   # state 0 is W0 itself: check on the first written state
                 # LC: the stream really starts from the written weights: its first-chunk NLL equals a direct fresh-KV
                 # forward of m on chunk 0 and differs from W0's
                 with rt.mesh:

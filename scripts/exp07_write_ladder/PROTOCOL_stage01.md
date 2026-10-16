@@ -182,3 +182,4 @@ Reason (reviewer): one pass already contains 16 exposure rounds, and offline L1 
 ### Other readouts (descriptive)
 - Greedy EM (em_eval.py saved, EM_POINTS=1,2) for masked x2 states of each seed: report flip-EM at passes 1, 2 vs W0 (target per the debate: above W0).
 - State files (1.3 GB each) are deleted after their readouts, since experiments/ is pulled to the lab PC.
+- Naming (2026-10-16 10:00 KST, Hans): the main-track must-haves M1/M2/M3 above are renamed **Q1/Q2/Q3** to avoid confusion with hypothesis M1 (shadowing). Q1 = s103 pilot + pooled difference, Q2 = long-context NLL, Q3 = L0mw-fs. Rules unchanged.
