@@ -212,7 +212,7 @@ def run_onestep2(ns):
             R[f'O3_{w}_rel']=abs(dot(gb[w],U)-dot(g[w],U))/max(abs(dot(g[w],U)),1e-30)
     R.update(eta=eta,gnorm=gn,coef=coef,gb_norm={w:norm(gb[w]) for w in 'AB'});R['O3_pass']=all(R[f'O3_{w}_rel']<=1e-4 for w in 'AB')
     U=host(U);g={w:host(g[w]) for w in 'AB'};gb={w:host(gb[w]) for w in 'AB'};memlog('after U/g/gb offload')
-    if STAGE in ('screen','lfscreen'):   # O6 (OOM-fix check): |g_w| and <g_w,U> equal the pre-fix rep run of the same seed (same code path)
+    if STAGE in ('screen','lfscreen','lfv2','keystat'):   # O6 (OOM-fix check): |g_w| and <g_w,U> equal the pre-fix rep run of the same seed (same code path)
         _rp=_j.load(open(OUT/f'onestep2_rep_checks_s{SEED}.json'))
         R['O6']={w:abs(gn[w]-float(_rp['gnorm'][w]))/float(_rp['gnorm'][w]) for w in 'AB'};R['O6_pass']=all(v<=1e-5 for v in R['O6'].values())
     R['O1_pass']=reuse._hash_pytree(make(g['A'],0.0).inner_parameters())[0]==reuse._hash_pytree(rt.base.inner_parameters())[0]
@@ -285,16 +285,169 @@ def run_onestep2(ns):
         R['cos_with_g']={c_:{w:dot(v[w],g[w])/(norm(v[w])*gn[w]) for w in 'AB'} for c_,v in sig.items()};R['lf_counts']={f'{k[0]}|{k[1]}':v for k,v in info.items()}
         for sn in sig:lam[sn]=(gn['A']+gn['B'])/(norm(sig[sn]['A'])+norm(sig[sn]['B']))
         R['lam']=lam;R['n_external_names']=len(ext);del g
+    elif STAGE=='lfv2':   # label-free v2 (PROTOCOL "Label-free v2", 2026-10-17 00:33 KST + NER amendments): sel, NER-ent, bridge-P, sel-gold
+        import suppress_v2 as V2;logits_fn=ns['logits_fn']
+        SELECTOR=_j.load(open(OUT/'v2_selector_diagnostic.json'))['sel'];R['selector']=SELECTOR
+        plan=[('gbc_nm','gb','nm',(1,2,4,8))];sig['gb']=gb;CELLS=('sel','nerent','bridgeP','selgold')
+        for nm_ in CELLS:plan+=[(nm_+'_nm',nm_,'nm',(1,2,4,8)),(nm_+'_lr',nm_,'lr',(1,8))]
+        ext=V2.external_names(T.w,V2.gw.ntok,T.w['name_len']);info={}
+        def nerv2(w):return [tuple(x) for x in _j.load(open(OUT/f'ner_v2_s{SEED}_{w}.json'))['spans']]
+        def nere(w):return [(x[0],x[1]) for x in _j.load(open(OUT/f'ner_ents_s{SEED}_{w}.json'))['spans']]
+        loc0_=jnp.asarray(np.arange(1024,dtype=np.int32));seg0_=jnp.asarray(np.zeros(1024,np.int32))
+        def lgp(ids):
+            pf=prefix32(m0,jnp.asarray(ids),loc0_,pm0);tg=jnp.asarray(np.concatenate([ids[1:],[rt32.eos]]).astype(np.int32))
+            return jax.nn.log_softmax(logits_fn(m0,jnp.asarray(ids),tg,pf,seg0_,loc0_),-1)
+        def select(pr):
+            out=[];nsel=0
+            for o,e_ in pr:
+                inf=o[3];lo=inf['lo'];cand=sorted({j for g_ in inf['groups'] for j in g_})
+                if not cand:continue
+                lo_=lgp(o[0]);po=jnp.asarray([j-lo-1 for j in cand]);a_=lo_[po]
+                if SELECTOR=='kl':
+                    le_=lgp(e_[0]);pe=jnp.asarray([inf['pmap'][j]-1 for j in cand]);sc=np.asarray(jnp.sum(jnp.exp(a_)*(a_-le_[pe]),-1));del le_
+                else:sc=np.asarray(-jnp.take_along_axis(a_,jnp.asarray([int(o[0][j-lo]) for j in cand])[:,None],1)[:,0])
+                del lo_;sel=V2.kl_select(inf['groups'],dict(zip(cand,sc.tolist())));nsel+=len(sel);out.append(V2.restrict((o,e_),sel))
+            return out,{'selected':nsel}
+        def pairs_for(cell,w):
+            sw=w=='B'
+            if cell=='bridgeP':return V2.lf_chunk_pairs_v2(T.w,sw,T.tok,rt.bos,rt.eos,'bridge',V2.gold_spans(T.w,sw),ext,SEED,'gold_place',aux_spans=V2.place_spans(T.w,sw))
+            if cell=='nerent':return V2.lf_chunk_pairs_v2(T.w,sw,T.tok,rt.bos,rt.eos,'lfswap',nerv2(w),ext,SEED,'ents',aux_spans=nere(w))
+            spans=nerv2(w) if cell=='sel' else V2.gold_spans(T.w,sw)
+            pr,cnt=V2.lf_chunk_pairs_v2(T.w,sw,T.tok,rt.bos,rt.eos,'lfswap' if cell=='sel' else 'bridge',spans,ext,SEED,'after_span_sentence')
+            with rt32.mesh,jax.default_matmul_precision('highest'):pr2,c2_=select(pr)
+            text,_,_=V2.gw.realize(T.w,sw);e2=T.tok.encode(text,add_special_tokens=False);offs=[(0,0)]+list(e2.offsets);gp=V2.place_spans(T.w,sw)
+            sl=[j for o,_ in pr2 for j in o[3]['targets']];hit=sum(1 for j in sl if any(offs[j][1]>a_ and offs[j][0]<b_ for a_,b_ in gp))
+            return pr2,dict(cnt,**c2_,gold_place_precision=hit/max(len(sl),1))
+        with rt32.mesh,jax.default_matmul_precision('highest'):
+            # K3 (registered per judging cell): on the first NER-v2-swapped chunk (world A), all-token contrast restricted to targets
+            # before the first edit is exactly 0 and after it nonzero (the judging cells share this swap)
+            pr,_=V2.lf_chunk_pairs_v2(T.w,False,T.tok,rt.bos,rt.eos,'lfswap',nerv2('A'),ext,SEED,'after_span_sentence')
+            o,e_=pr[0];inf=o[3];e0=inf['edit_starts'][0];k3={}
+            allT=[j for j in range(inf['lo']+1,inf['lo']+1024) if j in inf['pmap'] and 1<=inf['pmap'][j]<1024 and not any(a_<=j<b_ for a_,b_ in zip(inf['edit_starts'],inf['edit_ends']))]
+            for nm_,sel_ in (('before_edit',lambda j:j<e0),('after_edit',lambda j:j>e0)):
+                Tj=[j for j in allT if sel_(j)];mo=np.zeros(1024,bool);me=np.zeros(1024,bool)
+                for j in Tj:mo[j-inf['lo']-1]=True;me[inf['pmap'][j]-1]=True
+                a_,_=wgrad(chunk_chunks([(o[0],mo,len(Tj),None)]));b_,_=wgrad(chunk_chunks([(e_[0],me,len(Tj),None)]))
+                k3[nm_]=norm(jax.tree.map(lambda x,y:x-y,a_,b_))/max(norm(a_),1e-30);del a_,b_
+            R['K3V2']=k3;R['K3V2_pass']=k3['before_edit']<=1e-6 and k3['after_edit']>=1e-3
+            for w in 'AB':
+                for c_ in CELLS:
+                    pr,cnt=pairs_for(c_,w);pr=[x for x in pr if x[0][2]>0]
+                    go,no=wgrad(chunk_chunks([x[0] for x in pr]));go=host(go);ge,ne=wgrad(chunk_chunks([x[1] for x in pr]))
+                    sig.setdefault(c_,{})[w]=host(jax.tree.map(lambda x,y:jnp.asarray(x)-y,go,ge));del ge,go;assert no==ne
+                    info[(c_,w)]={'loss_tokens':no,**cnt};memlog(f'{c_} {w}')
+        R['signal_norms']={c_:{w:norm(v[w]) for w in 'AB'} for c_,v in sig.items()};R['signal_dot_U']={c_:{w:dot(v[w],U) for w in 'AB'} for c_,v in sig.items()}
+        R['cos_with_g']={c_:{w:dot(v[w],g[w])/(norm(v[w])*gn[w]) for w in 'AB'} for c_,v in sig.items()};R['lf_counts']={f'{k[0]}|{k[1]}':v for k,v in info.items()}
+        for sn in sig:lam[sn]=(gn['A']+gn['B'])/(norm(sig[sn]['A'])+norm(sig[sn]['B']))
+        R['lam']=lam;del g
+    elif STAGE=='keystat':   # KEYSTAT/PoE 1-step screen v1 (PROTOCOL 2026-10-17): per-chunk transforms of the chunk-NTP gradient
+        import keystat as KS,taps as TP;Batch_=ns['Batch'];CELLS=os.environ.get('KS_CELLS','c0,a,a_s,b1,b4,b16,c_hi,c_lo,p05,p10').split(',')
+        plan=[('gbc_nm','gb','nm',(1,2,4,8))];sig['gb']=gb
+        for nm_ in CELLS:plan+=[(nm_+'_nm',nm_,'nm',(1,2,4,8)),(nm_+'_lr',nm_,'lr',(1,8))]
+        deltas,acts,NLk,dm,dff=TP.make_taps(m0,rt32,Batch_)
+        Cz=np.load(os.environ.get('KS_C','/home/solhnsol/workspace/TTT-MEMO-dumps/keystat_C.npz'));Cin=jnp.asarray(Cz['C_in']);Cmid=jnp.asarray(Cz['C_mid'])
+        al_in=jnp.trace(Cin,axis1=1,axis2=2)/dm;al_mid=jnp.trace(Cmid,axis1=1,axis2=2)/dff;R['alpha']={'in':np.asarray(al_in).tolist(),'mid':np.asarray(al_mid).tolist()}
+        Pinv={}
+        for nm_,f_ in (('c_hi',1.0),('c_lo',0.1)):
+            if nm_ in CELLS:Pinv[nm_]=(jnp.linalg.inv(Cin+f_*al_in[:,None,None]*jnp.eye(dm)[None]),jnp.linalg.inv(Cmid+f_*al_mid[:,None,None]*jnp.eye(dff)[None]))
+        ffp=lambda t:t.language_model.model.h.suffix_blocks.feed_forward_prime
+        @jax.jit
+        def chunk_G(xi,xm,d1,d3,d2):return jnp.einsum('ltd,ltf->ldf',xi,d1),jnp.einsum('ltd,ltf->ldf',xi,d3),jnp.einsum('ltf,ltd->lfd',xm,d2)
+        def nzmean(x,d):nz=jnp.any(d!=0,axis=2);n=jnp.maximum(jnp.sum(nz,1),1);return jnp.einsum('lt,ltd->ld',nz.astype(x.dtype),x)/n[:,None]
+        @jax.jit
+        def t_a(G1,G3,G2,xi,xm,d1,d3,d2,xbi,xbm):   # G - xbar (sum delta)^T per layer, keys xbar given
+            return G1-jnp.einsum('ld,lf->ldf',xbi,d1.sum(1)),G3-jnp.einsum('ld,lf->ldf',xbi,d3.sum(1)),G2-jnp.einsum('lf,ld->lfd',xbm,d2.sum(1))
+        @jax.jit
+        def eigs(xi,xm):return jnp.linalg.eigh(jnp.einsum('ltd,lte->lde',xi,xi))[1],jnp.linalg.eigh(jnp.einsum('ltf,lte->lfe',xm,xm))[1]
+        def t_b(G,U,r):Ur=U[:,:,-r:];return G-jnp.einsum('ldr,lrf->ldf',Ur,jnp.einsum('ldr,ldf->lrf',Ur,G))
+        @eqx.filter_jit
+        def poe_grad(m,ids_,tg_,mk_,pref_,seg_,loc_,bias):
+            packing.PACK_SUF['seg']=seg_;packing.PACK_SUF['loc']=loc_
+            def lossf(mm):
+                r_=mm.language_model.suffix_call(prefix_outputs=pref_,state=clone_state(rt32.state_suffix),seq=Batch_(input_ids=ids_,target_tokens=tg_,loss_masks=mk_))
+                z=r_.logits.astype(jnp.float32)+bias;lp=jax.nn.log_softmax(z,-1);nll=-jnp.take_along_axis(lp,tg_[:,None],1)[:,0]
+                return jnp.sum(nll*mk_)/jnp.maximum(jnp.sum(mk_),1)
+            try:g_=eqx.filter_grad(lossf)(m)
+            finally:packing.PACK_SUF.clear()
+            q=ffp(g_);return q.w1.weight,q.w3.weight,q.w2.weight
+        tpl=None;info={};diag={}
+        with rt32.mesh,jax.default_matmul_precision('highest'):
+            for w in 'AB':
+                sw=w=='B';rows,_=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'ntp');stream=list(np.concatenate([r_[0] for r_ in rows]))+[rt32.eos]
+                accu={c:None for c in CELLS};ntot=0;xs_in=None;xs_mid=None;nprev=0;V_=int(m0.language_model.config.vocab_size)
+                for ri,(ids,mk,n,inf_) in enumerate(rows):
+                    k=inf_['k'];lo=k*1024;tg=np.concatenate([ids[1:],[rt32.eos]]).astype(np.int32);pref=prefix32(m0,jnp.asarray(ids),jnp.asarray(loc0),pm0)
+                    a_=(jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg0),jnp.asarray(loc0))
+                    d1,d3,d2=deltas(*a_);xi,xm,hd,_=acts(*a_);G=chunk_G(xi,xm,d1,d3,d2)
+                    if ri==0:
+                        rg=loss_grad(m0,*a_);q=ffp(rg);ref=(q.w1.weight,q.w3.weight,q.w2.weight)
+                        R.setdefault('KS_recon_rel',{})[w]=[float(jnp.linalg.norm(x_-y_)/jnp.linalg.norm(y_)) for x_,y_ in zip(G,ref)];R['KS_hidden_maxdiff']=float(hd);tpl=rg;del rg,q,ref
+                    def add(c_,v_):   # accumulate immediately (one transformed G alive at a time)
+                        accu[c_]=tuple(x_*float(n) for x_ in v_) if accu[c_] is None else tuple(a2+x_*float(n) for a2,x_ in zip(accu[c_],v_))
+                    if 'c0' in CELLS:add('c0',G)
+                    xbi=nzmean(xi,d1);xbm=nzmean(xm,d2)
+                    if 'a' in CELLS:add('a',t_a(*G,xi,xm,d1,d3,d2,xbi,xbm))
+                    if 'a_s' in CELLS:add('a_s',t_a(*G,xi,xm,d1,d3,d2,xbi,xbm) if xs_in is None else t_a(*G,xi,xm,d1,d3,d2,xs_in/nprev,xs_mid/nprev))
+                    if any(c in CELLS for c in ('b1','b4','b16')):
+                        Ui,Um=eigs(xi,xm)
+                        for r_ in (1,4,16):
+                            if f'b{r_}' in CELLS:add(f'b{r_}',(t_b(G[0],Ui,r_),t_b(G[1],Ui,r_),t_b(G[2],Um,r_)))
+                        del Ui,Um
+                    for c_,(Pi,Pm) in Pinv.items():add(c_,(jnp.einsum('lde,lef->ldf',Pi,G[0]),jnp.einsum('lde,lef->ldf',Pi,G[1]),jnp.einsum('lfe,led->lfd',Pm,G[2])))
+                    for c_,beta in (('p05',0.5),('p10',1.0)):
+                        if c_ in CELLS:bias,_=KS.poe_bias(stream,lo,1024,V_,beta,0.1);add(c_,poe_grad(m0,*a_,bias));del bias
+                    ntot+=n;s_in=xi.sum(1);s_mid=xm.sum(1);xs_in=s_in if xs_in is None else xs_in+s_in;xs_mid=s_mid if xs_mid is None else xs_mid+s_mid;nprev+=xi.shape[1]
+                    del d1,d3,d2,xi,xm,G
+                for c_ in CELLS:
+                    W1,W3,W2=(x_/ntot for x_ in accu[c_]);v_=eqx.tree_at(lambda t:(ffp(t).w1.weight,ffp(t).w3.weight,ffp(t).w2.weight),tpl,(W1,W3,W2))
+                    sig.setdefault(c_,{})[w]=host(v_);del v_,W1,W2,W3
+                accu=None;info[w]={'chunks':len(rows),'loss_tokens':ntot};memlog(f'keystat {w}')
+            if SEED==101 and 'c0' in sig:   # mechanism diagnostics (descriptive), per matrix type
+                Gb=jax.tree.map(lambda a_,b_:(jnp.asarray(a_)-jnp.asarray(b_))/2,sig['c0']['A'],sig['c0']['B'])
+                def per(t):q=ffp(t);return {'w1':q.w1.weight,'w3':q.w3.weight,'w2':q.w2.weight}
+                for c_ in CELLS:
+                    for w in 'AB':
+                        G_=per(sig['c0'][w]);T_=per(sig[c_][w]);B_=per(Gb)
+                        diag[f'{c_}|{w}']={mt:{'rel_change':float(jnp.linalg.norm(jnp.asarray(G_[mt])-jnp.asarray(T_[mt]))/jnp.linalg.norm(jnp.asarray(G_[mt]))),
+                            'cos_T_Gb':float(jnp.vdot(jnp.asarray(T_[mt]),B_[mt])/(jnp.linalg.norm(jnp.asarray(T_[mt]))*jnp.linalg.norm(B_[mt]))),
+                            'cos_G_Gb':float(jnp.vdot(jnp.asarray(G_[mt]),B_[mt])/(jnp.linalg.norm(jnp.asarray(G_[mt]))*jnp.linalg.norm(B_[mt])))} for mt in ('w1','w3','w2')}
+                del Gb
+        R['KS_recon_pass']=all(e_<=1e-3 for v_ in R['KS_recon_rel'].values() for e_ in v_);R['KS_diag']=diag;R['KS_info']=info
+        R['signal_norms']={c_:{w:norm(v[w]) for w in 'AB'} for c_,v in sig.items()};R['cos_with_g']={c_:{w:dot(v[w],g[w])/(norm(v[w])*gn[w]) for w in 'AB'} for c_,v in sig.items()}
+        for sn in sig:lam[sn]=(gn['A']+gn['B'])/(norm(sig[sn]['A'])+norm(sig[sn]['B']))
+        R['lam']=lam;del g
     memlog('before checks');R['ALL_PASS']=all(v for k,v in R.items() if k.endswith('_pass'))
     _j.dump(R,open(OUT/f'onestep2_{STAGE}_checks_s{SEED}.json','w'),indent=1,default=str);print(_j.dumps(R,indent=1,default=str),flush=True)
     if not R['ALL_PASS']:sys.exit(3)
+    held=None
+    if STAGE=='keystat':   # in-domain held-out NLL (descriptive): paragraphs of the world's background book not used in the stream
+        import re as _re
+        used={t_['text'] for t_ in T.w['texts'] if t_['kind']=='bg'};cand=[]
+        for bk in ('pg98.txt','pg1260.txt','pg768.txt','pg766.txt'):
+            t_=(LD.ROOT/'data/narrative_gutenberg'/bk).read_text(errors='ignore');t_=t_[t_.find('CHAPTER'):] if 'CHAPTER' in t_ else t_;t_=_re.sub(r'\r','',t_[len(t_)//5:])
+            ps=[q for q in _re.split(r'\n\s*\n',t_) if 200<len(q)<900 and not _re.search(r'CHAPTER|\bVol|\[|\]|\*',q)];out_=[]
+            for q in ps:
+                q=_re.sub(r'(?<=[a-z,;] )(?:[A-Z][a-z]+)(?: [A-Z][a-z]+)*','someone',q);q=_re.sub(r"\b(?:Mr|Mrs|Miss|Dr|Sir|Lady|Lord)\.? \w+",'the stranger',q);out_.append(' '.join(q.split()))
+            hitn=sum(1 for q in out_ if q in used)
+            if hitn:cand.append((hitn,bk,[q for q in out_ if q not in used]))
+        hitn,bk,unused=max(cand);hid=[rt.bos]+stage2.enc(T.tok,'\n\n'.join(unused)).ids;assert len(hid)>=8*1024,len(hid);hid=hid[:8*1024]
+        R['heldout']={'book':bk,'used_paragraphs_matched':hitn,'unused_paragraphs':len(unused),'tokens':len(hid)}
+        with rt.mesh:hseq=rt.seq(hid);hpref=rt.prefix(rt.base,hseq)
+        def held(m):
+            with rt.mesh:
+                st_=clone_state(rt.state_suffix);tot=[]
+                for j in range(8):st_,lp=rt.chunk_logp(m,st_,rt.chunk(hseq,j),hpref[j*1024:(j+1)*1024]);tot.append(-np.asarray(lp,np.float64))
+            return float(np.concatenate(tot)[:-1].mean())
     e0=L.evaluate(rt.base);base0=r0(rt.base)
+    if held:e0['_heldout_nll']=held(rt.base)
     for tag,sn,basis,scales in plan:
         logs={w:[{'state':0,'margins':e0,'r0':base0}] for w in 'AB'}
         for s in scales:
             for w in 'AB':
-                v=sig[sn][w];st=step_for(v,w,basis,s,sn);m=make(v,st);logs[w].append({'state':s,'step':st,'margins':L.evaluate(m),'r0':r0(m)});del m
-                _j.dump({'log':logs[w],'meta':{'signal':sn,'basis':basis,'eta':eta,'coef':coef[w],'gnorm':gn[w],'vnorm':norm(v),'lam':lam.get(sn)}},open(OUT/(f'OS2LF_{tag}_s{SEED}_{w}.json' if STAGE=='lfscreen' else f'OS2_{tag}_s{SEED}_{w}.json'),'w'),indent=1)
+                v=sig[sn][w];st=step_for(v,w,basis,s,sn);m=make(v,st);mg_=L.evaluate(m)
+                if held:mg_['_heldout_nll']=held(m)
+                logs[w].append({'state':s,'step':st,'margins':mg_,'r0':r0(m)});del m
+                _j.dump({'log':logs[w],'meta':{'signal':sn,'basis':basis,'eta':eta,'coef':coef[w],'gnorm':gn[w],'vnorm':norm(v),'lam':lam.get(sn)}},open(OUT/({'lfscreen':'OS2LF','lfv2':'OS2V2','keystat':'OS2KS'}.get(STAGE,'OS2')+f'_{tag}_s{SEED}_{w}.json'),'w'),indent=1)
             rise=max(logs[w][-1]['margins'][k]-e0[k] for w in 'AB' for k in ('_gen_nll','_tail_nll'))
             print('os2',tag,s,'canary rise',round(rise,4),flush=True)
             if rise>0.10:print('os2',tag,'damaged at s',s,'-> larger s skipped',flush=True);break

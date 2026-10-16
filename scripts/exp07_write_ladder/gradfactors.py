@@ -118,5 +118,6 @@ def main():
                     np.savez(fn,x_in=np.asarray(xin),x_mid=np.asarray(xmid),d1=np.asarray(d1),d3=np.asarray(d3),d2=np.asarray(d2))
                     ent['chunks'][str(k)]={'n_loss':int(mk.sum()),'loss_positions':np.flatnonzero(mk).tolist(),'ids_sha':hashlib.sha256(ids.tobytes()).hexdigest(),
                                            'rel_err_w1_w3_w2':err,'hidden_maxdiff':float(hd),'hidden_max':float(hmax),'sec':time.monotonic()-t0}
+                    if max(err)>float(os.environ.get('GF_MAXERR','1e-3')):json.dump(man,open(man_f,'w'),indent=1);print('RECONSTRUCTION CHECK FAILED',err,flush=True);sys.exit(4)
                     json.dump(man,open(man_f,'w'),indent=1);print(seed,w,kind,k,'rel err',[f'{e:.2e}' for e in err],'hidden diff',f'{float(hd):.2e}',f'{time.monotonic()-t0:.1f}s',flush=True)
 if __name__=='__main__':main()
