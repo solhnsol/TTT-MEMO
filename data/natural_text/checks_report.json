@@ -145,9 +145,9 @@
   "nat_9002_clustered.json": {
    "squad_tail_tokens_after_forbid_llama3": 37681,
    "squad_tail_tokens_after_forbid_qwen": 38744,
-   "llama3_tokens": 66094,
+   "llama3_tokens": 66062,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 68931,
+   "qwen_tokens": 68912,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
     "L3": 30,
@@ -166,16 +166,15 @@
     "fact_repeats": 28,
     "fact_repeats_in_8k": 28,
     "in_window_ratio": 1.0,
-    "expo_tokens_llama": 20578
+    "expo_tokens_llama": 20640
    },
    "fact_units_per_person": {
-    "1": 18,
+    "1": 19,
     "2": 3,
     "4": 2,
     "5": 2,
     "3": 3,
-    "6": 1,
-    "0": 1
+    "6": 1
    },
    "natg": {
     "US": 8,
@@ -197,9 +196,9 @@
   "nat_9002_factonly.json": {
    "squad_tail_tokens_after_forbid_llama3": 37681,
    "squad_tail_tokens_after_forbid_qwen": 38744,
-   "llama3_tokens": 66378,
+   "llama3_tokens": 66352,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69165,
+   "qwen_tokens": 69175,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
     "L3": 30,
@@ -218,16 +217,15 @@
     "fact_repeats": 28,
     "fact_repeats_in_8k": 19,
     "in_window_ratio": 0.6785714285714286,
-    "expo_tokens_llama": 20578
+    "expo_tokens_llama": 20640
    },
    "fact_units_per_person": {
-    "1": 18,
+    "1": 19,
     "2": 3,
     "4": 2,
     "5": 2,
     "3": 3,
-    "6": 1,
-    "0": 1
+    "6": 1
    },
    "natg": {
     "US": 8,
@@ -249,9 +247,9 @@
   "nat_9002_spread.json": {
    "squad_tail_tokens_after_forbid_llama3": 37681,
    "squad_tail_tokens_after_forbid_qwen": 38744,
-   "llama3_tokens": 66094,
+   "llama3_tokens": 66062,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 68931,
+   "qwen_tokens": 68912,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
     "L3": 30,
@@ -270,16 +268,15 @@
     "fact_repeats": 28,
     "fact_repeats_in_8k": 19,
     "in_window_ratio": 0.6785714285714286,
-    "expo_tokens_llama": 20578
+    "expo_tokens_llama": 20640
    },
    "fact_units_per_person": {
-    "1": 18,
+    "1": 19,
     "2": 3,
     "4": 2,
     "5": 2,
     "3": 3,
-    "6": 1,
-    "0": 1
+    "6": 1
    },
    "natg": {
     "US": 8,
@@ -442,9 +439,9 @@
   "nat_9004_clustered.json": {
    "squad_tail_tokens_after_forbid_llama3": 44954,
    "squad_tail_tokens_after_forbid_qwen": 46381,
-   "llama3_tokens": 66283,
+   "llama3_tokens": 66262,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69061,
+   "qwen_tokens": 69040,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
     "L3": 30,
@@ -463,7 +460,7 @@
     "fact_repeats": 12,
     "fact_repeats_in_8k": 12,
     "in_window_ratio": 1.0,
-    "expo_tokens_llama": 14323
+    "expo_tokens_llama": 14302
    },
    "fact_units_per_person": {
     "1": 23,
@@ -489,9 +486,9 @@
   "nat_9004_factonly.json": {
    "squad_tail_tokens_after_forbid_llama3": 44954,
    "squad_tail_tokens_after_forbid_qwen": 46381,
-   "llama3_tokens": 66445,
+   "llama3_tokens": 66423,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69111,
+   "qwen_tokens": 69089,
    "qwen_last_expo_chunk": 48,
    "fam_sizes": {
     "L3": 30,
@@ -510,7 +507,7 @@
     "fact_repeats": 12,
     "fact_repeats_in_8k": 3,
     "in_window_ratio": 0.25,
-    "expo_tokens_llama": 14323
+    "expo_tokens_llama": 14302
    },
    "fact_units_per_person": {
     "1": 23,
@@ -536,9 +533,9 @@
   "nat_9004_spread.json": {
    "squad_tail_tokens_after_forbid_llama3": 44954,
    "squad_tail_tokens_after_forbid_qwen": 46381,
-   "llama3_tokens": 66283,
+   "llama3_tokens": 66262,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69061,
+   "qwen_tokens": 69040,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
     "L3": 30,
@@ -557,7 +554,7 @@
     "fact_repeats": 12,
     "fact_repeats_in_8k": 3,
     "in_window_ratio": 0.25,
-    "expo_tokens_llama": 14323
+    "expo_tokens_llama": 14302
    },
    "fact_units_per_person": {
     "1": 23,
@@ -739,9 +736,9 @@
   "nat_9006_clustered.json": {
    "squad_tail_tokens_after_forbid_llama3": 42398,
    "squad_tail_tokens_after_forbid_qwen": 43717,
-   "llama3_tokens": 66259,
+   "llama3_tokens": 66318,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69139,
+   "qwen_tokens": 69202,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
     "L3": 20,
@@ -757,17 +754,17 @@
     "L3e": 0
    },
    "stats": {
-    "fact_repeats": 19,
-    "fact_repeats_in_8k": 19,
+    "fact_repeats": 20,
+    "fact_repeats_in_8k": 20,
     "in_window_ratio": 1.0,
-    "expo_tokens_llama": 13631
+    "expo_tokens_llama": 13690
    },
    "fact_units_per_person": {
     "4": 1,
-    "2": 7,
+    "3": 3,
     "1": 9,
     "6": 1,
-    "3": 2
+    "2": 6
    },
    "natg": {
     "DE": 6,
@@ -786,9 +783,9 @@
   "nat_9006_factonly.json": {
    "squad_tail_tokens_after_forbid_llama3": 42398,
    "squad_tail_tokens_after_forbid_qwen": 43717,
-   "llama3_tokens": 66497,
+   "llama3_tokens": 66556,
    "llama3_last_expo_chunk": 46,
-   "qwen_tokens": 69292,
+   "qwen_tokens": 69355,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
     "L3": 20,
@@ -804,17 +801,17 @@
     "L3e": 0
    },
    "stats": {
-    "fact_repeats": 19,
-    "fact_repeats_in_8k": 8,
-    "in_window_ratio": 0.42105263157894735,
-    "expo_tokens_llama": 13631
+    "fact_repeats": 20,
+    "fact_repeats_in_8k": 9,
+    "in_window_ratio": 0.45,
+    "expo_tokens_llama": 13690
    },
    "fact_units_per_person": {
     "4": 1,
-    "2": 7,
+    "3": 3,
     "1": 9,
     "6": 1,
-    "3": 2
+    "2": 6
    },
    "natg": {
     "DE": 6,
@@ -833,9 +830,9 @@
   "nat_9006_spread.json": {
    "squad_tail_tokens_after_forbid_llama3": 42398,
    "squad_tail_tokens_after_forbid_qwen": 43717,
-   "llama3_tokens": 66259,
+   "llama3_tokens": 66318,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69139,
+   "qwen_tokens": 69202,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
     "L3": 20,
@@ -851,17 +848,17 @@
     "L3e": 0
    },
    "stats": {
-    "fact_repeats": 19,
-    "fact_repeats_in_8k": 8,
-    "in_window_ratio": 0.42105263157894735,
-    "expo_tokens_llama": 13631
+    "fact_repeats": 20,
+    "fact_repeats_in_8k": 9,
+    "in_window_ratio": 0.45,
+    "expo_tokens_llama": 13690
    },
    "fact_units_per_person": {
     "4": 1,
-    "2": 7,
+    "3": 3,
     "1": 9,
     "6": 1,
-    "3": 2
+    "2": 6
    },
    "natg": {
     "DE": 6,

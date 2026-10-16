@@ -142,6 +142,7 @@ def main():
     real_tokens=set()
     for p in P:
         f=p['forms'];real_tokens|={x for x in [f['given'],f['surname']]+f['middle']+[t for a in f['aliases'] for t in a.split()] if len(x)>=3}
+    GLOBAL_REAL={p['forms']['full'] for st_ in streams for pr in st_ for p in pr}|{p['forms']['full'] for pr in left for p in pr}
     worlds=[];private={}
     for si,st in enumerate(streams):
         sid=9001+si
@@ -153,7 +154,7 @@ def main():
                     tid=2*pi+j_;people.append((tid,p))
             births={p['birth'] for _,p in people};allreal={p['forms']['full'] for _,p in people};allsurn={p['forms']['surname'] for _,p in people}
             stream_forbid=set(births)|{p['school'] for _,p in people if p['school']}
-            R={tid:rename(p,tid,allreal,allsurn,births-{p['birth']}) for tid,p in people}
+            R={tid:rename(p,tid,allreal|GLOBAL_REAL,allsurn,births-{p['birth']}) for tid,p in people}
             bad=[pi for pi in range(len(st)) if not all(any(u['label']=='fact' for u in R[t]['units']) for t in (2*pi,2*pi+1))]
             if not bad:break
             pi=bad[0];rest=[x for k,x in enumerate(st) if k!=pi]
@@ -176,7 +177,9 @@ def main():
                 return out
             n=min(len(ua),len(ub),RMAX)
             ca,cb=choose(ua,n),choose(ub,n);n2=min(len(ca),len(cb))
-            R[2*pi]['units'],R[2*pi+1]['units']=ca[:n2],cb[:n2]
+            def keep_n(us,k):
+                idx=sorted(sorted(range(len(us)),key=lambda i:(us[i]['label']!='fact',i))[:k]);return [us[i] for i in idx]
+            R[2*pi]['units'],R[2*pi+1]['units']=keep_n(ca,n2),keep_n(cb,n2)
         # global cap: drop trailing non-fact units (pairwise, longest pairs first) until exposures fit before chunk 53
         def tot():return sum(u['ntok']+2 for t in R for u in R[t]['units'])
         while tot()>EXPO_END-6000:

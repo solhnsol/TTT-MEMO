@@ -7,6 +7,7 @@ import nat_world as nw
 from common import LT,QT,tl
 OUT,PP=sys.argv[1],sys.argv[2];SQ=sys.argv[3] if len(sys.argv)>3 else None
 priv=json.load(open(f'{OUT}/private/real_name_map.json'));persons={p['title']:p for p in pickle.load(open(PP,'rb'))}
+ALLFULL=sorted({persons[v['title']]['forms']['full'] for v in priv.values()})
 fails=[];report={}
 def fail(m):fails.append(m)
 def wb(s,x):return re.search(r'(?<![\w])'+re.escape(x)+r'(?![\w])',s) is not None
@@ -22,6 +23,8 @@ for f in sorted(glob.glob(f'{OUT}/nat_*.json')):
         if set(t)-TRI_KEYS:fail(f'{tag}: unexpected triple keys {set(t)-TRI_KEYS}')
     real=[persons[priv[f'{sid}:{t["id"]}']['title']] for t in w['triples']]
     A,nA,sA=nw.realize(w,False);B,nB,sB=nw.realize(w,True)
+    for x in ALLFULL:
+        if wb(raw,x):fail(f'{tag}: real full name of a target (any stream) {x!r} in json')
     # 1. real names: full names / aliases / surnames anywhere (JSON, A, B, squad tail); given & middle names inside own units
     for p,t in zip(real,w['triples']):
         fo=p['forms']

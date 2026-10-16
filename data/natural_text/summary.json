@@ -15,14 +15,14 @@
   {
    "stream": 9002,
    "pairs": 15,
-   "fact_units_mean": 1.9,
+   "fact_units_mean": 1.93,
    "persons_fact_ge2": 11,
    "in8k_spread": 0.68,
    "in8k_clustered": 1.0,
    "L3": 30,
    "L3b": 17,
    "L3e": 2,
-   "expo_tokens_llama": 20578
+   "expo_tokens_llama": 20640
   },
   {
    "stream": 9003,
@@ -46,7 +46,7 @@
    "L3": 30,
    "L3b": 14,
    "L3e": 0,
-   "expo_tokens_llama": 14323
+   "expo_tokens_llama": 14302
   },
   {
    "stream": 9005,
@@ -63,24 +63,23 @@
   {
    "stream": 9006,
    "pairs": 10,
-   "fact_units_mean": 1.95,
+   "fact_units_mean": 2,
    "persons_fact_ge2": 11,
-   "in8k_spread": 0.42,
+   "in8k_spread": 0.45,
    "in8k_clustered": 1.0,
    "L3": 20,
    "L3b": 13,
    "L3e": 0,
-   "expo_tokens_llama": 13631
+   "expo_tokens_llama": 13690
   }
  ],
  "pairs": 82,
  "persons": 164,
- "fact_units_mean": 1.77,
+ "fact_units_mean": 1.78,
  "fact_units_hist": {
-  "0": 1,
-  "1": 104,
-  "2": 30,
-  "3": 12,
+  "1": 105,
+  "2": 29,
+  "3": 13,
   "4": 7,
   "5": 4,
   "6": 3,
