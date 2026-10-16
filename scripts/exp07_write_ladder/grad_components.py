@@ -149,6 +149,113 @@ def run_onestep(ns):
                 m=make(V[w],eta*coef[w]*sc);logs[w].append({'state':sc,'step':eta*coef[w]*sc,'margins':L.evaluate(m),'r0':r0(m)});del m
                 print('onestep',vn,w,sc,'done',flush=True)
                 _j.dump({'log':logs[w],'meta':{'v':vn,'eta':eta,'coef':coef[w]}},open(OUT/f'ONESTEP_{vn}_s101_{w}.json','w'),indent=1)
+def run_onestep2(ns):
+    """One-step replication (STAGE=rep) and suppression-signal screen (STAGE=screen), PROTOCOL_stage01.md 2026-10-16.
+    s bases: 'lr' = the ONESTEP definition, step = eta * c_w * s * v (c_w = clip coefficient of the isolated NTP g_w);
+    'nm' (norm-matched, primary for the screen) = eta * c_w * s * |g_w| * v / |v|. For v = g both are identical.
+    Signals: g (isolated NTP), gb (projection of g on U), and for the screen c1/c2 contrasts (suppress.py) in the iso and
+    chunk conditions plus gntp (the masked write's own NTP direction over all chunks). Per signal the scales run upward
+    and stop after the first scale with a canary rise > 0.10 (either canary, either world). Checks run first."""
+    import json as _j,suppress as SP
+    rt=ns['rt'];rt32=ns['rt32'];L=ns['L'];W=ns['W'];loss_grad=ns['loss_grad'];margin_grad=ns['margin_grad'];margin_val=ns['margin_val']
+    prefix32=ns['prefix32'];dot=ns['dot'];norm=ns['norm'];inp=ns['inp'];pairs=ns['pairs'];sent=ns['sent'];OUT=ns['OUT'];m0=rt32.base
+    SEED=ns['SEED'];STAGE=os.environ.get('STAGE','rep');T=L.T;R={'seed':SEED,'stage':STAGE}
+    inner0,_=eqx.partition(rt.base,L.f);td=jax.tree_util.tree_structure(inner0);p0=jax.tree_util.tree_leaves(inner0)
+    def make(v,step):
+        vl=jax.tree_util.tree_leaves(v);assert len(vl)==len(p0)
+        return L.set_inner(rt.base,jax.tree_util.tree_unflatten(td,[(p+(-step*x).astype(p.dtype)).astype(p.dtype) for p,x in zip(p0,vl)]))
+    def r0(m):
+        m32=L.to_fp32(m)
+        with rt32.mesh,jax.default_matmul_precision('highest'):return [float(margin_val(m32,*inp[('L3',p)])) for p in pairs]
+    def add(a,b):return b if a is None else jax.tree.map(lambda x,y:x+y,a,b)
+    def scal(a,k):return jax.tree.map(lambda x:x*k,a)
+    def wgrad(chunks):
+        """token-weighted mean gradient over packed chunks: sum_c n_c * grad(mean loss of c) / sum_c n_c."""
+        g=None;n=0
+        for args,nc in chunks:
+            if nc==0:continue
+            g=add(g,scal(loss_grad(m0,*args),float(nc)));n+=nc
+        return scal(g,1.0/n),n
+    def iso_chunks(rows):
+        ch,where=packing.pack_rows(rows);mks=[np.zeros(CH,bool) for _ in ch]
+        for c_,a_,b_ in where:mks[c_][a_:b_]=True
+        out=[]
+        for (ids,seg,loc),mk in zip(ch,mks):
+            tg=np.concatenate([ids[1:],[rt32.eos]]).astype(np.int32)
+            pref=prefix32(m0,jnp.asarray(ids),jnp.asarray(loc),jnp.asarray(packing.prefix_mask(seg,W)))
+            out.append(((jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc)),int(mk.sum())))
+        return out
+    seg0=np.zeros(CH,np.int32);loc0=np.arange(CH,dtype=np.int32);pm0=jnp.asarray(packing.prefix_mask(seg0,W))
+    def chunk_chunks(rows):
+        out=[]
+        for ids,mk,n,_ in rows:
+            tg=np.concatenate([ids[1:],[rt32.eos]]).astype(np.int32);pref=prefix32(m0,jnp.asarray(ids),jnp.asarray(loc0),pm0)
+            out.append(((jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg0),jnp.asarray(loc0)),n))
+        return out
+    with rt.mesh:eta=float(L.lr*rt.base.get_ilr_multiplier(clone_state(rt.state_all).get(rt.base.step_index)))
+    g={};gb={};coef={};gn={}
+    with rt32.mesh,jax.default_matmul_precision('highest'):
+        U=None
+        for p in pairs:U=add(U,margin_grad(m0,*inp[('L3',p)]))
+        UU=dot(U,U)
+        for w in 'AB':
+            gg=None
+            for c_ in sent[w]:gg=add(gg,loss_grad(m0,*c_))
+            g[w]=scal(gg,1.0/len(sent[w]));del gg;gn[w]=norm(g[w]);coef[w]=min(1.0,L.clip/max(gn[w],1e-30))
+            gb[w]=scal(U,dot(g[w],U)/UU)
+            R[f'O3_{w}_rel']=abs(dot(gb[w],U)-dot(g[w],U))/max(abs(dot(g[w],U)),1e-30)
+    R.update(eta=eta,gnorm=gn,coef=coef,gb_norm={w:norm(gb[w]) for w in 'AB'});R['O3_pass']=all(R[f'O3_{w}_rel']<=1e-4 for w in 'AB')
+    R['O1_pass']=reuse._hash_pytree(make(g['A'],0.0).inner_parameters())[0]==reuse._hash_pytree(rt.base.inner_parameters())[0]
+    ch,_=packing.pack_rows([(x,(0,0)) for x in L.sentences(False)]);ids,seg,loc=ch[0]
+    tg=np.concatenate([ids[1:],[rt.eos]]).astype(np.int32);mk=(seg>=0)&(np.concatenate([seg[1:],[-1]])==seg)
+    with rt.mesh:
+        pref=L.prefix_iso(rt.base,jnp.asarray(ids),jnp.asarray(loc),jnp.asarray(packing.prefix_mask(seg,W)))
+        newp,gn1,cf1,_=L.step(rt.base,clone_state(rt.state_all),jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc))
+        dl=float(np.sqrt(sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(newp),jax.tree.leaves(rt.base.inner_parameters())))))
+    R['O2_rel']=abs(dl/(float(gn1)*float(cf1))-eta)/eta;R['O2_pass']=R['O2_rel']<=1e-2;del newp
+    def step_for(v,w,basis,s):return eta*coef[w]*s*(1.0 if basis=='lr' else gn[w]/norm(v))
+    # O5: the realised update norm of a norm-matched step equals eta*c*s*|g| (checked on g_b, s = 1)
+    st=step_for(gb['A'],'A','nm',1);m_=make(gb['A'],st)
+    dn=float(np.sqrt(sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m_.inner_parameters()),jax.tree.leaves(rt.base.inner_parameters())))));del m_
+    R['O5']={'realised':dn,'target':eta*coef['A']*gn['A']};R['O5_pass']=abs(dn-R['O5']['target'])/R['O5']['target']<=1e-3
+    sig={}
+    if STAGE=='rep':plan=[('g_lr','g','lr',(1,2,4,8)),('gb_lr','gb','lr',(1,2,4,8)),('gb_nm','gb','nm',(1,2,4,8))];sig['g']=g;sig['gb']=gb
+    else:
+        plan=[]
+        for nm_ in ('c1iso','c2iso','c1ch','c2ch'):plan+=[(nm_+'_nm',nm_,'nm',(1,2,4,8)),(nm_+'_lr',nm_,'lr',(1,8))]
+        plan.append(('gntpch_nm','gntpch','nm',(1,2,4,8)))
+        info={}
+        with rt32.mesh,jax.default_matmul_precision('highest'):
+            # K3: causality check of the contrast on single sentences (P before every X -> exactly zero; X before P -> nonzero)
+            si=SP._sent_info(T.w,False);before=[i for i,s in enumerate(si) if all(x>s['p0'] for x in s['xs'])];after=[i for i,s in enumerate(si) if any(x<s['p0'] for x in s['xs'])]
+            rx=SP.iso_rows(T.w,False,T.tok,'X');r0_=SP.iso_rows(T.w,False,T.tok,'null');k3={}
+            for nm_,i in (('P_first',before[0]),('X_first',after[0])):
+                a,_=wgrad(iso_chunks([rx[i]]));b,_=wgrad(iso_chunks([r0_[i]]));k3[nm_]=norm(jax.tree.map(lambda x,y:x-y,a,b))/max(norm(a),1e-30);del a,b
+            R['K3']=k3;R['K3_pass']=k3['P_first']<=1e-6 and k3['X_first']>=1e-3
+            for w in 'AB':
+                sw=w=='B';gx,nx=wgrad(iso_chunks(SP.iso_rows(T.w,sw,T.tok,'X')))
+                for c_,kind in (('c1iso','null'),('c2iso','Y')):
+                    gk,nk=wgrad(iso_chunks(SP.iso_rows(T.w,sw,T.tok,kind)));sig.setdefault(c_,{})[w]=jax.tree.map(lambda x,y:x-y,gx,gk);info[(c_,w)]=(nx,nk);del gk
+                del gx;rows,skx=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'X');gx,nx=wgrad(chunk_chunks(rows))
+                for c_,kind in (('c1ch','null'),('c2ch','Y')):
+                    rows,sk=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,kind);gk,nk=wgrad(chunk_chunks(rows));sig.setdefault(c_,{})[w]=jax.tree.map(lambda x,y:x-y,gx,gk);info[(c_,w)]=(nx,nk,sk);del gk
+                del gx;rows,_=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'ntp');sig.setdefault('gntpch',{})[w],_=wgrad(chunk_chunks(rows))
+        R['signal_norms']={c_:{w:norm(v[w]) for w in 'AB'} for c_,v in sig.items()};R['signal_dot_U']={c_:{w:dot(v[w],U) for w in 'AB'} for c_,v in sig.items()}
+        R['cos_with_g']={c_:{w:dot(v[w],g[w])/(norm(v[w])*gn[w]) for w in 'AB'} for c_,v in sig.items()};R['loss_tokens']={f'{k[0]}|{k[1]}':v for k,v in info.items()}
+        del g,gb
+    R['ALL_PASS']=all(v for k,v in R.items() if k.endswith('_pass'))
+    _j.dump(R,open(OUT/f'onestep2_{STAGE}_checks_s{SEED}.json','w'),indent=1,default=str);print(_j.dumps(R,indent=1,default=str),flush=True)
+    if not R['ALL_PASS']:sys.exit(3)
+    e0=L.evaluate(rt.base);base0=r0(rt.base)
+    for tag,sn,basis,scales in plan:
+        logs={w:[{'state':0,'margins':e0,'r0':base0}] for w in 'AB'}
+        for s in scales:
+            for w in 'AB':
+                v=sig[sn][w];st=step_for(v,w,basis,s);m=make(v,st);logs[w].append({'state':s,'step':st,'margins':L.evaluate(m),'r0':r0(m)});del m
+                _j.dump({'log':logs[w],'meta':{'signal':sn,'basis':basis,'eta':eta,'coef':coef[w],'gnorm':gn[w],'vnorm':norm(v)}},open(OUT/f'OS2_{tag}_s{SEED}_{w}.json','w'),indent=1)
+            rise=max(logs[w][-1]['margins'][k]-e0[k] for w in 'AB' for k in ('_gen_nll','_tail_nll'))
+            print('os2',tag,s,'canary rise',round(rise,4),flush=True)
+            if rise>0.10:print('os2',tag,'damaged at s',s,'-> larger s skipped',flush=True);break
 def run_nsweep(ns):
     """N-sweep (PROTOCOL_stage01.md): NTP g on the exposure sentences of N pairs only; b, r for those pairs, at W0."""
     import json as _j,random as _r
@@ -240,7 +347,7 @@ def run_ctx3(ns):
     (ns['OUT']/'ctx3_w0_s101.md').write_text('\n'.join(md)+'\n');print('\n'.join(md),flush=True)
 def main():
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
-    rt=Runtime();L=LD.Ladder(rt,101);rt32=L.rt32;W=int(rt32.cfg.model.sliding_window_size);T=L.T
+    SEED=int(os.environ.get('SEED','101'));rt=Runtime();L=LD.Ladder(rt,SEED);rt32=L.rt32;W=int(rt32.cfg.model.sliding_window_size);T=L.T
     from ttt.model.data import Batch
     @eqx.filter_jit
     def prefix32(m,ids_,pos_,mask_):
@@ -372,6 +479,8 @@ def main():
         ns=dict(locals());ns['OUT']=OUT;run_checks(ns);return
     if os.environ.get('CTX3')=='1':
         ns=dict(locals());ns['OUT']=OUT;run_ctx3(ns);return
+    if os.environ.get('ONESTEP2')=='1':
+        sys.path.insert(0,str(ROOT/'scripts/exp04_what_ttt_retains'));ns=dict(locals());ns['OUT']=OUT;run_onestep2(ns);return
     if os.environ.get('ONESTEP')=='1':
         ns=dict(locals());ns['OUT']=OUT;run_onestep(ns);return
     if os.environ.get('NSWEEP')=='1':
