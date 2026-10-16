@@ -24,7 +24,7 @@ def main(argv=None):
         for lev in levels:
             for lr in lrs:
                 cmd=[sys.executable,str(HERE/'qwen_ladder.py'),'--level',lev,'--lr',repr(lr),'--tag',tag(lr),'--world-seed',str(a.world_seed),
-                     '--passes',str(a.passes),'--out',str(out)]+extra
+                     '--passes',str(a.passes),'--out',str(out)]+(['--readout-dtype','bf16'] if '--readout-dtype' not in extra else [])+extra   # registered 2026-10-16 13:20 KST: sweep only in bf16
                 print('RUN',' '.join(cmd[2:]),flush=True);r=subprocess.run(cmd)
                 if r.returncode:print(f'FAILED {lev} lr {lr} (exit {r.returncode}); continuing',flush=True)
     return report(out,levels,lrs,a.world_seed)

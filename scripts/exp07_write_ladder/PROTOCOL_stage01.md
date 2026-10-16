@@ -211,3 +211,4 @@ Queue position: after Q3 s101 lr selection, before Q3 s102/s103 (run_day3d.sh). 
 - Readout fp32; stream 63 chunks; same worlds, probes, nulls, canaries, R1 / R1-alt, analysis code as the 3B.
 - lr: first pod job is a sweep over {1e-4, 3e-4, 1e-3, 3e-3}, L0mp and L0mw, s101, 8 passes; per condition the selected lr is the largest with pass-1 canary rise <= 0.10 (same rule for every condition); all lrs reported.
 - Code: scripts/exp09_qwen_ttt (CPU unit tests; detached-KV change and its tests being added now). Gates G1 and the Qwen pass rules are registered separately before the gate runs.
+- Qwen amendment (2026-10-16 13:20 KST, Hans picked "bf16" on the decision card, as relayed by the coordinator; registered before any pod run): **only the lr sweep uses bf16 readout** (selection uses only the 8K-token canary NLLs, where bf16 noise is far below the 0.10 threshold); all main Qwen experiments stay on fp32 readout.
