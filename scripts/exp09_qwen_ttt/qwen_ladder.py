@@ -55,7 +55,24 @@ class Run:
     def nchunks(self,ids):return (len(ids)+self.CH-1)//self.CH
     def evaluate(self,extra):
         t0=time.monotonic();m=self.E.evaluate(self.model);self.check_frozen()
-        return dict(extra,margins=m,lora_hash=QR.lora_hash(self.model),sec_eval=time.monotonic()-t0)
+        r=dict(extra,margins=m,lora_hash=QR.lora_hash(self.model),sec_eval=time.monotonic()-t0)
+        if self.a.longnll:r['longnll']=self.long_nll()
+        return r
+    def long_nll(self):
+        """Qwen analogue of exp07 longctx_nll.py (Q2): the held-out document is read natively (detached writer, inner
+        update on at --lr) from the current weights; each chunk's NLL is taken before its own update. Token-weighted means
+        over all targets, over targets at positions >= 8192 (chunks 8..; beyond the 8K window) and over chunk 0. The LoRA
+        state is restored afterwards (checked by hash)."""
+        a=self.a;t0=time.monotonic();h0=QR.lora_hash(self.model);st0=QR.lora_state(self.model)
+        if not hasattr(self,'doc'):self.doc=WT.long_doc_ids(self.tok,self.bos,self.CH,nch=a.longnll_chunks)
+        Wr=IN.DetachedWriter(self.model,self.CH,a.window_chunks,self.dev);ces=[];ns=[]
+        for k in range(self.nchunks(self.doc)):
+            s_=Wr.step(self.doc,k,a.lr,a.scale,a.clip)
+            if s_:ces.append(s_['ce']);ns.append(min((k+1)*self.CH,len(self.doc)-1)-k*self.CH)
+        QR.load_lora_state_(self.model,st0);assert QR.lora_hash(self.model)==h0,'LoRA state not restored after long_nll';self.check_frozen()
+        def wm(lo,hi):c=ces[lo:hi];n=ns[lo:hi];return sum(x*y for x,y in zip(c,n))/sum(n)
+        w=8192//self.CH
+        return {'all':wm(0,len(ces)),'beyond':wm(w,len(ces)) if len(ces)>w else None,'chunk0':ces[0],'ce':ces,'sec':time.monotonic()-t0}
     def step(self,batch,stats):
         st=IN.sgd_step(self.model,batch,self.a.lr,self.a.scale,self.a.clip);stats.append(st);self.cum+=st['update_norm'];return st
     def passes(self,streams,mode,tag):
@@ -129,6 +146,7 @@ def parser():
     ap.add_argument('--variant',default='plain',choices=['plain','ctx','irr','fill'],help='L1 rows (ladder.l1_rows)')
     ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--worlds',default='AB')
     ap.add_argument('--passes',type=int,default=8);ap.add_argument('--epochs',type=int,default=8)
+    ap.add_argument('--longnll',action='store_true',help='long-context NLL (held-out pg2160, native read from the current weights) at every evaluation');ap.add_argument('--longnll-chunks',type=int,default=32)
     ap.add_argument('--eval-epochs',default='',help='L1: comma list of epochs to evaluate (overrides --eval-every-epoch; epoch 0 always)')
     ap.add_argument('--lr',type=float,default=1e-3);ap.add_argument('--scale',type=float,default=1.0,help='step multiplier (all levels)')
     ap.add_argument('--clip',type=float,default=1.0);ap.add_argument('--seed',type=int,default=0,help='L1 shuffle seed')

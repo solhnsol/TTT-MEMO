@@ -180,3 +180,10 @@ def load_tokenizer(path):
 def qwen_tokenizer_path(model_dir):return Path(model_dir)/'tokenizer.json'
 def llama_tokenizer():return load_tokenizer(ROOT/'data/tokenizer/llama3/tokenizer.json')
 def h(x):return hashlib.sha256(json.dumps(x).encode()).hexdigest()
+LONG_DOC='pg2160';LONG_NCH=32   # the 3B Q2 document (experiments/exp07_write_ladder/longnll_doc.json), 32 chunks of 1024
+def long_doc_ids(tok,bos,CH=1024,name=LONG_DOC,nch=LONG_NCH):
+    """held-out long document, the same text preparation as scripts/exp07_write_ladder/longctx_nll.py (from 'CHAPTER',
+    whitespace-normalised, last two thirds, first 400K chars), tokenized by `tok`, BOS first, cut to nch*CH tokens."""
+    t=(ROOT/f'data/narrative_gutenberg/{name}.txt').read_text(errors='ignore');t=t[t.find('CHAPTER'):] if 'CHAPTER' in t else t
+    t=' '.join(t.replace('\r','').split());t=t[len(t)//3:];ids=(([bos] if bos is not None else [])+enc(tok,t[:400000]).ids)[:nch*CH]
+    assert len(ids)==nch*CH,len(ids);return ids
