@@ -29,7 +29,9 @@ def build(a):
     if a.tiny:base=QR.tiny_qwen(mdir,seed=a.tiny_seed,attn=a.attn)
     else:base=QR.load_base(mdir,dev,{'bf16':torch.bfloat16,'fp32':torch.float32}[a.base_dtype],a.attn)
     base=base.to(dev)
-    model,lcfg=QR.wrap_lora(base,a.lora_r,a.lora_alpha,tuple(a.lora_targets.split(',')),a.lora_layers if not a.tiny else min(a.lora_layers,base.config.num_hidden_layers))
+    nl=a.lora_layers if not a.tiny else min(a.lora_layers,base.config.num_hidden_layers)
+    if a.fast=='fullmlp':model,lcfg=QR.wrap_fullmlp(base,tuple(a.lora_targets.split(',')),nl)
+    else:model,lcfg=QR.wrap_lora(base,a.lora_r,a.lora_alpha,tuple(a.lora_targets.split(',')),nl)
     return dev,mdir,tok,bos,model,lcfg
 
 class Run:
@@ -155,7 +157,7 @@ def parser():
     ap.add_argument('--model',default='',help='local model dir (overrides --model-id)')
     ap.add_argument('--native-ctx',default='detached',choices=['detached','recompute'],help='native write context (L0, L0mp)')
     ap.add_argument('--base-dtype',default='bf16',choices=['bf16','fp32']);ap.add_argument('--attn',default='sdpa',choices=['sdpa','eager'])
-    ap.add_argument('--lora-r',type=int,default=16);ap.add_argument('--lora-alpha',type=int,default=32)
+    ap.add_argument('--fast',default='lora',choices=['lora','fullmlp'],help='fast weights: LoRA (default) or the full MLP matrices of the last --lora-layers layers');ap.add_argument('--lora-r',type=int,default=16);ap.add_argument('--lora-alpha',type=int,default=32)
     ap.add_argument('--lora-targets',default='gate_proj,up_proj,down_proj');ap.add_argument('--lora-layers',type=int,default=9,help='LoRA on the last N layers')
     ap.add_argument('--chunk',type=int,default=1024);ap.add_argument('--window-chunks',type=int,default=7,help='native context: previous chunks')
     ap.add_argument('--stream-chunks',default='63',help="int (63 = JAX stream length, default) or 'cover' = all chunks covering the whole text")

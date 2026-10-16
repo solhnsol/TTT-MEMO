@@ -32,7 +32,10 @@ def tokenizer_file(model):
     from huggingface_hub import hf_hub_download
     return Path(hf_hub_download(str(model),'tokenizer.json'))
 
-def is_lora(name):return 'lora_A' in name or 'lora_B' in name or 'lora_embedding' in name
+FAST_NAMES=None   # set by wrap_fullmlp: the fast weights are these full parameters instead of LoRA tensors
+def is_lora(name):
+    if FAST_NAMES is not None:return name in FAST_NAMES
+    return 'lora_A' in name or 'lora_B' in name or 'lora_embedding' in name
 
 def load_base(model,device,dtype=torch.bfloat16,attn='sdpa'):
     from transformers import AutoModelForCausalLM
@@ -73,6 +76,28 @@ def wrap_lora(model,r=16,alpha=32,targets=('gate_proj','up_proj','down_proj'),la
     return pm,{'r':r,'alpha':alpha,'scaling':alpha/r,'targets':list(targets),'layers':layers,'dropout':dropout,
                'n_tensors':len(names),'n_params':sum(p.numel() for nm,p in pm.named_parameters() if is_lora(nm)),'dtype':'float32'}
 
+def wrap_fullmlp(model,targets=('gate_proj','up_proj','down_proj'),last_n=9):
+    """full-MLP fast weights (exploratory run, PROTOCOL 2026-10-16 23:48 KST): the `targets` weight matrices of the last
+    `last_n` layers become fp32 trainable parameters (inputs are cast to fp32 inside those modules and outputs back to the
+    activation dtype); everything else frozen. W0 = the base model."""
+    global FAST_NAMES
+    n=model.config.num_hidden_layers;layers=list(range(n-last_n,n));names=set()
+    def pre(mod,args):return (args[0].to(torch.float32),)+tuple(args[1:])
+    def post(mod,args,out):return out.to(mod._act_dtype)
+    def pre2(mod,args):mod._act_dtype=args[0].dtype;return None
+    for i in layers:
+        mlp=model.model.layers[i].mlp
+        for t in targets:
+            lin=getattr(mlp,t);lin.weight.data=lin.weight.data.to(torch.float32)
+            lin.register_forward_pre_hook(pre2);lin.register_forward_pre_hook(pre);lin.register_forward_hook(post)
+            names.add(f'model.layers.{i}.mlp.{t}.weight')
+    FAST_NAMES=names
+    for nm,p in model.named_parameters():p.requires_grad_(nm in names)
+    got=[nm for nm,_ in model.named_parameters() if nm in names]
+    if len(got)!=len(targets)*last_n:raise RuntimeError(f'full-MLP fast weights: {len(got)} tensors, expected {len(targets)*last_n}')
+    model.config.use_cache=False
+    return model,{'mode':'fullmlp','targets':list(targets),'layers':layers,'n_tensors':len(got),'n_params':sum(p.numel() for nm,p in model.named_parameters() if nm in names),'dtype':'float32'}
+
 def lora_params(model):
     """ordered (name, param) list of the fast weights."""
     out=[(n,p) for n,p in model.named_parameters() if is_lora(n)]
@@ -105,7 +130,7 @@ def watch_names(model,all_frozen=False):
     names=[n for n,_ in model.named_parameters() if not is_lora(n)]
     if all_frozen:return names
     n=model.config.num_hidden_layers;keys=[f'layers.0.self_attn.q_proj.weight',f'layers.{n-1}.self_attn.q_proj.weight',
-        f'layers.{n-1}.mlp.down_proj.base_layer.weight',f'layers.{n-1}.mlp.gate_proj.base_layer.weight','model.norm.weight','layers.0.mlp.up_proj.weight']
+        f'layers.{n-1}.mlp.down_proj.base_layer.weight',f'layers.{n-1}.mlp.gate_proj.base_layer.weight','model.norm.weight','layers.0.mlp.up_proj.weight','layers.0.mlp.down_proj.weight']
     out=[x for x in names if any(x.endswith(k) for k in keys)]
     if len(out)<5:raise RuntimeError(f'frozen watch set too small: {out}')
     return out
