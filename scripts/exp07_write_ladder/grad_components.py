@@ -345,19 +345,30 @@ def run_onestep2(ns):
         plan=[('gbc_nm','gb','nm',(1,2,4,8))];sig['gb']=gb
         for nm_ in CELLS:plan+=[(nm_+'_nm',nm_,'nm',(1,2,4,8)),(nm_+'_lr',nm_,'lr',(1,8))]
         deltas,acts,NLk,dm,dff=TP.make_taps(m0,rt32,Batch_)
-        Cz=np.load(os.environ.get('KS_C','/home/solhnsol/workspace/TTT-MEMO-dumps/keystat_C.npz'));Cin=jnp.asarray(Cz['C_in']);Cmid=jnp.asarray(Cz['C_mid'])
-        al_in=jnp.trace(Cin,axis1=1,axis2=2)/dm;al_mid=jnp.trace(Cmid,axis1=1,axis2=2)/dff;R['alpha']={'in':np.asarray(al_in).tolist(),'mid':np.asarray(al_mid).tolist()}
-        Pinv={}
-        for nm_,f_ in (('c_hi',1.0),('c_lo',0.1)):
-            if nm_ in CELLS:Pinv[nm_]=(jnp.linalg.inv(Cin+f_*al_in[:,None,None]*jnp.eye(dm)[None]),jnp.linalg.inv(Cmid+f_*al_mid[:,None,None]*jnp.eye(dff)[None]))
-        C0e=None
-        if 'wr1' in CELLS:C0e=(jnp.linalg.eigh(Cin),jnp.linalg.eigh(Cmid))   # (Lambda, Q) per layer
+        # OOM fix (10/17 12:45): the reference loss_grad of chunk 0 (reconstruction check + pytree template) is computed first, before
+        # C, the preconditioners and the tap buffers occupy device memory, and kept on host
+        REF0={};ffp_=lambda t:t.language_model.model.h.suffix_blocks.feed_forward_prime
+        with rt32.mesh,jax.default_matmul_precision('highest'):
+            for w in 'AB':
+                r0_,_=SP.chunk_rows(T.w,w=='B',T.tok,rt.bos,rt.eos,'ntp');ids,mk,n,inf_=r0_[0];tg=np.concatenate([ids[1:],[rt32.eos]]).astype(np.int32)
+                rg=loss_grad(m0,jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),prefix32(m0,jnp.asarray(ids),jnp.asarray(loc0),pm0),jnp.asarray(seg0),jnp.asarray(loc0))
+                q=ffp_(rg);REF0[w]=tuple(np.asarray(x) for x in (q.w1.weight,q.w3.weight,q.w2.weight))
+                if w=='A':tpl=host(rg)
+                del rg,q
+        Pinv={};C0e=None   # (OOM fix 2, 13:00) C-derived matrices are computed once and kept on HOST; moved to the device per use
+        if any(c in CELLS for c in ('c_hi','c_lo','wr1')):
+            Cz=np.load(os.environ.get('KS_C','/home/solhnsol/workspace/TTT-MEMO-dumps/keystat_C.npz'));Cin=jnp.asarray(Cz['C_in']);Cmid=jnp.asarray(Cz['C_mid'])
+            al_in=jnp.trace(Cin,axis1=1,axis2=2)/dm;al_mid=jnp.trace(Cmid,axis1=1,axis2=2)/dff;R['alpha']={'in':np.asarray(al_in).tolist(),'mid':np.asarray(al_mid).tolist()}
+            for nm_,f_ in (('c_hi',1.0),('c_lo',0.1)):
+                if nm_ in CELLS:Pinv[nm_]=(np.asarray(jnp.linalg.inv(Cin+f_*al_in[:,None,None]*jnp.eye(dm)[None])),np.asarray(jnp.linalg.inv(Cmid+f_*al_mid[:,None,None]*jnp.eye(dff)[None])))
+            if 'wr1' in CELLS:C0e=tuple(tuple(np.asarray(x) for x in jnp.linalg.eigh(Cx)) for Cx in (Cin,Cmid))   # (Lambda, Q) per layer, host
+            del Cin,Cmid
         WR={'wr0h':(0,1.0),'wr0':(0,0.1),'wr1':(1,0.1)}
         def wridge(G,xi,xm,lam_,a_):
             outs=[]
             for gi,(Gm,X) in enumerate(zip(G,(xi,xi,xm))):
                 ce=None if lam_==0 else (C0e[0 if gi<2 else 1][1],C0e[0 if gi<2 else 1][0])
-                outs.append(jnp.stack([KS.t_wridge(Gm[l],X[l],lam_,a_,None if ce is None else (ce[0][l],ce[1][l])) for l in range(Gm.shape[0])]))
+                outs.append(jnp.stack([KS.t_wridge(Gm[l],X[l],lam_,a_,None if ce is None else (jnp.asarray(ce[0][l]),jnp.asarray(ce[1][l]))) for l in range(Gm.shape[0])]))
             return tuple(outs)
         ffp=lambda t:t.language_model.model.h.suffix_blocks.feed_forward_prime
         @jax.jit
@@ -379,7 +390,7 @@ def run_onestep2(ns):
             try:g_=eqx.filter_grad(lossf)(m)
             finally:packing.PACK_SUF.clear()
             q=ffp(g_);return q.w1.weight,q.w3.weight,q.w2.weight
-        tpl=None;info={};diag={}
+        info={};diag={}
         with rt32.mesh,jax.default_matmul_precision('highest'):
             for w in 'AB':
                 sw=w=='B';rows,_=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'ntp');stream=list(np.concatenate([r_[0] for r_ in rows]))+[rt32.eos]
@@ -389,10 +400,12 @@ def run_onestep2(ns):
                     a_=(jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg0),jnp.asarray(loc0))
                     d1,d3,d2=deltas(*a_);xi,xm,hd,_=acts(*a_);G=chunk_G(xi,xm,d1,d3,d2)
                     if ri==0:
-                        rg=loss_grad(m0,*a_);q=ffp(rg);ref=(q.w1.weight,q.w3.weight,q.w2.weight)
-                        R.setdefault('KS_recon_rel',{})[w]=[float(jnp.linalg.norm(x_-y_)/jnp.linalg.norm(y_)) for x_,y_ in zip(G,ref)];R['KS_hidden_maxdiff']=float(hd);tpl=rg;del rg,q,ref
-                    def add(c_,v_):   # accumulate immediately (one transformed G alive at a time)
-                        accu[c_]=tuple(x_*float(n) for x_ in v_) if accu[c_] is None else tuple(a2+x_*float(n) for a2,x_ in zip(accu[c_],v_))
+                        R.setdefault('KS_recon_rel',{})[w]=[float(jnp.linalg.norm(x_-jnp.asarray(y_))/jnp.linalg.norm(jnp.asarray(y_))) for x_,y_ in zip(G,REF0[w])];R['KS_hidden_maxdiff']=float(hd)
+                    def add(c_,v_):   # accumulate immediately (one transformed G alive at a time); (OOM fix 3, 13:10) accumulators on HOST, fp32
+                        h_=[np.asarray(jax.device_get(x_*float(n)),np.float32) for x_ in v_]
+                        if accu[c_] is None:accu[c_]=h_
+                        else:
+                            for a2,x_ in zip(accu[c_],h_):np.add(a2,x_,out=a2)
                     if 'c0' in CELLS:add('c0',G)
                     xbi=nzmean(xi,d1);xbm=nzmean(xm,d2)
                     if 'a' in CELLS:add('a',t_a(*G,xi,xm,d1,d3,d2,xbi,xbm))
@@ -406,13 +419,13 @@ def run_onestep2(ns):
                     if 'topk8' in CELLS:add('topk8',tuple(jnp.stack([KS.topk_zero(M[l],0.08) for l in range(M.shape[0])]) for M in G))   # zeroing on -eta G_c = zeroing on G_c
                     for c_,(lm_,a__) in WR.items():
                         if c_ in CELLS:add(c_,wridge(G,xi,xm,lm_,a__))
-                    for c_,(Pi,Pm) in Pinv.items():add(c_,(jnp.einsum('lde,lef->ldf',Pi,G[0]),jnp.einsum('lde,lef->ldf',Pi,G[1]),jnp.einsum('lfe,led->lfd',Pm,G[2])))
+                    for c_,(Pi,Pm) in Pinv.items():Pi_=jnp.asarray(Pi);Pm_=jnp.asarray(Pm);add(c_,(jnp.einsum('lde,lef->ldf',Pi_,G[0]),jnp.einsum('lde,lef->ldf',Pi_,G[1]),jnp.einsum('lfe,led->lfd',Pm_,G[2])));del Pi_,Pm_
                     for c_,beta in (('p05',0.5),('p10',1.0)):
                         if c_ in CELLS:bias,_=KS.poe_bias(stream,lo,1024,V_,beta,0.1);add(c_,poe_grad(m0,*a_,bias));del bias
                     ntot+=n;s_in=xi.sum(1);s_mid=xm.sum(1);xs_in=s_in if xs_in is None else xs_in+s_in;xs_mid=s_mid if xs_mid is None else xs_mid+s_mid;nprev+=xi.shape[1]
                     del d1,d3,d2,xi,xm,G
                 for c_ in ACC:
-                    W1,W3,W2=(x_/ntot for x_ in accu[c_]);v_=eqx.tree_at(lambda t:(ffp(t).w1.weight,ffp(t).w3.weight,ffp(t).w2.weight),tpl,(W1,W3,W2))
+                    W1,W3,W2=(jnp.asarray(x_/np.float32(ntot)) for x_ in accu[c_]);v_=eqx.tree_at(lambda t:(ffp(t).w1.weight,ffp(t).w3.weight,ffp(t).w2.weight),tpl,(W1,W3,W2))
                     sig.setdefault(c_,{})[w]=host(v_);del v_,W1,W2,W3
                 accu=None;info[w]={'chunks':len(rows),'loss_tokens':ntot};memlog(f'keystat {w}')
             if SEED==101 and 'c0' in sig:   # mechanism diagnostics (descriptive), per matrix type

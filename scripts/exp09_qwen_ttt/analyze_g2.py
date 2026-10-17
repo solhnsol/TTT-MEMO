@@ -27,7 +27,7 @@ def load_seed(seed,d,atag='a',btag='b'):
         X=S.load(lev,tag)
         if X:out[k]=(S.curve(*X),X)
     return AL,out
-def boot(v,n=8000,lvl=97.5,seed=0):
+def boot(v,n=8000,lvl=float(os.environ.get('G2_LVL','97.5')),seed=0):
     v=np.asarray(v);r=np.random.default_rng(seed);b=[v[r.integers(0,len(v),len(v))].mean() for _ in range(n)];a=(100-lvl)/2
     return float(v.mean()),float(np.percentile(b,a)),float(np.percentile(b,100-a))
 def f3(t):return f'{t[0]:+.3f} [{t[1]:+.3f},{t[2]:+.3f}]'
