@@ -421,10 +421,10 @@ def run_onestep2(ns):
                     for c_,(lm_,a__) in WR.items():
                         if c_ in CELLS:add(c_,wridge(G,xi,xm,lm_,a__))
                     for c_,(Pi,Pm) in Pinv.items():Pi_=jnp.asarray(Pi);Pm_=jnp.asarray(Pm);add(c_,(jnp.einsum('lde,lef->ldf',Pi_,G[0]),jnp.einsum('lde,lef->ldf',Pi_,G[1]),jnp.einsum('lfe,led->lfd',Pm_,G[2])));del Pi_,Pm_
+                    ntot+=n;s_in=xi.sum(1);s_mid=xm.sum(1);xs_in=s_in if xs_in is None else xs_in+s_in;xs_mid=s_mid if xs_mid is None else xs_mid+s_mid;nprev+=xi.shape[1]
+                    del d1,d3,d2,xi,xm,G   # (OOM fix 4, 15:40) the tap buffers are freed BEFORE the PoE full-model backward (22.95 GiB request)
                     for c_,beta in (('p05',0.5),('p10',1.0)):
                         if c_ in CELLS:bias,_=KS.poe_bias(stream,lo,1024,V_,beta,0.1);add(c_,poe_grad(m0,*a_,bias));del bias
-                    ntot+=n;s_in=xi.sum(1);s_mid=xm.sum(1);xs_in=s_in if xs_in is None else xs_in+s_in;xs_mid=s_mid if xs_mid is None else xs_mid+s_mid;nprev+=xi.shape[1]
-                    del d1,d3,d2,xi,xm,G
                     try:st_=jax.devices()[0].memory_stats() or {};pk_=round(st_.get('peak_bytes_in_use',0)/2**30,2)
                     except Exception:pk_='n/a'
                     print(f'progress keystat {w} chunk {ri+1}/{len(rows)} {time.monotonic()-t_ck:.1f}s peak {pk_} GiB',flush=True);t_ck=time.monotonic()   # timing only, no cell values
