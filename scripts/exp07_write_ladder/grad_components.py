@@ -395,6 +395,7 @@ def run_onestep2(ns):
             for w in 'AB':
                 sw=w=='B';rows,_=SP.chunk_rows(T.w,sw,T.tok,rt.bos,rt.eos,'ntp');stream=list(np.concatenate([r_[0] for r_ in rows]))+[rt32.eos]
                 accu={c:None for c in ACC};ntot=0;xs_in=None;xs_mid=None;nprev=0;V_=int(m0.language_model.config.vocab_size)
+                t_ck=time.monotonic()
                 for ri,(ids,mk,n,inf_) in enumerate(rows):
                     k=inf_['k'];lo=k*1024;tg=np.concatenate([ids[1:],[rt32.eos]]).astype(np.int32);pref=prefix32(m0,jnp.asarray(ids),jnp.asarray(loc0),pm0)
                     a_=(jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg0),jnp.asarray(loc0))
@@ -402,7 +403,7 @@ def run_onestep2(ns):
                     if ri==0:
                         R.setdefault('KS_recon_rel',{})[w]=[float(jnp.linalg.norm(x_-jnp.asarray(y_))/jnp.linalg.norm(jnp.asarray(y_))) for x_,y_ in zip(G,REF0[w])];R['KS_hidden_maxdiff']=float(hd)
                     def add(c_,v_):   # accumulate immediately (one transformed G alive at a time); (OOM fix 3, 13:10) accumulators on HOST, fp32
-                        h_=[np.asarray(jax.device_get(x_*float(n)),np.float32) for x_ in v_]
+                        h_=[np.array(jax.device_get(x_*float(n)),dtype=np.float32,copy=True) for x_ in v_]
                         if accu[c_] is None:accu[c_]=h_
                         else:
                             for a2,x_ in zip(accu[c_],h_):np.add(a2,x_,out=a2)
@@ -424,6 +425,9 @@ def run_onestep2(ns):
                         if c_ in CELLS:bias,_=KS.poe_bias(stream,lo,1024,V_,beta,0.1);add(c_,poe_grad(m0,*a_,bias));del bias
                     ntot+=n;s_in=xi.sum(1);s_mid=xm.sum(1);xs_in=s_in if xs_in is None else xs_in+s_in;xs_mid=s_mid if xs_mid is None else xs_mid+s_mid;nprev+=xi.shape[1]
                     del d1,d3,d2,xi,xm,G
+                    try:st_=jax.devices()[0].memory_stats() or {};pk_=round(st_.get('peak_bytes_in_use',0)/2**30,2)
+                    except Exception:pk_='n/a'
+                    print(f'progress keystat {w} chunk {ri+1}/{len(rows)} {time.monotonic()-t_ck:.1f}s peak {pk_} GiB',flush=True);t_ck=time.monotonic()   # timing only, no cell values
                 for c_ in ACC:
                     W1,W3,W2=(jnp.asarray(x_/np.float32(ntot)) for x_ in accu[c_]);v_=eqx.tree_at(lambda t:(ffp(t).w1.weight,ffp(t).w3.weight,ffp(t).w2.weight),tpl,(W1,W3,W2))
                     sig.setdefault(c_,{})[w]=host(v_);del v_,W1,W2,W3
