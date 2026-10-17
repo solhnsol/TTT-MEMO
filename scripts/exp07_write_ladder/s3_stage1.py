@@ -69,7 +69,7 @@ class Stage1(Ladder3):
         self.seed_=seed;self.swap_=swap;res={'swap':bool(swap),'seed':seed,'phase':phase,'chunks':{}}
         seg0=np.zeros(CH,np.int32);loc0=np.arange(CH,dtype=np.int32);pm0=jnp.asarray(packing.prefix_mask(seg0,W))
         with rt.mesh:
-            pref_nat=rt.prefix(rt.base,seq);Kh,Vh,_=self.record(ids);st=clone_state(rt.state_suffix);Asc={};Bsc={};t0=time.monotonic()
+            tp=time.monotonic();pref_nat=rt.prefix(rt.base,seq);print(f'  stage1 natural prefix {time.monotonic()-tp:.0f}s',flush=True);tp=time.monotonic();Kh,Vh,_=self.record(ids);print(f'  stage1 recorded natural K,V {time.monotonic()-tp:.0f}s',flush=True);st=clone_state(rt.state_suffix);Asc={};Bsc={};t0=time.monotonic()
             # ---- pass 1: attention statistics along the natural chain (needed for every chunk: f(d)) ----
             stash={}
             for k in range(NCH):
@@ -94,7 +94,7 @@ class Stage1(Ladder3):
                 c=rt.chunk(seq,k);pref_c=pref_nat[k*CH:(k+1)*CH]
                 if k in stash:
                     if nsmoke is not None and len(res['chunks'])>=nsmoke:break
-                    res['chunks'][k]=self.eval_chunk(m,st,c,pref_c,k,ids,sets,Asc[k],Bsc[k],stash[k],f,Kh,Vh,phase,sel,pm0,seg0,loc0)
+                    te=time.monotonic();res['chunks'][k]=self.eval_chunk(m,st,c,pref_c,k,ids,sets,Asc[k],Bsc[k],stash[k],f,Kh,Vh,phase,sel,pm0,seg0,loc0);print(f'  stage1 eval chunk {k} ({len(res["chunks"])}/{len(stash)}) {time.monotonic()-te:.0f}s',flush=True)
                 st=self.read_state(m,st,c,pref_c)
         return res
     def answers(self,sets,k):
@@ -142,8 +142,9 @@ class Stage1(Ladder3):
             hm[rule_name(r)]=k0-W+np.nonzero(u)[0]
         out['pr']['Ahmax']=self.avg_prec(Mw.max(0),labels,candm)
         # forwards
+        Kc,Vc=self.ctx_kv(Kh,Vh,k)   # the window K,V of this chunk, transferred once per chunk (not per policy)
         def prefw(S):
-            keep=sets.keep_vector(k,S);Kc,Vc=self.ctx_kv(Kh,Vh,k);pw=self.prefix_masked(rt.base,jnp.asarray(ids[k0:k0+CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k0),jnp.asarray(keep));return pw,jnp.asarray(keep)
+            keep=sets.keep_vector(k,S);pw=self.prefix_masked(rt.base,jnp.asarray(ids[k0:k0+CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k0),jnp.asarray(keep));return pw,jnp.asarray(keep)
         def dist(p):   # ||p - e_y||_2 per answer token
             p=np.asarray(p);py=p[np.arange(len(ys)),ys];return np.sqrt(np.maximum((p**2).sum(1)-2*py+1,0))
         nat=dist(self.logits_nat(rt.base,st,c,pref_c,rows));out['nat']=nat.tolist()
