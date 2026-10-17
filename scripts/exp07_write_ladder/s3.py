@@ -166,12 +166,34 @@ class Ladder3(LD.Ladder):
                     rows.append(row);print(row,flush=True)
                 st=self.read_state(m,st,c,pref_c)
         res['rows']=rows;return res
+def unit_diag(L,world_seed):
+    """diagnostic for the prefix max-abs criterion (design 17:58): where is the largest difference, how many bf16 ulps, what is the noise floor between two natural kernel paths, and the metric without the outlier dims."""
+    rt=L.rt;m=rt.base;ids=np.asarray(L.T.P[False].ids)[:NCH*CH];res={'chunks':[]}
+    def ulp(a):
+        a=abs(float(a));return 2.0**(np.floor(np.log2(a))-7) if a>0 else 0.0
+    with rt.mesh:
+        mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True;seq=rt.seq(ids,mask=mask);pref_nat=rt.prefix(rt.base,seq)
+        Kh,Vh,hrec=L.record(ids);full=jnp.ones(WIN+CH,bool)
+        for k in (0,1,9,18):
+            sl=slice(k*CH,(k+1)*CH);scan=np.asarray(pref_nat[sl].astype(jnp.float32));rec=np.asarray(hrec[sl].astype(jnp.float32));Kc,Vc=L.ctx_kv(Kh,Vh,k)
+            s3=np.asarray(L.prefix_masked(m,jnp.asarray(ids[sl],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),full).astype(jnp.float32))
+            rms=float(np.sqrt(np.mean(scan**2)));dim_rms=np.sqrt(np.mean(scan**2,axis=0));out_dims=np.argsort(-dim_rms)[:8];keep=np.ones(scan.shape[1],bool);keep[out_dims]=False
+            row={'k':k,'prefix_rms':rms,'top_rms_dims':[int(d) for d in out_dims],'top_rms_dim_values':[float(dim_rms[d]) for d in out_dims]}
+            for nm,(a,b) in (('S3_vs_scan',(s3,scan)),('S3_vs_rec',(s3,rec)),('rec_vs_scan',(rec,scan))):
+                d=np.abs(a-b);i,j=np.unravel_index(np.argmax(d),d.shape);ref=float(b[i,j])
+                row[nm]=dict(maxabs=float(d.max()),maxabs_over_rms=float(d.max()/rms),rms_diff_over_rms=float(np.sqrt(np.mean((a-b)**2))/rms),at_token=int(i),at_dim=int(j),value=ref,ulps=float(d[i,j]/max(ulp(ref),1e-30)),
+                             maxabs_without_top8_dims=float(d[:,keep].max()),maxabs_without_top8_over_rms=float(d[:,keep].max()/rms),
+                             median_ulps_at_largest_1pct=float(np.median(d.ravel()[np.argsort(-d.ravel())[:max(1,d.size//100)]]/np.maximum(np.array([ulp(x) for x in b.ravel()[np.argsort(-d.ravel())[:max(1,d.size//100)]]]),1e-30))))
+            res['chunks'].append(row);print(json.dumps(row),flush=True)
+    return res
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['native0','native3','oracle','othent','randdist','recency','prefixall','oraclesub','othentsub'],default='oracle');ap.add_argument('--world-seed',type=int,default=101)
     ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],default='save');ap.add_argument('--tag',default='');ap.add_argument('--passes',type=int,default=4);ap.add_argument('--keep',action='store_true')
-    ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true')
+    ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true');ap.add_argument('--unit-diag',action='store_true')
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True);assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     rt=Runtime()
+    if a.unit_diag:
+        L=Ladder3(rt,a.world_seed,readout=False);L.build3();res=unit_diag(L,a.world_seed);json.dump(res,open(OUT/f's3_unit_diag_s{a.world_seed}.json','w'),indent=1);print('unit diag done');return
     if a.unit:
         L=Ladder3(rt,a.world_seed,readout=False);L.build3();res=L.unit(a.world_seed);json.dump(res,open(OUT/f's3_unit_s{a.world_seed}.json','w'),indent=1);print('unit done');return
     tag=a.tag or f'{a.cell}_p{a.passes}';lev='S3';SD=OUT/'states'/f'{lev}_{tag}_s{a.world_seed}'

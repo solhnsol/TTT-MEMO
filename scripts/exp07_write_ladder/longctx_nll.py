@@ -35,6 +35,7 @@ def main():
         d=json.load(open(OUT/f'{level}_{tag}_s{seed}_{w}.saved.json'));res[w]=[]
         for e in d['log']:
             if 'margins' not in e or '_file' not in e['margins']:continue
+            if os.environ.get('LONGNLL_EPOCHS') and str(e.get('epoch',e.get('state'))) not in os.environ['LONGNLL_EPOCHS'].split(','):continue   # optional restriction (e.g. LONGNLL_EPOCHS=1,4); the check state is then the first listed epoch
             m=L.load_state(e['margins']['_file']);assert reuse._hash_pytree(m.inner_parameters())[0]==e['margins']['_hash']
             r=nll(m,ids);assert rt.base is orig
             if not res['checks'] and e.get('epoch',e.get('state'))!=0:   # state 0 is W0 itself: check on the first written state

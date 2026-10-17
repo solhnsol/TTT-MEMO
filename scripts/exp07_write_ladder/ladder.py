@@ -95,6 +95,11 @@ class Ladder:
             s_=lr*m.get_ilr_multiplier(st_all.get(m.step_index))*scale
             newp=jax.tree.map(lambda q,x:(q+(-s_*coef*x).astype(q.dtype)).astype(q.dtype),m.inner_parameters(),g)
             return newp,new_st
+        @eqx.filter_jit
+        def gnorm_only(m,st_suf,c,p):
+            """global gradient norm of the native chunk loss (logging only; no update)."""
+            (_l,(ce,_n,_s)),grads=eqx.filter_value_and_grad(MetaModel.lm_loss,has_aux=True)(m,c,st_suf,prefix_outputs=p);return optax.global_norm(grads.inner_parameters())
+        self.gnorm_only=gnorm_only;self.log_clip=False
         self.prefix_iso=prefix_iso;self.step=step;self.native_scaled=native_scaled;self.Batch=Batch
     def set_inner(self,m,newp):
         inner,outer=eqx.partition(m,self.f)
@@ -221,14 +226,16 @@ class Ladder:
             log.append({'epoch':0,'margins':self.evaluate(m)})
             for ps,ids in enumerate(streams,1):
                 n=len(ids);pad=(-n)%CH;full=list(ids)+[rt.eos]*pad;mask=np.zeros(len(full),dtype=bool);mask[:n-1]=True
-                seq=rt.seq(full,mask=mask);pref=rt.prefix(rt.base,seq);st=(st_all,clone_state(rt.state_suffix))
+                seq=rt.seq(full,mask=mask);pref=rt.prefix(rt.base,seq);st=(st_all,clone_state(rt.state_suffix));clips=[]
                 for k in range(len(full)//CH):
+                    if self.log_clip:
+                        gn_=float(self.gnorm_only(m,st[1],rt.chunk(seq,k),pref[k*CH:(k+1)*CH]));clips.append((gn_,min(1.0,self.clip/max(gn_,1e-30))))
                     if scale is None:old=m;r=rt.update(m,opt,st,rt.chunk(seq,k),pref[k*CH:(k+1)*CH]);m,opt,st=r.new_model,r.new_optimizer_state,r.new_state;del r
                     else:
                         newp,sf=self.native_scaled(m,st_all,st[1],rt.chunk(seq,k),pref[k*CH:(k+1)*CH],jnp.float32(scale));old=m;m=self.set_inner(m,newp);st=(st[0],sf)
                     cum+=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5
                 st_all=st[0];del pref
-                log.append({'epoch':ps,'chunks':len(full)//CH,'cum_update_norm':cum,'margins':self.evaluate(m)});print(f'  {tag} pass {ps}',flush=True)
+                log.append({'epoch':ps,'chunks':len(full)//CH,'cum_update_norm':cum,**({'clip':clips} if self.log_clip else {}),'margins':self.evaluate(m)});print(f'  {tag} pass {ps}',flush=True)
         return log
     def run_L0_masked(self,swap,passes,block=1024,scale=1.0,streams=None):
         """context-masked write (method pilot): the stream is read as usual, but every inner update is computed with
@@ -324,7 +331,7 @@ class Ladder:
         return log
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k','L0mw','L0mwfs'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB');ap.add_argument('--fs-scale',type=float,default=None,help='L0fs only: native step multiplier (default None = the original rt.update path)')
+    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k','L0mw','L0mwfs'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB');ap.add_argument('--log-clip',action='store_true',help='native passes: also log the per-chunk gradient norm and clip coefficient (extra forward/backward, no effect on the update)');ap.add_argument('--fs-scale',type=float,default=None,help='L0fs only: native step multiplier (default None = the original rt.update path)')
     ap.add_argument('--epochs',type=int,default=32);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='main');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--mode',choices=['full','save','eval'],default='full');ap.add_argument('--save-epochs',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--k',type=int,default=1);ap.add_argument('--l1-variant',default='plain',choices=['plain','ctx','fill','irr']);ap.add_argument('--block',type=int,default=1024)
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
@@ -333,7 +340,7 @@ def main():
     import ast;b=ast.literal_eval(base[0][5:]) if base else {}
     assert b and max(b['S_maxdiff_R1'],b['S_maxdiff_R0'],b['L_maxdiff_R1'])<=1e-3,'packed fp32 readout not verified - refusing to run'
     rt=Runtime();SD=OUT/'states'/f'{a.level}_{a.tag}_s{a.world_seed}'
-    L=Ladder(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD)
+    L=Ladder(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD);L.log_clip=a.log_clip
     meta={'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'clip':L.clip,'level':a.level,'epochs':a.epochs,'seed':a.seed,'xla_flags':os.environ.get('XLA_FLAGS')}
     json.dump(meta,open(OUT/f'meta_{a.level}_{a.tag}_s{a.world_seed}.json','w'),indent=1)
     for w in a.worlds:
