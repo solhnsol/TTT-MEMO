@@ -141,23 +141,26 @@ class Stage1(Ladder3):
             for q in range(CH):u[order[q,:n[q]]]=True
             hm[rule_name(r)]=k0-W+np.nonzero(u)[0]
         out['pr']['Ahmax']=self.avg_prec(Mw.max(0),labels,candm)
-        # forwards
-        Kc,Vc=self.ctx_kv(Kh,Vh,k)   # the window K,V of this chunk, transferred once per chunk (not per policy)
+        # forwards (phase 3 = sets and F1 only, no forwards)
+        Kc,Vc=self.ctx_kv(Kh,Vh,k) if phase!=3 else (None,None)   # the window K,V of this chunk, transferred once per chunk (not per policy)
         def prefw(S):
             keep=sets.keep_vector(k,S);pw=self.prefix_masked(rt.base,jnp.asarray(ids[k0:k0+CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k0),jnp.asarray(keep));return pw,jnp.asarray(keep)
         def dist(p):   # ||p - e_y||_2 per answer token
             p=np.asarray(p);py=p[np.arange(len(ys)),ys];return np.sqrt(np.maximum((p**2).sum(1)-2*py+1,0))
-        nat=dist(self.logits_nat(rt.base,st,c,pref_c,rows));out['nat']=nat.tolist()
-        tg=np.concatenate([ids[k0+1:k0+CH+1],[rt.eos]])[:CH].astype(np.int32);pfa=self.prefix_iso(rt.base,jnp.asarray(ids[k0:k0+CH]),jnp.asarray(loc0),pm0)
-        out['alone']=dist(self.logits_alone(rt.base,jnp.asarray(ids[k0:k0+CH]),jnp.asarray(tg),jnp.asarray(np.concatenate([np.ones(CH-1,bool),[False]])),pfa,jnp.asarray(seg0),jnp.asarray(loc0),rows)).tolist()
-        pw,kp=prefw(O);out['oracle']=dist(self.logits_masked(rt.base,st,c,pw,kp,rows)).tolist()
+        if phase!=3:
+            nat=dist(self.logits_nat(rt.base,st,c,pref_c,rows));out['nat']=nat.tolist()
+            tg=np.concatenate([ids[k0+1:k0+CH+1],[rt.eos]])[:CH].astype(np.int32);pfa=self.prefix_iso(rt.base,jnp.asarray(ids[k0:k0+CH]),jnp.asarray(loc0),pm0)
+            out['alone']=dist(self.logits_alone(rt.base,jnp.asarray(ids[k0:k0+CH]),jnp.asarray(tg),jnp.asarray(np.concatenate([np.ones(CH-1,bool),[False]])),pfa,jnp.asarray(seg0),jnp.asarray(loc0),rows)).tolist()
+            pw,kp=prefw(O);out['oracle']=dist(self.logits_masked(rt.base,st,c,pw,kp,rows)).tolist()
+        Oc=set(p for p in O if k0-W<=p<k0 and candm[p-(k0-W)])   # the O tokens that can be selected (candidates)
         rng=np.random.default_rng([self.seed_,k,int(self.swap_)])
-        grid=[(a,r) for a in AGGS for r in SIZE_RULES] if phase==1 else [tuple(sel)] if sel else []
+        grid=[(a,r) for a in AGGS for r in SIZE_RULES] if phase in (1,3) else [tuple(sel)] if sel else []
         for a,rr in grid:
             rn=rule_name(rr) if not isinstance(rr,str) else rr
             if a=='Ahmax':S=hm[rn]
             else:S=self.select(scores[a],k,(rr[0],rr[1]) if not isinstance(rr,str) else (rr[0],float(rr[1:])),candm)
-            n=len(S);pol={'n':int(n)}
+            n=len(S);Ss=set(int(x) for x in S);tp=len(Ss&Oc);pol={'n':int(n),'prf':{'tp':tp,'fp':len(Ss)-tp,'fn':len(Oc)-tp,'fn_all':len(Oset)-len(Ss&Oset),'tp_all':len(Ss&Oset)}}
+            if phase==3:pol['S']=[int(x) for x in S];out['policies'][f'{a}|{rn}']=pol;continue   # phase 3 stores the masked sets
             for nm,SS in (('policy',S),('rand',self.rand_like(sets,k,S,Oset,rng)),('recency',np.arange(max(0,k0-n),k0))):
                 if len(SS)==0:pol[nm]=None;continue
                 pw,kp=prefw(list(SS));pol[nm]=dist(self.logits_masked(rt.base,st,c,pw,kp,rows)).tolist()
@@ -172,13 +175,13 @@ class Stage1(Ladder3):
         if lab.sum()==0:return None
         o=np.lexsort((np.arange(len(sc)),-sc));l=lab[o];tp=np.cumsum(l);prec=tp/np.arange(1,len(l)+1);return float((prec*l).sum()/l.sum())
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--world-seed',type=int,required=True);ap.add_argument('--phase',type=int,choices=[1,2],required=True);ap.add_argument('--worlds',default='AB');ap.add_argument('--unit-smoke',type=int,default=None)
+    ap=argparse.ArgumentParser();ap.add_argument('--world-seed',type=int,required=True);ap.add_argument('--phase',type=int,choices=[1,2,3],required=True);ap.add_argument('--sel-file',default='s3_stage1_selection.json');ap.add_argument('--out-prefix',default='s3_stage1');ap.add_argument('--worlds',default='AB');ap.add_argument('--unit-smoke',type=int,default=None)
     a=ap.parse_args();assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     sel=None
-    if a.phase==2:sel=json.load(open(OUT/'s3_stage1_selection.json'))['policy']
+    if a.phase==2:sel=json.load(open(OUT/a.sel_file))['policy']
     rt=Runtime();L=Stage1(rt,a.world_seed,readout=False);L.build3();L.build1()
     for w in a.worlds:
-        f=OUT/f's3_stage1_s{a.world_seed}_{w}.json'
+        f=OUT/(f's3_stage1_f1_s{a.world_seed}_{w}.json' if a.phase==3 else f'{a.out_prefix}_s{a.world_seed}_{w}.json')
         if f.exists() and not a.unit_smoke:print('exists',f);continue
         t0=time.monotonic();res=L.run(w=='B',a.world_seed,a.phase,sel,a.unit_smoke)
         if a.unit_smoke:print('smoke ok',w,len(res['chunks']),'eligible chunks',round(time.monotonic()-t0),'s');k=sorted(res['chunks'])[0];print({kk:(vv if kk!='policies' else list(vv)[:3]) for kk,vv in res['chunks'][k].items() if kk in('n_O','answers','pr','policies')});continue

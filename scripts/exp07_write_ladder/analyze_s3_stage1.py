@@ -5,10 +5,10 @@ import sys,json,os
 from pathlib import Path
 import numpy as np
 OUT=Path(os.environ.get('EXP07_OUT',Path(__file__).resolve().parents[2]/'experiments/exp07_write_ladder'));rng=np.random.default_rng(0)
-def load(sd):
+def load(sd,prefix='s3_stage1'):
     d={}
     for w in 'AB':
-        f=OUT/f's3_stage1_s{sd}_{w}.json'
+        f=OUT/f'{prefix}_s{sd}_{w}.json'
         if f.exists():d[w]=json.load(open(f))
     return d
 def contrib(d,key,which):
@@ -55,9 +55,9 @@ def select():
     out['policy']=[agg,rn];out['why']=why;print('policy selected:',agg,rn,'(',why,')')
     out['eps_oracle']=float(eps(contrib(d,'oracle','policy')));print('epsilon(oracle) on s101:',round(out['eps_oracle'],3))
     json.dump(out,open(OUT/'s3_stage1_selection.json','w'),indent=1)
-def gate():
-    sel=json.load(open(OUT/'s3_stage1_selection.json'));key='|'.join(sel['policy']);rows={}
-    d2=load(102);d3=load(103);d={}
+def gate(prefix='s3_stage1',selfile='s3_stage1_selection.json',outname='s3_stage1_gate.json'):
+    sel=json.load(open(OUT/selfile));key='|'.join(sel['policy']);rows={}
+    d2=load(102,prefix);d3=load(103,prefix);d={}
     for sd,dd in ((102,d2),(103,d3)):
         for w,r in dd.items():d[f'{sd}{w}']=r
     cls={wh:contrib(d,key,wh) for wh in ('policy','rand','recency')};cls['oracle']=contrib(d,'oracle','policy');keys=sorted(cls['policy']);n=len(keys)
@@ -69,6 +69,28 @@ def gate():
     gate=dict(epsilon=e,eps_ci=eo,vs_rand=(e['policy']-e['rand'],dr),vs_recency=(e['policy']-e['recency'],dc),defined=bool(dlo>0))
     ok=e['policy']>=0.5 and dr[0]>0 and dc[0]>0
     print(f'gate: epsilon(attn-sel) {e["policy"]:.3f} >= 0.5: {e["policy"]>=0.5}; vs rand-dist {e["policy"]-e["rand"]:+.3f} CI [{dr[0]:+.3f},{dr[1]:+.3f}]; vs recency {e["policy"]-e["recency"]:+.3f} CI [{dc[0]:+.3f},{dc[1]:+.3f}] -> {"PASS" if ok and dlo>0 else "FAIL" if dlo>0 else "epsilon undefined: use the PR-AUC fallback"}')
-    gate['pass']=bool(ok and dlo>0);json.dump(gate,open(OUT/'s3_stage1_gate.json','w'),indent=1,default=str)
+    gate['pass']=bool(ok and dlo>0);json.dump(gate,open(OUT/outname,'w'),indent=1,default=str)
+def f1sel():
+    """F1-based size-rule selection (design 00:43-00:47: the registered rule of the spec is F1-max among the six rules, ties -> the rule that masks fewer tokens). Reads the phase-3 files (sets and F1 only, s101 A+B).
+    F1 = micro over all eligible chunks: TP / FP / FN of the masked set against the O tokens that are selectable candidates (window before the chunk minus sinks / last 128); the all-O variant (FN counts O tokens outside the candidates) is reported too."""
+    d={}
+    for w in 'AB':
+        f=OUT/f's3_stage1_f1_s101_{w}.json'
+        if f.exists():d[w]=json.load(open(f))
+    keys=sorted({k for r in d.values() for ch in r['chunks'].values() for k in ch['policies']});res={}
+    for key in keys:
+        tp=fp=fn=fna=tpa=0;ns=[]
+        for r in d.values():
+            for ch in r['chunks'].values():
+                p=ch['policies'][key];q=p['prf'];tp+=q['tp'];fp+=q['fp'];fn+=q['fn'];fna+=q['fn_all'];tpa+=q['tp_all'];ns.append(p['n'])
+        pr=tp/max(tp+fp,1);rc=tp/max(tp+fn,1);f1=2*pr*rc/(pr+rc) if pr+rc>0 else 0.0;rca=tpa/max(tpa+fna,1);f1a=2*(tpa/max(tp+fp,1))*rca/((tpa/max(tp+fp,1))+rca) if tpa>0 else 0.0
+        res[key]=dict(P=pr,R=rc,F1=f1,F1_allO=f1a,mean_masked=float(np.mean(ns)))
+    out={'F1':res};sel=json.load(open(OUT/'s3_stage1_selection.json'))
+    for agg in sorted({k.split('|')[0] for k in res}):
+        rows={k.split('|')[1]:v for k,v in res.items() if k.split('|')[0]==agg};print(agg,{r:(round(v['P'],3),round(v['R'],3),round(v['F1'],3),round(v['mean_masked'])) for r,v in rows.items()})
+    agg=sel['aggregation'];rows={k.split('|')[1]:v for k,v in res.items() if k.split('|')[0]==agg}
+    best=max(rows,key=lambda r:(round(rows[r]['F1'],3),-rows[r]['mean_masked']));out['aggregation']=agg;out['policy']=[agg,best];out['why']='F1-max among the six size rules (3 decimals), ties -> fewer masked tokens'
+    print('F1-selected policy for',agg,':',best,'(F1 %.3f)'%rows[best]['F1']);json.dump(out,open(OUT/'s3_stage1_selection_f1.json','w'),indent=1)
 if __name__=='__main__':
-    {'select':select,'gate':gate}[sys.argv[1]]()
+    if sys.argv[1]=='gate' and len(sys.argv)>2 and sys.argv[2]=='f1':gate('s3_stage1_f1sel','s3_stage1_selection_f1.json','s3_stage1_gate_f1.json')
+    else:{'select':select,'gate':gate,'f1':f1sel}[sys.argv[1]]()
