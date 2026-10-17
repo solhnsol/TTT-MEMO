@@ -213,8 +213,9 @@ class Ladder:
                 st_all=st[0]
                 log.append({'epoch':ps,'cum_update_norm':cum,'margins':self.evaluate(m)});print(f'  L0mp {"B" if swap else "A"} pass {ps}',flush=True)
         return log
-    def _native_passes(self,streams,tag):
-        """native TTT over a list of token streams (one per pass); weights carry over, KV restarts each pass."""
+    def _native_passes(self,streams,tag,scale=None):
+        """native TTT over a list of token streams (one per pass); weights carry over, KV restarts each pass.
+        scale (default None = the original rt.update path): every native step multiplied by `scale` after clipping (native_scaled, the verified L0x path)."""
         rt=self.rt;log=[];m=rt.base;opt=m.inner_optimizer(clone_state(rt.state_all)).init(m.inner_parameters());st_all=clone_state(rt.state_all);cum=0.0
         with rt.mesh:
             log.append({'epoch':0,'margins':self.evaluate(m)})
@@ -222,7 +223,9 @@ class Ladder:
                 n=len(ids);pad=(-n)%CH;full=list(ids)+[rt.eos]*pad;mask=np.zeros(len(full),dtype=bool);mask[:n-1]=True
                 seq=rt.seq(full,mask=mask);pref=rt.prefix(rt.base,seq);st=(st_all,clone_state(rt.state_suffix))
                 for k in range(len(full)//CH):
-                    old=m;r=rt.update(m,opt,st,rt.chunk(seq,k),pref[k*CH:(k+1)*CH]);m,opt,st=r.new_model,r.new_optimizer_state,r.new_state;del r
+                    if scale is None:old=m;r=rt.update(m,opt,st,rt.chunk(seq,k),pref[k*CH:(k+1)*CH]);m,opt,st=r.new_model,r.new_optimizer_state,r.new_state;del r
+                    else:
+                        newp,sf=self.native_scaled(m,st_all,st[1],rt.chunk(seq,k),pref[k*CH:(k+1)*CH],jnp.float32(scale));old=m;m=self.set_inner(m,newp);st=(st[0],sf)
                     cum+=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5
                 st_all=st[0];del pref
                 log.append({'epoch':ps,'chunks':len(full)//CH,'cum_update_norm':cum,'margins':self.evaluate(m)});print(f'  {tag} pass {ps}',flush=True)
@@ -258,14 +261,14 @@ class Ladder:
         Pw=self.T.P[swap];_,_,spans=gw.realize(self.T.w,swap)
         expo=[self.rt.bos]+stage2.enc(self.T.tok,'\n\n'.join(s['text'] for s in spans)).ids
         return self._native_passes([Pw.ids]+[expo]*(passes-1),'L0or')
-    def run_L0_fillerswap(self,swap,passes):
+    def run_L0_fillerswap(self,swap,passes,scale=None):
         """(b) every pass reads the same exposure sentences at the same schedule positions in the text list, with the
         background paragraphs replaced by a different draw (pass 1 = the original stream)."""
-        return self._native_passes(self.fs_streams(swap,passes),'L0fs')
+        return self._native_passes(self.fs_streams(swap,passes),'L0fs' if scale is None else f'L0fs x{scale:g}',scale)
     def fs_streams(self,swap,passes):
         """the L0fs streams: pass 1 = the original stream, pass p >= 2 = same texts with background draw 7000+p."""
         import copy
-        Pw=self.T.P[swap];streams=[Pw.ids];w0=self.T.w
+        Pw=self.T.P[swap];streams=[Pw.ids];w0=self.T.w;self._fs_worlds={swap:[w0]}
         for ps in range(2,passes+1):
             w=copy.deepcopy(w0);pool=gw.background(random.Random(7000+ps));bi=0;new=[]
             for t in w['texts']:
@@ -274,7 +277,7 @@ class Ladder:
             w['texts']=new;ids=[self.rt.bos]+stage2.enc(self.T.tok,gw.realize(w,swap)[0]).ids
             while len(ids)<NCH*CH:
                 w['texts'].append({'kind':'bg','text':pool[bi%len(pool)]});bi+=1;ids=[self.rt.bos]+stage2.enc(self.T.tok,gw.realize(w,swap)[0]).ids
-            streams.append(ids[:NCH*CH])
+            streams.append(ids[:NCH*CH]);self._fs_worlds[swap].append(w)
         # check (L0mwfs registration F2): every pass is NCH*CH tokens, keeps every exposure sentence, and has new filler
         _,_,spans=gw.realize(w0,swap)
         for ps,ids in enumerate(streams,1):
@@ -321,7 +324,7 @@ class Ladder:
         return log
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k','L0mw','L0mwfs'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB')
+    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k','L0mw','L0mwfs'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB');ap.add_argument('--fs-scale',type=float,default=None,help='L0fs only: native step multiplier (default None = the original rt.update path)')
     ap.add_argument('--epochs',type=int,default=32);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='main');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--mode',choices=['full','save','eval'],default='full');ap.add_argument('--save-epochs',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--k',type=int,default=1);ap.add_argument('--l1-variant',default='plain',choices=['plain','ctx','fill','irr']);ap.add_argument('--block',type=int,default=1024)
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
@@ -354,7 +357,7 @@ def main():
         elif a.level=='L0mp':log=L.run_L0_multipass(w=='B',a.passes)
         elif a.level=='L0or':log=L.run_L0_oracle(w=='B',a.passes)
         elif a.level=='L0mw':log=L.run_L0_masked(w=='B',a.passes,a.block,a.scale)
-        elif a.level=='L0fs':log=L.run_L0_fillerswap(w=='B',a.passes)
+        elif a.level=='L0fs':log=L.run_L0_fillerswap(w=='B',a.passes,a.fs_scale)
         elif a.level=='L0mwfs':log=L.run_L0_masked(w=='B',a.passes,a.block,a.scale,streams=L.fs_streams(w=='B',a.passes))
         elif a.level=='L0x':log=L.run_L0_scaled(w=='B',a.scale)
         elif a.level=='L0k':log=L.run_L0_ksteps(w=='B',a.k)

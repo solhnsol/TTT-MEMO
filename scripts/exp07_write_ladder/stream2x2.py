@@ -48,56 +48,62 @@ class Ladder2(LD.Ladder):
     def ev(self,m):
         if getattr(self,'canary_only',False):return {'_gen_nll':self.gen_nll(m),'_tail_nll':self.tail_nll(m),'_canary_only':True}
         return self.evaluate(m)
-    def run_cell(self,swap,cell,kappa,lam):
-        rt=self.rt;W=int(rt.cfg.model.sliding_window_size);Pw=self.T.P[swap];ids=np.asarray(Pw.ids);log=[];m=rt.base;st_all=clone_state(rt.state_all)
+    def run_cell(self,swap,cell,kappa,lam,passes=1):
+        """passes = 1: the registered 1-pass stream (unchanged semantics). passes > 1 (multi-pass c2 2x2): fresh filler every pass (ladder.fs_streams: pass 1 = the original stream,
+        pass p >= 2 = the same exposure sentences with new background); weights carry over, the suffix KV restarts each pass; the c2 term uses each pass's own world for chunk_rows."""
+        rt=self.rt;W=int(rt.cfg.model.sliding_window_size);log=[];m=rt.base;st_all=clone_state(rt.state_all)
+        streams=self.fs_streams(swap,passes) if passes>1 else [self.T.P[swap].ids];worlds=self._fs_worlds[swap] if passes>1 else [self.T.w]
         seg=np.zeros(CH,np.int32);loc=np.arange(CH,dtype=np.int32);pm=jnp.asarray(packing.prefix_mask(seg,W));samenext=np.concatenate([np.ones(CH-1,bool),[False]])
-        need_v=cell in ('natc2','mskc2','mskgp','mskrep');rows={}
-        if need_v:
-            rX,_=SP.chunk_rows(self.T.w,swap,self.T.tok,rt.bos,rt.eos,'X');rY,_=SP.chunk_rows(self.T.w,swap,self.T.tok,rt.bos,rt.eos,'Y')
-            for (iX,mX,nX,inX),(iY,mY,nY,inY) in zip(rX,rY):
-                k=inX['k'];assert inY['k']==k and list(iX)==list(ids[k*CH:(k+1)*CH]),('X rows differ from the stream chunk',k);rows[k]=(iX,mX,iY,mY)
-        kl=jnp.float32(kappa*lam);zero=None;stats=[];cum=0.0
+        need_v=cell in ('natc2','mskc2','mskgp','mskrep')
+        kl=jnp.float32(kappa*lam);zero=None;cum=0.0
         with rt.mesh:
             log.append({'epoch':0,'margins':self.ev(m)})
-            if cell.startswith('nat'):
-                mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True;seq=rt.seq(ids,mask=mask);pref=rt.prefix(rt.base,seq);st_suf=clone_state(rt.state_suffix)
-            for k in range(NCH):
-                v=None;vn=0.0
-                if need_v and k in rows:
-                    iX,mX,iY,mY=rows[k]
-                    def gp(ii,mm):
-                        tg=np.concatenate([ii[1:],[rt.eos]]).astype(np.int32);pf=self.prefix_iso(rt.base,jnp.asarray(ii),jnp.asarray(loc),pm)
-                        return self.gP(m,jnp.asarray(ii),jnp.asarray(tg),jnp.asarray(mm),pf,jnp.asarray(seg),jnp.asarray(loc))
-                    gx=gp(iX,mX)
-                    if cell=='mskgp':v=gx
-                    else:gy=gp(iY,mY);v=jax.tree.map(lambda a,b:a-b,gx,gy);del gy
-                    del gx;vn=float(optax.global_norm(v))
-                if v is None:
-                    if zero is None:zero=jax.tree.map(jnp.zeros_like,m.inner_parameters())
-                    v=zero;klk=jnp.float32(0.0)
-                else:klk=kl
-                old=m
+            for ps in range(1,passes+1):
+                ids=np.asarray(streams[ps-1]);stats=[];rows={}
+                if need_v:
+                    rX,_=SP.chunk_rows(worlds[ps-1],swap,self.T.tok,rt.bos,rt.eos,'X');rY,_=SP.chunk_rows(worlds[ps-1],swap,self.T.tok,rt.bos,rt.eos,'Y')
+                    for (iX,mX,nX,inX),(iY,mY,nY,inY) in zip(rX,rY):
+                        k=inX['k'];assert inY['k']==k and list(iX)==list(ids[k*CH:(k+1)*CH]),('X rows differ from the stream chunk',k,ps);rows[k]=(iX,mX,iY,mY)
                 if cell.startswith('nat'):
-                    newp,st_suf,gn,coef,ce=self.nat_step(m,st_all,st_suf,rt.chunk(seq,k),pref[k*CH:(k+1)*CH],v,klk)
-                else:
-                    c=ids[k*CH:(k+1)*CH];tg=np.concatenate([ids[k*CH+1:(k+1)*CH+1],[rt.eos]])[:CH].astype(np.int32)
-                    pf=self.prefix_iso(rt.base,jnp.asarray(c),jnp.asarray(loc),pm)
-                    newp,gn,coef,ce=self.msk_step(m,st_all,jnp.asarray(c),jnp.asarray(tg),jnp.asarray(samenext),pf,jnp.asarray(seg),jnp.asarray(loc),v,klk,jnp.float32(0.0 if cell=='mskrep' else 1.0))
-                m=self.set_inner(m,newp)
-                un=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=un
-                stats.append({'k':k,'gnorm':float(gn),'coef':float(coef),'vnorm':vn,'has_v':bool(need_v and k in rows),'update_norm':un,'ce':float(ce)})
-            cs=[s_['coef'] for s_ in stats if cell!='mskrep']
-            log.append({'epoch':1,'cum_update_norm':cum,'chunks':stats,'clip_bind_frac':(sum(c_<1 for c_ in cs)/len(cs)) if cs else None,'mean_coef':(sum(cs)/len(cs)) if cs else None,
-                        'stream_hash':hashlib.sha256(np.asarray(ids,np.int64).tobytes()).hexdigest(),'inner_hash':reuse._hash_pytree(m.inner_parameters())[0],'margins':self.ev(m)})
-            print(f'  {cell} kappa {kappa} {"B" if swap else "A"} pass 1: cum upd {cum:.4f}, clip binds {log[-1]["clip_bind_frac"]}, chunks with v {sum(s_["has_v"] for s_ in stats)}',flush=True)
+                    mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True;seq=rt.seq(ids,mask=mask);pref=rt.prefix(rt.base,seq);st_suf=clone_state(rt.state_suffix)
+                for k in range(getattr(self,'nch_run',NCH)):
+                    v=None;vn=0.0
+                    if need_v and k in rows:
+                        iX,mX,iY,mY=rows[k]
+                        def gp(ii,mm):
+                            tg=np.concatenate([ii[1:],[rt.eos]]).astype(np.int32);pf=self.prefix_iso(rt.base,jnp.asarray(ii),jnp.asarray(loc),pm)
+                            return self.gP(m,jnp.asarray(ii),jnp.asarray(tg),jnp.asarray(mm),pf,jnp.asarray(seg),jnp.asarray(loc))
+                        gx=gp(iX,mX)
+                        if cell=='mskgp':v=gx
+                        else:gy=gp(iY,mY);v=jax.tree.map(lambda a,b:a-b,gx,gy);del gy
+                        del gx;vn=float(optax.global_norm(v))
+                    if v is None:
+                        if zero is None:zero=jax.tree.map(jnp.zeros_like,m.inner_parameters())
+                        v=zero;klk=jnp.float32(0.0)
+                    else:klk=kl
+                    old=m
+                    if cell.startswith('nat'):
+                        newp,st_suf,gn,coef,ce=self.nat_step(m,st_all,st_suf,rt.chunk(seq,k),pref[k*CH:(k+1)*CH],v,klk)
+                    else:
+                        c=ids[k*CH:(k+1)*CH];tg=np.concatenate([ids[k*CH+1:(k+1)*CH+1],[rt.eos]])[:CH].astype(np.int32)
+                        pf=self.prefix_iso(rt.base,jnp.asarray(c),jnp.asarray(loc),pm)
+                        newp,gn,coef,ce=self.msk_step(m,st_all,jnp.asarray(c),jnp.asarray(tg),jnp.asarray(samenext),pf,jnp.asarray(seg),jnp.asarray(loc),v,klk,jnp.float32(0.0 if cell=='mskrep' else 1.0))
+                    m=self.set_inner(m,newp)
+                    un=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=un
+                    stats.append({'k':k,'gnorm':float(gn),'coef':float(coef),'vnorm':vn,'has_v':bool(need_v and k in rows),'update_norm':un,'ce':float(ce)})
+                cs=[s_['coef'] for s_ in stats if cell!='mskrep']
+                log.append({'epoch':ps,'cum_update_norm':cum,'chunks':stats,'clip_bind_frac':(sum(c_<1 for c_ in cs)/len(cs)) if cs else None,'mean_coef':(sum(cs)/len(cs)) if cs else None,
+                            'stream_hash':hashlib.sha256(np.asarray(ids,np.int64).tobytes()).hexdigest(),'inner_hash':reuse._hash_pytree(m.inner_parameters())[0],'margins':self.ev(m)})
+                print(f'  {cell} kappa {kappa} {"B" if swap else "A"} pass {ps}: cum upd {cum:.4f}, clip binds {log[-1]["clip_bind_frac"]}, chunks with v {sum(s_["has_v"] for s_ in stats)}',flush=True)
         return log
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['nat','natc2','msk','mskc2','mskgp','mskrep'],required=True);ap.add_argument('--kappa',type=float,default=0.0)
-    ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],required=True);ap.add_argument('--tag',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--canary-only',action='store_true',help='kappa search: pass-1 canaries only (no state save, no readout)')
+    ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],required=True);ap.add_argument('--tag',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--canary-only',action='store_true',help='kappa search: pass-1 canaries only (no state save, no readout)');ap.add_argument('--passes',type=int,default=1,help='multi-pass (fresh filler) c2 2x2: passes > 1');ap.add_argument('--smoke-chunks',type=int,default=None,help='smoke test: only the first N chunks per pass (no files kept, must be used with --canary-only and a smoke tag)')
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True);assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     lam=float(json.load(open(OUT/f'onestep2_screen_checks_s{a.world_seed}.json'))['lam']['c2ch'])
-    tag=a.tag or (f'{a.cell}_k{a.kappa:g}'+('_cq' if a.canary_only else ''));lev='S2X2';rt=Runtime();SD=OUT/'states'/f'{lev}_{tag}_s{a.world_seed}'
+    tag=a.tag or (f'{a.cell}_k{a.kappa:g}'+('_cq' if a.canary_only else '')+(f'_mp{a.passes}' if a.passes>1 else ''));lev='S2X2';rt=Runtime();SD=OUT/'states'/f'{lev}_{tag}_s{a.world_seed}'
     L=Ladder2(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD);L.build2();L.canary_only=a.canary_only
+    if a.smoke_chunks:L.nch_run=a.smoke_chunks;assert a.canary_only and 'smoke' in tag
     json.dump({'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'clip':L.clip,'cell':a.cell,'kappa':a.kappa,'lam':lam,'xla_flags':os.environ.get('XLA_FLAGS')},open(OUT/f'meta_{lev}_{tag}_s{a.world_seed}.json','w'),indent=1)
     for w in a.worlds:
         f=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.json';fs=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.saved.json'
@@ -112,6 +118,6 @@ def main():
             d['sec_eval']=time.monotonic()-t0;json.dump(d,open(f,'w'));print('scored',f,round(d['sec_eval']),'s',flush=True);continue
         L.save_dir=SD/w;L._nsave=0;(SD/w).mkdir(parents=True,exist_ok=True)
         if fs.exists():print('exists',fs);continue
-        t0=time.monotonic();log=L.run_cell(w=='B',a.cell,a.kappa,lam)
+        t0=time.monotonic();log=L.run_cell(w=='B',a.cell,a.kappa,lam,a.passes)
         json.dump({'log':log,'sec':time.monotonic()-t0,'lam':lam,'kappa':a.kappa,'cell':a.cell},open(fs,'w'));print('saved',fs,round(time.monotonic()-t0),'s',flush=True)
 if __name__=='__main__':main()
