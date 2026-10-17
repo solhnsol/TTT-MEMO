@@ -1,423 +1,320 @@
 {
  "fails": [],
  "report": {
-  "nat_9001_clustered.json": {
-   "squad_tail_tokens_after_forbid_llama3": 45427,
-   "squad_tail_tokens_after_forbid_qwen": 46869,
-   "llama3_tokens": 66425,
+  "nat_9101_clustered.json": {
+   "squad_tail_tokens_after_forbid_llama3": 48902,
+   "squad_tail_tokens_after_forbid_qwen": 50516,
+   "llama3_tokens": 66223,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69444,
+   "qwen_tokens": 69332,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
-    "L3": 26,
-    "XP": 26,
-    "PS": 26,
-    "FN": 26,
-    "FP": 26,
-    "FN0": 26,
-    "FP0": 26,
-    "L3r": 26,
+    "L3": 20,
+    "XP": 20,
+    "PS": 20,
+    "FN": 20,
+    "FP": 20,
+    "FN0": 20,
+    "FP0": 20,
+    "L3r": 20,
     "L2": 0,
-    "L3b": 18,
+    "L3b": 12,
     "L3e": 0
    },
    "stats": {
-    "fact_repeats": 19,
-    "fact_repeats_in_8k": 19,
-    "in_window_ratio": 1.0,
-    "expo_tokens_llama": 16032
-   },
-   "fact_units_per_person": {
-    "1": 18,
-    "3": 2,
-    "4": 2,
-    "7": 1,
-    "2": 3
-   },
-   "natg": {
-    "UK": 12,
-    "IT": 4,
-    "DE": 4,
-    "US": 4,
-    "RU": 2
-   },
-   "gender": {
-    "m": 24,
-    "f": 2
-   },
-   "same_region_pairs": 0,
-   "region_unknown_pairs": 7
-  },
-  "nat_9001_factonly.json": {
-   "squad_tail_tokens_after_forbid_llama3": 45427,
-   "squad_tail_tokens_after_forbid_qwen": 46869,
-   "llama3_tokens": 66488,
-   "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69405,
-   "qwen_last_expo_chunk": 49,
-   "fam_sizes": {
-    "L3": 26,
-    "XP": 26,
-    "PS": 26,
-    "FN": 26,
-    "FP": 26,
-    "FN0": 26,
-    "FP0": 26,
-    "L3r": 26,
-    "L2": 0,
-    "L3b": 18,
-    "L3e": 0
-   },
-   "stats": {
-    "fact_repeats": 19,
-    "fact_repeats_in_8k": 14,
-    "in_window_ratio": 0.7368421052631579,
-    "expo_tokens_llama": 16032
-   },
-   "fact_units_per_person": {
-    "1": 18,
-    "3": 2,
-    "4": 2,
-    "7": 1,
-    "2": 3
-   },
-   "natg": {
-    "UK": 12,
-    "IT": 4,
-    "DE": 4,
-    "US": 4,
-    "RU": 2
-   },
-   "gender": {
-    "m": 24,
-    "f": 2
-   },
-   "same_region_pairs": 0,
-   "region_unknown_pairs": 7
-  },
-  "nat_9001_spread.json": {
-   "squad_tail_tokens_after_forbid_llama3": 45427,
-   "squad_tail_tokens_after_forbid_qwen": 46869,
-   "llama3_tokens": 66425,
-   "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69444,
-   "qwen_last_expo_chunk": 49,
-   "fam_sizes": {
-    "L3": 26,
-    "XP": 26,
-    "PS": 26,
-    "FN": 26,
-    "FP": 26,
-    "FN0": 26,
-    "FP0": 26,
-    "L3r": 26,
-    "L2": 0,
-    "L3b": 18,
-    "L3e": 0
-   },
-   "stats": {
-    "fact_repeats": 19,
-    "fact_repeats_in_8k": 14,
-    "in_window_ratio": 0.7368421052631579,
-    "expo_tokens_llama": 16032
-   },
-   "fact_units_per_person": {
-    "1": 18,
-    "3": 2,
-    "4": 2,
-    "7": 1,
-    "2": 3
-   },
-   "natg": {
-    "UK": 12,
-    "IT": 4,
-    "DE": 4,
-    "US": 4,
-    "RU": 2
-   },
-   "gender": {
-    "m": 24,
-    "f": 2
-   },
-   "same_region_pairs": 0,
-   "region_unknown_pairs": 7
-  },
-  "nat_9002_clustered.json": {
-   "squad_tail_tokens_after_forbid_llama3": 37681,
-   "squad_tail_tokens_after_forbid_qwen": 38744,
-   "llama3_tokens": 66062,
-   "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 68912,
-   "qwen_last_expo_chunk": 49,
-   "fam_sizes": {
-    "L3": 30,
-    "XP": 30,
-    "PS": 30,
-    "FN": 30,
-    "FP": 30,
-    "FN0": 30,
-    "FP0": 30,
-    "L3r": 30,
-    "L2": 0,
-    "L3b": 17,
-    "L3e": 2
-   },
-   "stats": {
-    "fact_repeats": 28,
-    "fact_repeats_in_8k": 28,
-    "in_window_ratio": 1.0,
-    "expo_tokens_llama": 20640
-   },
-   "fact_units_per_person": {
-    "1": 19,
-    "2": 3,
-    "4": 2,
-    "5": 2,
-    "3": 3,
-    "6": 1
-   },
-   "natg": {
-    "US": 8,
-    "DE": 4,
-    "IE": 2,
-    "UK": 6,
-    "CN": 2,
-    "IT": 4,
-    "BE": 2,
-    "FR": 2
-   },
-   "gender": {
-    "m": 28,
-    "f": 2
-   },
-   "same_region_pairs": 0,
-   "region_unknown_pairs": 10
-  },
-  "nat_9002_factonly.json": {
-   "squad_tail_tokens_after_forbid_llama3": 37681,
-   "squad_tail_tokens_after_forbid_qwen": 38744,
-   "llama3_tokens": 66352,
-   "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69175,
-   "qwen_last_expo_chunk": 49,
-   "fam_sizes": {
-    "L3": 30,
-    "XP": 30,
-    "PS": 30,
-    "FN": 30,
-    "FP": 30,
-    "FN0": 30,
-    "FP0": 30,
-    "L3r": 30,
-    "L2": 0,
-    "L3b": 17,
-    "L3e": 2
-   },
-   "stats": {
-    "fact_repeats": 28,
-    "fact_repeats_in_8k": 19,
-    "in_window_ratio": 0.6785714285714286,
-    "expo_tokens_llama": 20640
-   },
-   "fact_units_per_person": {
-    "1": 19,
-    "2": 3,
-    "4": 2,
-    "5": 2,
-    "3": 3,
-    "6": 1
-   },
-   "natg": {
-    "US": 8,
-    "DE": 4,
-    "IE": 2,
-    "UK": 6,
-    "CN": 2,
-    "IT": 4,
-    "BE": 2,
-    "FR": 2
-   },
-   "gender": {
-    "m": 28,
-    "f": 2
-   },
-   "same_region_pairs": 0,
-   "region_unknown_pairs": 10
-  },
-  "nat_9002_spread.json": {
-   "squad_tail_tokens_after_forbid_llama3": 37681,
-   "squad_tail_tokens_after_forbid_qwen": 38744,
-   "llama3_tokens": 66062,
-   "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 68912,
-   "qwen_last_expo_chunk": 49,
-   "fam_sizes": {
-    "L3": 30,
-    "XP": 30,
-    "PS": 30,
-    "FN": 30,
-    "FP": 30,
-    "FN0": 30,
-    "FP0": 30,
-    "L3r": 30,
-    "L2": 0,
-    "L3b": 17,
-    "L3e": 2
-   },
-   "stats": {
-    "fact_repeats": 28,
-    "fact_repeats_in_8k": 19,
-    "in_window_ratio": 0.6785714285714286,
-    "expo_tokens_llama": 20640
-   },
-   "fact_units_per_person": {
-    "1": 19,
-    "2": 3,
-    "4": 2,
-    "5": 2,
-    "3": 3,
-    "6": 1
-   },
-   "natg": {
-    "US": 8,
-    "DE": 4,
-    "IE": 2,
-    "UK": 6,
-    "CN": 2,
-    "IT": 4,
-    "BE": 2,
-    "FR": 2
-   },
-   "gender": {
-    "m": 28,
-    "f": 2
-   },
-   "same_region_pairs": 0,
-   "region_unknown_pairs": 10
-  },
-  "nat_9003_clustered.json": {
-   "squad_tail_tokens_after_forbid_llama3": 45377,
-   "squad_tail_tokens_after_forbid_qwen": 46793,
-   "llama3_tokens": 66213,
-   "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69280,
-   "qwen_last_expo_chunk": 49,
-   "fam_sizes": {
-    "L3": 30,
-    "XP": 30,
-    "PS": 30,
-    "FN": 30,
-    "FP": 30,
-    "FN0": 30,
-    "FP0": 30,
-    "L3r": 30,
-    "L2": 0,
-    "L3b": 16,
-    "L3e": 0
-   },
-   "stats": {
-    "fact_repeats": 27,
-    "fact_repeats_in_8k": 27,
-    "in_window_ratio": 1.0,
-    "expo_tokens_llama": 15423
-   },
-   "fact_units_per_person": {
-    "2": 7,
-    "1": 18,
-    "5": 1,
-    "10": 1,
-    "4": 1,
-    "3": 2
-   },
-   "natg": {
-    "DE": 6,
-    "UK": 12,
-    "US": 2,
-    "FR": 4,
-    "IT": 6
-   },
-   "gender": {
-    "m": 30
-   },
-   "same_region_pairs": 0,
-   "region_unknown_pairs": 8
-  },
-  "nat_9003_factonly.json": {
-   "squad_tail_tokens_after_forbid_llama3": 45377,
-   "squad_tail_tokens_after_forbid_qwen": 46793,
-   "llama3_tokens": 66534,
-   "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69600,
-   "qwen_last_expo_chunk": 49,
-   "fam_sizes": {
-    "L3": 30,
-    "XP": 30,
-    "PS": 30,
-    "FN": 30,
-    "FP": 30,
-    "FN0": 30,
-    "FP0": 30,
-    "L3r": 30,
-    "L2": 0,
-    "L3b": 16,
-    "L3e": 0
-   },
-   "stats": {
-    "fact_repeats": 27,
+    "fact_repeats": 11,
     "fact_repeats_in_8k": 11,
-    "in_window_ratio": 0.4074074074074074,
-    "expo_tokens_llama": 15423
+    "in_window_ratio": 1.0,
+    "expo_tokens_llama": 10833
    },
    "fact_units_per_person": {
-    "2": 7,
-    "1": 18,
-    "5": 1,
-    "10": 1,
-    "4": 1,
-    "3": 2
+    "1": 14,
+    "3": 1,
+    "4": 2,
+    "2": 3
    },
    "natg": {
-    "DE": 6,
-    "UK": 12,
-    "US": 2,
-    "FR": 4,
-    "IT": 6
+    "UK": 10,
+    "IT": 2,
+    "DE": 4,
+    "US": 4
    },
    "gender": {
-    "m": 30
+    "m": 18,
+    "f": 2
    },
    "same_region_pairs": 0,
-   "region_unknown_pairs": 8
+   "region_unknown_pairs": 5
   },
-  "nat_9003_spread.json": {
-   "squad_tail_tokens_after_forbid_llama3": 45377,
-   "squad_tail_tokens_after_forbid_qwen": 46793,
-   "llama3_tokens": 66213,
-   "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69280,
+  "nat_9101_factonly.json": {
+   "squad_tail_tokens_after_forbid_llama3": 48902,
+   "squad_tail_tokens_after_forbid_qwen": 50516,
+   "llama3_tokens": 66437,
+   "llama3_last_expo_chunk": 46,
+   "qwen_tokens": 69346,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
-    "L3": 30,
-    "XP": 30,
-    "PS": 30,
-    "FN": 30,
-    "FP": 30,
-    "FN0": 30,
-    "FP0": 30,
-    "L3r": 30,
+    "L3": 20,
+    "XP": 20,
+    "PS": 20,
+    "FN": 20,
+    "FP": 20,
+    "FN0": 20,
+    "FP0": 20,
+    "L3r": 20,
     "L2": 0,
-    "L3b": 16,
+    "L3b": 12,
     "L3e": 0
    },
    "stats": {
-    "fact_repeats": 27,
-    "fact_repeats_in_8k": 11,
-    "in_window_ratio": 0.4074074074074074,
-    "expo_tokens_llama": 15423
+    "fact_repeats": 11,
+    "fact_repeats_in_8k": 3,
+    "in_window_ratio": 0.2727272727272727,
+    "expo_tokens_llama": 10833
    },
    "fact_units_per_person": {
-    "2": 7,
-    "1": 18,
+    "1": 14,
+    "3": 1,
+    "4": 2,
+    "2": 3
+   },
+   "natg": {
+    "UK": 10,
+    "IT": 2,
+    "DE": 4,
+    "US": 4
+   },
+   "gender": {
+    "m": 18,
+    "f": 2
+   },
+   "same_region_pairs": 0,
+   "region_unknown_pairs": 5
+  },
+  "nat_9101_spread.json": {
+   "squad_tail_tokens_after_forbid_llama3": 48902,
+   "squad_tail_tokens_after_forbid_qwen": 50516,
+   "llama3_tokens": 66223,
+   "llama3_last_expo_chunk": 47,
+   "qwen_tokens": 69332,
+   "qwen_last_expo_chunk": 49,
+   "fam_sizes": {
+    "L3": 20,
+    "XP": 20,
+    "PS": 20,
+    "FN": 20,
+    "FP": 20,
+    "FN0": 20,
+    "FP0": 20,
+    "L3r": 20,
+    "L2": 0,
+    "L3b": 12,
+    "L3e": 0
+   },
+   "stats": {
+    "fact_repeats": 11,
+    "fact_repeats_in_8k": 3,
+    "in_window_ratio": 0.2727272727272727,
+    "expo_tokens_llama": 10833
+   },
+   "fact_units_per_person": {
+    "1": 14,
+    "3": 1,
+    "4": 2,
+    "2": 3
+   },
+   "natg": {
+    "UK": 10,
+    "IT": 2,
+    "DE": 4,
+    "US": 4
+   },
+   "gender": {
+    "m": 18,
+    "f": 2
+   },
+   "same_region_pairs": 0,
+   "region_unknown_pairs": 5
+  },
+  "nat_9102_clustered.json": {
+   "squad_tail_tokens_after_forbid_llama3": 38702,
+   "squad_tail_tokens_after_forbid_qwen": 39758,
+   "llama3_tokens": 66170,
+   "llama3_last_expo_chunk": 47,
+   "qwen_tokens": 69181,
+   "qwen_last_expo_chunk": 49,
+   "fam_sizes": {
+    "L3": 26,
+    "XP": 26,
+    "PS": 26,
+    "FN": 26,
+    "FP": 26,
+    "FN0": 26,
+    "FP0": 26,
+    "L3r": 26,
+    "L2": 0,
+    "L3b": 13,
+    "L3e": 2
+   },
+   "stats": {
+    "fact_repeats": 19,
+    "fact_repeats_in_8k": 19,
+    "in_window_ratio": 1.0,
+    "expo_tokens_llama": 16982
+   },
+   "fact_units_per_person": {
+    "1": 17,
+    "2": 3,
+    "4": 2,
+    "5": 1,
+    "3": 3
+   },
+   "natg": {
+    "US": 8,
+    "DE": 4,
+    "IE": 2,
+    "UK": 4,
+    "CN": 2,
+    "BE": 2,
+    "IT": 2,
+    "FR": 2
+   },
+   "gender": {
+    "m": 24,
+    "f": 2
+   },
+   "same_region_pairs": 0,
+   "region_unknown_pairs": 9
+  },
+  "nat_9102_factonly.json": {
+   "squad_tail_tokens_after_forbid_llama3": 38702,
+   "squad_tail_tokens_after_forbid_qwen": 39758,
+   "llama3_tokens": 66449,
+   "llama3_last_expo_chunk": 44,
+   "qwen_tokens": 69535,
+   "qwen_last_expo_chunk": 46,
+   "fam_sizes": {
+    "L3": 26,
+    "XP": 26,
+    "PS": 26,
+    "FN": 26,
+    "FP": 26,
+    "FN0": 26,
+    "FP0": 26,
+    "L3r": 26,
+    "L2": 0,
+    "L3b": 13,
+    "L3e": 2
+   },
+   "stats": {
+    "fact_repeats": 19,
+    "fact_repeats_in_8k": 10,
+    "in_window_ratio": 0.5263157894736842,
+    "expo_tokens_llama": 16982
+   },
+   "fact_units_per_person": {
+    "1": 17,
+    "2": 3,
+    "4": 2,
+    "5": 1,
+    "3": 3
+   },
+   "natg": {
+    "US": 8,
+    "DE": 4,
+    "IE": 2,
+    "UK": 4,
+    "CN": 2,
+    "BE": 2,
+    "IT": 2,
+    "FR": 2
+   },
+   "gender": {
+    "m": 24,
+    "f": 2
+   },
+   "same_region_pairs": 0,
+   "region_unknown_pairs": 9
+  },
+  "nat_9102_spread.json": {
+   "squad_tail_tokens_after_forbid_llama3": 38702,
+   "squad_tail_tokens_after_forbid_qwen": 39758,
+   "llama3_tokens": 66170,
+   "llama3_last_expo_chunk": 47,
+   "qwen_tokens": 69181,
+   "qwen_last_expo_chunk": 49,
+   "fam_sizes": {
+    "L3": 26,
+    "XP": 26,
+    "PS": 26,
+    "FN": 26,
+    "FP": 26,
+    "FN0": 26,
+    "FP0": 26,
+    "L3r": 26,
+    "L2": 0,
+    "L3b": 13,
+    "L3e": 2
+   },
+   "stats": {
+    "fact_repeats": 19,
+    "fact_repeats_in_8k": 9,
+    "in_window_ratio": 0.47368421052631576,
+    "expo_tokens_llama": 16982
+   },
+   "fact_units_per_person": {
+    "1": 17,
+    "2": 3,
+    "4": 2,
+    "5": 1,
+    "3": 3
+   },
+   "natg": {
+    "US": 8,
+    "DE": 4,
+    "IE": 2,
+    "UK": 4,
+    "CN": 2,
+    "BE": 2,
+    "IT": 2,
+    "FR": 2
+   },
+   "gender": {
+    "m": 24,
+    "f": 2
+   },
+   "same_region_pairs": 0,
+   "region_unknown_pairs": 9
+  },
+  "nat_9103_clustered.json": {
+   "squad_tail_tokens_after_forbid_llama3": 39835,
+   "squad_tail_tokens_after_forbid_qwen": 40948,
+   "llama3_tokens": 66320,
+   "llama3_last_expo_chunk": 47,
+   "qwen_tokens": 69188,
+   "qwen_last_expo_chunk": 49,
+   "fam_sizes": {
+    "L3": 24,
+    "XP": 24,
+    "PS": 24,
+    "FN": 24,
+    "FP": 24,
+    "FN0": 24,
+    "FP0": 24,
+    "L3r": 24,
+    "L2": 0,
+    "L3b": 13,
+    "L3e": 0
+   },
+   "stats": {
+    "fact_repeats": 26,
+    "fact_repeats_in_8k": 26,
+    "in_window_ratio": 1.0,
+    "expo_tokens_llama": 13140
+   },
+   "fact_units_per_person": {
+    "2": 6,
+    "1": 13,
     "5": 1,
     "10": 1,
     "4": 1,
@@ -425,33 +322,127 @@
    },
    "natg": {
     "DE": 6,
-    "UK": 12,
+    "UK": 10,
     "US": 2,
     "FR": 4,
-    "IT": 6
+    "IT": 2
    },
    "gender": {
-    "m": 30
+    "m": 24
    },
    "same_region_pairs": 0,
-   "region_unknown_pairs": 8
+   "region_unknown_pairs": 7
   },
-  "nat_9004_clustered.json": {
-   "squad_tail_tokens_after_forbid_llama3": 44954,
-   "squad_tail_tokens_after_forbid_qwen": 46381,
-   "llama3_tokens": 66262,
+  "nat_9103_factonly.json": {
+   "squad_tail_tokens_after_forbid_llama3": 39835,
+   "squad_tail_tokens_after_forbid_qwen": 40948,
+   "llama3_tokens": 66442,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69040,
+   "qwen_tokens": 69270,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
-    "L3": 30,
-    "XP": 30,
-    "PS": 30,
-    "FN": 30,
-    "FP": 30,
-    "FN0": 30,
-    "FP0": 30,
-    "L3r": 30,
+    "L3": 24,
+    "XP": 24,
+    "PS": 24,
+    "FN": 24,
+    "FP": 24,
+    "FN0": 24,
+    "FP0": 24,
+    "L3r": 24,
+    "L2": 0,
+    "L3b": 13,
+    "L3e": 0
+   },
+   "stats": {
+    "fact_repeats": 26,
+    "fact_repeats_in_8k": 10,
+    "in_window_ratio": 0.38461538461538464,
+    "expo_tokens_llama": 13140
+   },
+   "fact_units_per_person": {
+    "2": 6,
+    "1": 13,
+    "5": 1,
+    "10": 1,
+    "4": 1,
+    "3": 2
+   },
+   "natg": {
+    "DE": 6,
+    "UK": 10,
+    "US": 2,
+    "FR": 4,
+    "IT": 2
+   },
+   "gender": {
+    "m": 24
+   },
+   "same_region_pairs": 0,
+   "region_unknown_pairs": 7
+  },
+  "nat_9103_spread.json": {
+   "squad_tail_tokens_after_forbid_llama3": 39835,
+   "squad_tail_tokens_after_forbid_qwen": 40948,
+   "llama3_tokens": 66320,
+   "llama3_last_expo_chunk": 47,
+   "qwen_tokens": 69188,
+   "qwen_last_expo_chunk": 49,
+   "fam_sizes": {
+    "L3": 24,
+    "XP": 24,
+    "PS": 24,
+    "FN": 24,
+    "FP": 24,
+    "FN0": 24,
+    "FP0": 24,
+    "L3r": 24,
+    "L2": 0,
+    "L3b": 13,
+    "L3e": 0
+   },
+   "stats": {
+    "fact_repeats": 26,
+    "fact_repeats_in_8k": 10,
+    "in_window_ratio": 0.38461538461538464,
+    "expo_tokens_llama": 13140
+   },
+   "fact_units_per_person": {
+    "2": 6,
+    "1": 13,
+    "5": 1,
+    "10": 1,
+    "4": 1,
+    "3": 2
+   },
+   "natg": {
+    "DE": 6,
+    "UK": 10,
+    "US": 2,
+    "FR": 4,
+    "IT": 2
+   },
+   "gender": {
+    "m": 24
+   },
+   "same_region_pairs": 0,
+   "region_unknown_pairs": 7
+  },
+  "nat_9104_clustered.json": {
+   "squad_tail_tokens_after_forbid_llama3": 45447,
+   "squad_tail_tokens_after_forbid_qwen": 46904,
+   "llama3_tokens": 66344,
+   "llama3_last_expo_chunk": 47,
+   "qwen_tokens": 69285,
+   "qwen_last_expo_chunk": 49,
+   "fam_sizes": {
+    "L3": 26,
+    "XP": 26,
+    "PS": 26,
+    "FN": 26,
+    "FP": 26,
+    "FN0": 26,
+    "FP0": 26,
+    "L3r": 26,
     "L2": 0,
     "L3b": 14,
     "L3e": 0
@@ -460,10 +451,10 @@
     "fact_repeats": 12,
     "fact_repeats_in_8k": 12,
     "in_window_ratio": 1.0,
-    "expo_tokens_llama": 14302
+    "expo_tokens_llama": 13759
    },
    "fact_units_per_person": {
-    "1": 23,
+    "1": 19,
     "6": 1,
     "2": 5,
     "3": 1
@@ -471,34 +462,34 @@
    "natg": {
     "DE": 8,
     "US": 8,
-    "FR": 4,
     "NL": 2,
-    "IT": 4,
     "UK": 2,
+    "IT": 2,
+    "FR": 2,
     "CA": 2
    },
    "gender": {
-    "m": 30
+    "m": 26
    },
    "same_region_pairs": 0,
    "region_unknown_pairs": 7
   },
-  "nat_9004_factonly.json": {
-   "squad_tail_tokens_after_forbid_llama3": 44954,
-   "squad_tail_tokens_after_forbid_qwen": 46381,
-   "llama3_tokens": 66423,
+  "nat_9104_factonly.json": {
+   "squad_tail_tokens_after_forbid_llama3": 45447,
+   "squad_tail_tokens_after_forbid_qwen": 46904,
+   "llama3_tokens": 66485,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69089,
-   "qwen_last_expo_chunk": 48,
+   "qwen_tokens": 69342,
+   "qwen_last_expo_chunk": 49,
    "fam_sizes": {
-    "L3": 30,
-    "XP": 30,
-    "PS": 30,
-    "FN": 30,
-    "FP": 30,
-    "FN0": 30,
-    "FP0": 30,
-    "L3r": 30,
+    "L3": 26,
+    "XP": 26,
+    "PS": 26,
+    "FN": 26,
+    "FP": 26,
+    "FN0": 26,
+    "FP0": 26,
+    "L3r": 26,
     "L2": 0,
     "L3b": 14,
     "L3e": 0
@@ -507,10 +498,10 @@
     "fact_repeats": 12,
     "fact_repeats_in_8k": 3,
     "in_window_ratio": 0.25,
-    "expo_tokens_llama": 14302
+    "expo_tokens_llama": 13759
    },
    "fact_units_per_person": {
-    "1": 23,
+    "1": 19,
     "6": 1,
     "2": 5,
     "3": 1
@@ -518,34 +509,34 @@
    "natg": {
     "DE": 8,
     "US": 8,
-    "FR": 4,
     "NL": 2,
-    "IT": 4,
     "UK": 2,
+    "IT": 2,
+    "FR": 2,
     "CA": 2
    },
    "gender": {
-    "m": 30
+    "m": 26
    },
    "same_region_pairs": 0,
    "region_unknown_pairs": 7
   },
-  "nat_9004_spread.json": {
-   "squad_tail_tokens_after_forbid_llama3": 44954,
-   "squad_tail_tokens_after_forbid_qwen": 46381,
-   "llama3_tokens": 66262,
+  "nat_9104_spread.json": {
+   "squad_tail_tokens_after_forbid_llama3": 45447,
+   "squad_tail_tokens_after_forbid_qwen": 46904,
+   "llama3_tokens": 66344,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69040,
+   "qwen_tokens": 69285,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
-    "L3": 30,
-    "XP": 30,
-    "PS": 30,
-    "FN": 30,
-    "FP": 30,
-    "FN0": 30,
-    "FP0": 30,
-    "L3r": 30,
+    "L3": 26,
+    "XP": 26,
+    "PS": 26,
+    "FN": 26,
+    "FP": 26,
+    "FN0": 26,
+    "FP0": 26,
+    "L3r": 26,
     "L2": 0,
     "L3b": 14,
     "L3e": 0
@@ -554,10 +545,10 @@
     "fact_repeats": 12,
     "fact_repeats_in_8k": 3,
     "in_window_ratio": 0.25,
-    "expo_tokens_llama": 14302
+    "expo_tokens_llama": 13759
    },
    "fact_units_per_person": {
-    "1": 23,
+    "1": 19,
     "6": 1,
     "2": 5,
     "3": 1
@@ -565,311 +556,308 @@
    "natg": {
     "DE": 8,
     "US": 8,
-    "FR": 4,
     "NL": 2,
-    "IT": 4,
     "UK": 2,
+    "IT": 2,
+    "FR": 2,
     "CA": 2
    },
    "gender": {
-    "m": 30
+    "m": 26
    },
    "same_region_pairs": 0,
    "region_unknown_pairs": 7
   },
-  "nat_9005_clustered.json": {
-   "squad_tail_tokens_after_forbid_llama3": 45503,
-   "squad_tail_tokens_after_forbid_qwen": 46911,
-   "llama3_tokens": 66257,
+  "nat_9105_clustered.json": {
+   "squad_tail_tokens_after_forbid_llama3": 43348,
+   "squad_tail_tokens_after_forbid_qwen": 44659,
+   "llama3_tokens": 66254,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69055,
+   "qwen_tokens": 68940,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
-    "L3": 28,
-    "XP": 28,
-    "PS": 28,
-    "FN": 28,
-    "FP": 28,
-    "FN0": 28,
-    "FP0": 28,
-    "L3r": 28,
+    "L3": 26,
+    "XP": 26,
+    "PS": 26,
+    "FN": 26,
+    "FP": 26,
+    "FN0": 26,
+    "FP0": 26,
+    "L3r": 26,
     "L2": 0,
     "L3b": 8,
     "L3e": 0
    },
    "stats": {
-    "fact_repeats": 22,
-    "fact_repeats_in_8k": 22,
+    "fact_repeats": 17,
+    "fact_repeats_in_8k": 17,
     "in_window_ratio": 1.0,
-    "expo_tokens_llama": 15850
+    "expo_tokens_llama": 14710
    },
    "fact_units_per_person": {
     "4": 1,
-    "2": 5,
+    "2": 4,
     "3": 2,
     "1": 18,
-    "7": 1,
-    "5": 1
+    "7": 1
    },
    "natg": {
     "DE": 2,
     "US": 4,
     "UK": 6,
     "BE": 2,
-    "FR": 6,
+    "FR": 4,
     "NO": 2,
     "IE": 2,
     "NL": 2,
     "IT": 2
    },
    "gender": {
-    "m": 26,
+    "m": 24,
     "f": 2
    },
    "same_region_pairs": 0,
-   "region_unknown_pairs": 7
+   "region_unknown_pairs": 6
   },
-  "nat_9005_factonly.json": {
-   "squad_tail_tokens_after_forbid_llama3": 45503,
-   "squad_tail_tokens_after_forbid_qwen": 46911,
-   "llama3_tokens": 66473,
+  "nat_9105_factonly.json": {
+   "squad_tail_tokens_after_forbid_llama3": 43348,
+   "squad_tail_tokens_after_forbid_qwen": 44659,
+   "llama3_tokens": 66484,
    "llama3_last_expo_chunk": 46,
-   "qwen_tokens": 69258,
+   "qwen_tokens": 69218,
    "qwen_last_expo_chunk": 48,
    "fam_sizes": {
-    "L3": 28,
-    "XP": 28,
-    "PS": 28,
-    "FN": 28,
-    "FP": 28,
-    "FN0": 28,
-    "FP0": 28,
-    "L3r": 28,
+    "L3": 26,
+    "XP": 26,
+    "PS": 26,
+    "FN": 26,
+    "FP": 26,
+    "FN0": 26,
+    "FP0": 26,
+    "L3r": 26,
     "L2": 0,
     "L3b": 8,
     "L3e": 0
    },
    "stats": {
-    "fact_repeats": 22,
-    "fact_repeats_in_8k": 15,
-    "in_window_ratio": 0.6818181818181818,
-    "expo_tokens_llama": 15850
+    "fact_repeats": 17,
+    "fact_repeats_in_8k": 10,
+    "in_window_ratio": 0.5882352941176471,
+    "expo_tokens_llama": 14710
    },
    "fact_units_per_person": {
     "4": 1,
-    "2": 5,
+    "2": 4,
     "3": 2,
     "1": 18,
-    "7": 1,
-    "5": 1
+    "7": 1
    },
    "natg": {
     "DE": 2,
     "US": 4,
     "UK": 6,
     "BE": 2,
-    "FR": 6,
+    "FR": 4,
     "NO": 2,
     "IE": 2,
     "NL": 2,
     "IT": 2
    },
    "gender": {
-    "m": 26,
+    "m": 24,
     "f": 2
    },
    "same_region_pairs": 0,
-   "region_unknown_pairs": 7
+   "region_unknown_pairs": 6
   },
-  "nat_9005_spread.json": {
-   "squad_tail_tokens_after_forbid_llama3": 45503,
-   "squad_tail_tokens_after_forbid_qwen": 46911,
-   "llama3_tokens": 66257,
+  "nat_9105_spread.json": {
+   "squad_tail_tokens_after_forbid_llama3": 43348,
+   "squad_tail_tokens_after_forbid_qwen": 44659,
+   "llama3_tokens": 66254,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69055,
+   "qwen_tokens": 68940,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
-    "L3": 28,
-    "XP": 28,
-    "PS": 28,
-    "FN": 28,
-    "FP": 28,
-    "FN0": 28,
-    "FP0": 28,
-    "L3r": 28,
+    "L3": 26,
+    "XP": 26,
+    "PS": 26,
+    "FN": 26,
+    "FP": 26,
+    "FN0": 26,
+    "FP0": 26,
+    "L3r": 26,
     "L2": 0,
     "L3b": 8,
     "L3e": 0
    },
    "stats": {
-    "fact_repeats": 22,
-    "fact_repeats_in_8k": 13,
-    "in_window_ratio": 0.5909090909090909,
-    "expo_tokens_llama": 15850
+    "fact_repeats": 17,
+    "fact_repeats_in_8k": 12,
+    "in_window_ratio": 0.7058823529411765,
+    "expo_tokens_llama": 14710
    },
    "fact_units_per_person": {
     "4": 1,
-    "2": 5,
+    "2": 4,
     "3": 2,
     "1": 18,
-    "7": 1,
-    "5": 1
+    "7": 1
    },
    "natg": {
     "DE": 2,
     "US": 4,
     "UK": 6,
     "BE": 2,
-    "FR": 6,
+    "FR": 4,
     "NO": 2,
     "IE": 2,
     "NL": 2,
     "IT": 2
    },
    "gender": {
-    "m": 26,
+    "m": 24,
     "f": 2
    },
    "same_region_pairs": 0,
-   "region_unknown_pairs": 7
+   "region_unknown_pairs": 6
   },
-  "nat_9006_clustered.json": {
-   "squad_tail_tokens_after_forbid_llama3": 42398,
-   "squad_tail_tokens_after_forbid_qwen": 43717,
-   "llama3_tokens": 66318,
+  "nat_9106_clustered.json": {
+   "squad_tail_tokens_after_forbid_llama3": 41590,
+   "squad_tail_tokens_after_forbid_qwen": 42849,
+   "llama3_tokens": 66183,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69202,
+   "qwen_tokens": 69105,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
-    "L3": 20,
-    "XP": 20,
-    "PS": 20,
-    "FN": 20,
-    "FP": 20,
-    "FN0": 20,
-    "FP0": 20,
-    "L3r": 20,
+    "L3": 18,
+    "XP": 18,
+    "PS": 18,
+    "FN": 18,
+    "FP": 18,
+    "FN0": 18,
+    "FP0": 18,
+    "L3r": 18,
     "L2": 0,
-    "L3b": 13,
+    "L3b": 12,
     "L3e": 0
    },
    "stats": {
-    "fact_repeats": 20,
-    "fact_repeats_in_8k": 20,
+    "fact_repeats": 18,
+    "fact_repeats_in_8k": 18,
     "in_window_ratio": 1.0,
-    "expo_tokens_llama": 13690
+    "expo_tokens_llama": 13141
    },
    "fact_units_per_person": {
     "4": 1,
     "3": 3,
     "1": 9,
     "6": 1,
-    "2": 6
+    "2": 4
    },
    "natg": {
     "DE": 6,
     "US": 4,
-    "IT": 4,
+    "IT": 2,
     "CA": 2,
     "SE": 2,
     "UK": 2
    },
    "gender": {
-    "m": 20
+    "m": 18
    },
    "same_region_pairs": 0,
    "region_unknown_pairs": 8
   },
-  "nat_9006_factonly.json": {
-   "squad_tail_tokens_after_forbid_llama3": 42398,
-   "squad_tail_tokens_after_forbid_qwen": 43717,
-   "llama3_tokens": 66556,
-   "llama3_last_expo_chunk": 46,
-   "qwen_tokens": 69355,
-   "qwen_last_expo_chunk": 49,
-   "fam_sizes": {
-    "L3": 20,
-    "XP": 20,
-    "PS": 20,
-    "FN": 20,
-    "FP": 20,
-    "FN0": 20,
-    "FP0": 20,
-    "L3r": 20,
-    "L2": 0,
-    "L3b": 13,
-    "L3e": 0
-   },
-   "stats": {
-    "fact_repeats": 20,
-    "fact_repeats_in_8k": 9,
-    "in_window_ratio": 0.45,
-    "expo_tokens_llama": 13690
-   },
-   "fact_units_per_person": {
-    "4": 1,
-    "3": 3,
-    "1": 9,
-    "6": 1,
-    "2": 6
-   },
-   "natg": {
-    "DE": 6,
-    "US": 4,
-    "IT": 4,
-    "CA": 2,
-    "SE": 2,
-    "UK": 2
-   },
-   "gender": {
-    "m": 20
-   },
-   "same_region_pairs": 0,
-   "region_unknown_pairs": 8
-  },
-  "nat_9006_spread.json": {
-   "squad_tail_tokens_after_forbid_llama3": 42398,
-   "squad_tail_tokens_after_forbid_qwen": 43717,
-   "llama3_tokens": 66318,
+  "nat_9106_factonly.json": {
+   "squad_tail_tokens_after_forbid_llama3": 41590,
+   "squad_tail_tokens_after_forbid_qwen": 42849,
+   "llama3_tokens": 66385,
    "llama3_last_expo_chunk": 47,
-   "qwen_tokens": 69202,
+   "qwen_tokens": 69296,
    "qwen_last_expo_chunk": 49,
    "fam_sizes": {
-    "L3": 20,
-    "XP": 20,
-    "PS": 20,
-    "FN": 20,
-    "FP": 20,
-    "FN0": 20,
-    "FP0": 20,
-    "L3r": 20,
+    "L3": 18,
+    "XP": 18,
+    "PS": 18,
+    "FN": 18,
+    "FP": 18,
+    "FN0": 18,
+    "FP0": 18,
+    "L3r": 18,
     "L2": 0,
-    "L3b": 13,
+    "L3b": 12,
     "L3e": 0
    },
    "stats": {
-    "fact_repeats": 20,
+    "fact_repeats": 18,
     "fact_repeats_in_8k": 9,
-    "in_window_ratio": 0.45,
-    "expo_tokens_llama": 13690
+    "in_window_ratio": 0.5,
+    "expo_tokens_llama": 13141
    },
    "fact_units_per_person": {
     "4": 1,
     "3": 3,
     "1": 9,
     "6": 1,
-    "2": 6
+    "2": 4
    },
    "natg": {
     "DE": 6,
     "US": 4,
-    "IT": 4,
+    "IT": 2,
     "CA": 2,
     "SE": 2,
     "UK": 2
    },
    "gender": {
-    "m": 20
+    "m": 18
+   },
+   "same_region_pairs": 0,
+   "region_unknown_pairs": 8
+  },
+  "nat_9106_spread.json": {
+   "squad_tail_tokens_after_forbid_llama3": 41590,
+   "squad_tail_tokens_after_forbid_qwen": 42849,
+   "llama3_tokens": 66183,
+   "llama3_last_expo_chunk": 47,
+   "qwen_tokens": 69105,
+   "qwen_last_expo_chunk": 49,
+   "fam_sizes": {
+    "L3": 18,
+    "XP": 18,
+    "PS": 18,
+    "FN": 18,
+    "FP": 18,
+    "FN0": 18,
+    "FP0": 18,
+    "L3r": 18,
+    "L2": 0,
+    "L3b": 12,
+    "L3e": 0
+   },
+   "stats": {
+    "fact_repeats": 18,
+    "fact_repeats_in_8k": 9,
+    "in_window_ratio": 0.5,
+    "expo_tokens_llama": 13141
+   },
+   "fact_units_per_person": {
+    "4": 1,
+    "3": 3,
+    "1": 9,
+    "6": 1,
+    "2": 4
+   },
+   "natg": {
+    "DE": 6,
+    "US": 4,
+    "IT": 2,
+    "CA": 2,
+    "SE": 2,
+    "UK": 2
+   },
+   "gender": {
+    "m": 18
    },
    "same_region_pairs": 0,
    "region_unknown_pairs": 8

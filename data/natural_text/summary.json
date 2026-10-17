@@ -1,112 +1,111 @@
 {
  "streams": [
   {
-   "stream": 9001,
+   "stream": 9101,
+   "pairs": 10,
+   "fact_units_mean": 1.55,
+   "persons_fact_ge2": 6,
+   "in8k_spread": 0.27,
+   "in8k_clustered": 1.0,
+   "L3": 20,
+   "L3b": 12,
+   "L3e": 0,
+   "expo_tokens_llama": 10833
+  },
+  {
+   "stream": 9102,
    "pairs": 13,
    "fact_units_mean": 1.73,
-   "persons_fact_ge2": 8,
-   "in8k_spread": 0.74,
+   "persons_fact_ge2": 9,
+   "in8k_spread": 0.47,
    "in8k_clustered": 1.0,
    "L3": 26,
-   "L3b": 18,
-   "L3e": 0,
-   "expo_tokens_llama": 16032
-  },
-  {
-   "stream": 9002,
-   "pairs": 15,
-   "fact_units_mean": 1.93,
-   "persons_fact_ge2": 11,
-   "in8k_spread": 0.68,
-   "in8k_clustered": 1.0,
-   "L3": 30,
-   "L3b": 17,
+   "L3b": 13,
    "L3e": 2,
-   "expo_tokens_llama": 20640
+   "expo_tokens_llama": 16982
   },
   {
-   "stream": 9003,
-   "pairs": 15,
-   "fact_units_mean": 1.9,
-   "persons_fact_ge2": 12,
-   "in8k_spread": 0.41,
+   "stream": 9103,
+   "pairs": 12,
+   "fact_units_mean": 2.08,
+   "persons_fact_ge2": 11,
+   "in8k_spread": 0.38,
    "in8k_clustered": 1.0,
-   "L3": 30,
-   "L3b": 16,
+   "L3": 24,
+   "L3b": 13,
    "L3e": 0,
-   "expo_tokens_llama": 15423
+   "expo_tokens_llama": 13140
   },
   {
-   "stream": 9004,
-   "pairs": 15,
-   "fact_units_mean": 1.4,
+   "stream": 9104,
+   "pairs": 13,
+   "fact_units_mean": 1.46,
    "persons_fact_ge2": 7,
    "in8k_spread": 0.25,
    "in8k_clustered": 1.0,
-   "L3": 30,
+   "L3": 26,
    "L3b": 14,
    "L3e": 0,
-   "expo_tokens_llama": 14302
+   "expo_tokens_llama": 13759
   },
   {
-   "stream": 9005,
-   "pairs": 14,
-   "fact_units_mean": 1.79,
-   "persons_fact_ge2": 10,
-   "in8k_spread": 0.59,
+   "stream": 9105,
+   "pairs": 13,
+   "fact_units_mean": 1.65,
+   "persons_fact_ge2": 8,
+   "in8k_spread": 0.71,
    "in8k_clustered": 1.0,
-   "L3": 28,
+   "L3": 26,
    "L3b": 8,
    "L3e": 0,
-   "expo_tokens_llama": 15850
+   "expo_tokens_llama": 14710
   },
   {
-   "stream": 9006,
-   "pairs": 10,
+   "stream": 9106,
+   "pairs": 9,
    "fact_units_mean": 2,
-   "persons_fact_ge2": 11,
-   "in8k_spread": 0.45,
+   "persons_fact_ge2": 9,
+   "in8k_spread": 0.5,
    "in8k_clustered": 1.0,
-   "L3": 20,
-   "L3b": 13,
+   "L3": 18,
+   "L3b": 12,
    "L3e": 0,
-   "expo_tokens_llama": 13690
+   "expo_tokens_llama": 13141
   }
  ],
- "pairs": 82,
- "persons": 164,
- "fact_units_mean": 1.78,
+ "pairs": 70,
+ "persons": 140,
+ "fact_units_mean": 1.74,
  "fact_units_hist": {
-  "1": 105,
-  "2": 29,
-  "3": 13,
+  "1": 90,
+  "2": 25,
+  "3": 12,
   "4": 7,
-  "5": 4,
-  "6": 3,
-  "7": 2,
+  "5": 2,
+  "6": 2,
+  "7": 1,
   "10": 1
  },
  "natg": {
-  "UK": 40,
+  "UK": 34,
   "DE": 30,
   "US": 30,
-  "IT": 24,
-  "FR": 16,
+  "IT": 12,
+  "FR": 12,
   "IE": 4,
   "BE": 4,
   "NL": 4,
   "CA": 4,
-  "RU": 2,
   "CN": 2,
   "NO": 2,
   "SE": 2
  },
  "gender": {
-  "m": 158,
+  "m": 134,
   "f": 6
  },
  "src": {
-  "trex": 116,
-  "popqa": 48
+  "trex": 97,
+  "popqa": 43
  }
 }

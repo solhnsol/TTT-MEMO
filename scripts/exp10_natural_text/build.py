@@ -115,6 +115,10 @@ def main():
                 if cand:
                     s2=cand[0];taken.update([s1,s2]);return (g1,s1),(g2,s2)
         return None
+    FIXED=os.environ.get('FIXED_STREAMS')   # json: list of streams of [titleA,titleB]; keeps screened pairs, no re-pairing
+    if FIXED:
+        tp={p['title']:p for p in persons};fixed=json.load(open(FIXED))
+        fixed_streams=[[(tp[a_],tp[b_]) for a_,b_ in st_] for st_ in fixed];pairs=[pr for st_ in fixed_streams for pr in st_]
     for a,b in pairs:
         nm=draw_pair_names(a['natg'],a['gender'],a,b)
         a['fake'],b['fake']=nm if nm else (None,None)
@@ -129,6 +133,8 @@ def main():
             if len(st)<PAIRS_PER_STREAM and not any(k & ({x for x in keys(c)|keys(d) if x[0]!='g'}) for c,d in st):st.append((a,b));break
         else:left.append((a,b))
     streams=[st for st in streams if len(st)>=10]   # a partial last stream (>=10 pairs) is kept
+    if FIXED:
+        byt={(a['title'],b['title']):(a,b) for a,b in pairs};streams=[[byt[(a_['title'],b_['title'])] for a_,b_ in st_] for st_ in fixed_streams];left=[]
     print('unassigned reserve pairs',len(left))
     print('streams',len(streams),'pairs used',sum(map(len,streams)),'of',len(pairs))
     # background pool: random Wikipedia paragraphs (shard 40), filtered per stream later
@@ -145,7 +151,7 @@ def main():
     GLOBAL_REAL={p['forms']['full'] for st_ in streams for pr in st_ for p in pr}|{p['forms']['full'] for pr in left for p in pr}
     worlds=[];private={}
     for si,st in enumerate(streams):
-        sid=9001+si
+        sid=int(os.environ.get('SID_BASE','9001'))+si
         swaps=[]
         while True:
             tri=[];people=[]
