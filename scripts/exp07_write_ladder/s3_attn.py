@@ -50,6 +50,9 @@ class Ladder3A(ST.Stage1):
         W=WIN;pos=k*CH-W+np.arange(W);return jnp.asarray((pos>=4)&(pos<k*CH-128)&(pos>=0))
     def attn_set(self,cell,m,st_suf,c,pref_c,k,sets,ref,seed_=0):
         k0=k*CH;W=WIN
+        if cell=='othersonly':   # descriptive (design 14:05 KST 10/18): the prefix-all-pos set (every window position before the chunk) minus the O tokens of the chunk, i.e. only the earlier same-fact exposure name / place tokens stay visible
+            Oset=set(sets.oracle(k));S=np.asarray([p for p in range(max(0,k0-W),k0) if p not in Oset],int)
+            bins=np.bincount((k0-S)//SETS.BIN,minlength=W//SETS.BIN).tolist() if len(S) else [0]*(W//SETS.BIN);return S,1.0,bins
         if cell=='attnk16':   # deterministic k = 16 union (descriptive, s101)
             u,_=self.capture_union16(m,st_suf,c,pref_c,self.cand_vec(k));S=k0-W+np.nonzero(np.asarray(u))[0]
             bins=np.bincount((k0-S)//SETS.BIN,minlength=W//SETS.BIN).tolist() if len(S) else [0]*(W//SETS.BIN);return S,1.0,bins
@@ -114,7 +117,7 @@ class Ladder3A(ST.Stage1):
                 st=self.read_state(m,st,c,pref_c)
         return rows
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['attnsel','randattn','recencyattn','attnk16','attnstoch'],default='attnsel');ap.add_argument('--world-seed',type=int,default=101)
+    ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['attnsel','randattn','recencyattn','attnk16','attnstoch','othersonly'],default='attnsel');ap.add_argument('--world-seed',type=int,default=101)
     ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],default='save');ap.add_argument('--tag',default='');ap.add_argument('--passes',type=int,default=4);ap.add_argument('--keep',action='store_true')
     ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true')
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True);assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
