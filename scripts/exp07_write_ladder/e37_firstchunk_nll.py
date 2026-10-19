@@ -15,7 +15,9 @@ def main():
     ap.add_argument('--chunk',type=int,default=0);ap.add_argument('--state',action='append',default=[],help='LABEL=PATH (npz inner-weight state); W0 always included')
     ap.add_argument('--seed',type=int,default=101);ap.add_argument('--tag',default='e37');ap.add_argument('--no-repeat',action='store_true',help='skip the W0 repeat read')
     a=ap.parse_args();assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
-    raw=np.fromfile(a.ids,dtype='<u4');ns=len(raw)//SAMPLE;assert ns>=1,f'{a.ids}: {len(raw)} tokens < one 8193-token sample'
+    raw=np.fromfile(a.ids,dtype='<u4')
+    if len(raw)<SAMPLE and len(raw)>=CH:print(f'short file ({len(raw)} tokens): treated as one sample, padded');raw=np.concatenate([raw,np.zeros(SAMPLE-len(raw),raw.dtype)])
+    ns=len(raw)//SAMPLE;assert ns>=1,f'{a.ids}: {len(raw)} tokens < one chunk'
     if len(raw)%SAMPLE:print(f'WARNING: {len(raw)%SAMPLE} trailing tokens dropped')
     if a.n:ns=min(ns,a.n)
     S=raw[:ns*SAMPLE].reshape(ns,SAMPLE).astype(np.int64);assert 0<=a.chunk<=(SAMPLE-1)//CH-1;lo=a.chunk*CH
