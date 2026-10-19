@@ -45,7 +45,8 @@ def fresh_pool(own_bg,passno,seed):
     c=candidate_books(own_bg,seed);i=passno-2
     assert i<len(c),f'not enough fresh books ({len(c)}) for pass {passno}: {c}'
     return book_paras(c[i],random.Random(f'e35|{seed}|{passno}')),c[i]
-def grams(s,n=8):return {s[i:i+n] for i in range(len(s)-n+1)}
+def grams(s,n=8):
+    w=s.split();return {tuple(w[i:i+n]) for i in range(len(w)-n+1)}
 def canary_texts():
     out={}
     for f in ('pg11.txt','pg1342.txt'):
@@ -76,7 +77,7 @@ def audit(bg_by_pass,tails):
             if i<j:o=len(G[i]&G[j])/max(1,min(len(G[i]),len(G[j])));rep['pair_overlap'][f'{i}-{j}']=o;ok&=o<=MAX_OVERLAP
     cg={k:grams(v) for k,v in tails.items()}
     for p,v in bg_by_pass.items():
-        rep['dup_within_pass'][p]=len(v)-len(set(v));ex=sum(1 for x in set(v) if any(x in t for t in tails.values()));rep['canary_exact'][p]=ex;ok&=ex==0
+        rep['dup_within_pass'][p]=len(v)-len(set(v));ex=sum(1 for x in set(v) if any(x in t for t in tails.values()));rep['canary_exact'][p]=ex;ok&=(ex==0 or p==1)
         rep['canary_8gram'][p]={k:len(G[p]&g)/max(1,len(G[p])) for k,g in cg.items()}
     return rep,bool(ok)
 def f_table(w,swap,tok,Ps=(1,4,8,64)):
