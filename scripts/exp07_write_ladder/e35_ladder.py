@@ -160,7 +160,7 @@ class L35(LD.Ladder):
         with rt.mesh:
             log.append({'epoch':0,'margins':self.evaluate(m)})
             for ps,ids in enumerate(streams,1):
-                ids=list(ids[:NCH*CH]);steps=[]
+                ids=list(ids[:NCH*CH]);steps=[];tp=time.monotonic()
                 for b0 in range(0,NCH,P):
                     bl=ids[b0*CH:min(NCH,b0+P)*CH];n=len(bl);pad=(-n)%CH;full=bl+[rt.eos]*pad;mask=np.zeros(len(full),dtype=bool);mask[:n-1]=True
                     seq=rt.seq(full,mask=mask);pref=rt.prefix(rt.base,seq);st=(st_all,clone_state(rt.state_suffix))   # suffix KV and prefix context start fresh in every block
@@ -171,8 +171,8 @@ class L35(LD.Ladder):
                         d=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=d
                         row.update(update_norm=d,cum_update_norm=cum,n_loss=int(np.asarray(c.loss_masks).sum()));steps.append(row)
                     st_all=st[0];del pref
-                e={'epoch':ps,'reset_period':P,'cum_update_norm':cum,'steps':steps,'bg':self._bgmeta[ps-1],'inner_hash':reuse._hash_pytree(m.inner_parameters())[0],'margins':self.evaluate(m)}
-                log.append(e);print(f'  L0reset P={P} {"B" if swap else "A"} pass {ps} cum {cum:.3f}',flush=True)
+                e={'epoch':ps,'reset_period':P,'sec_pass':time.monotonic()-tp,'sec_per_chunk':(time.monotonic()-tp)/NCH,'cum_update_norm':cum,'steps':steps,'bg':self._bgmeta[ps-1],'inner_hash':reuse._hash_pytree(m.inner_parameters())[0],'margins':self.evaluate(m)}
+                log.append(e);print(f'  L0reset P={P} {"B" if swap else "A"} pass {ps} cum {cum:.3f} {e["sec_pass"]:.0f}s ({e["sec_per_chunk"]:.2f}s/chunk, before evaluate)',flush=True)
         return log
 def cpu_checks(seed):
     import gen_world as G;w=G.build_world(seed);res={'seed':seed}
@@ -188,11 +188,36 @@ def cpu_checks(seed):
     md=[f'# E35 CPU checks (seed {seed})\n',f'U1 audit pass: {ok}; books: {meta}\n',f"pair overlap: {rep['pair_overlap']}\ncanary exact: {rep['canary_exact']}  canary 8-gram: {rep['canary_8gram']}\n",f"U3 expo identical: {res['U3_expo_identical']}, bg differs: {res['U3_bg_differs']}\n",'## U2 f(P) (same-triple earlier exposure inside the reset context)\n','| P (chunks) | n | f same triple | f other triple, same pair |','|---|---|---|---|']
     for P,v in res['U2_f_table']['A'].items():md.append(f"| {P} | {v['n_sentences_with_prior']} | {v['f_same_triple']:.3f} | {v['f_other_triple_same_pair']:.3f} |")
     (OUT/f'e35_cpu_checks_s{seed}.md').write_text('\n'.join(md)+'\n');print('\n'.join(md))
+def u56(L,world_seed,ks=(1,5,20)):
+    """U5: dtypes of the inner parameters after one update by the native path (rt.update, block = one chunk, as L0reset P=1) and by the L1/masked-fs path (L.step);
+    U6: the same chunk written both ways from W0 (R2 = L0reset P=1 vs masked-fs block=1024 of ladder.run_L0_masked): update difference. Description, not pass/fail."""
+    rt=L.rt;W=int(rt.cfg.model.sliding_window_size);ids=np.asarray(L.T.P[False].ids[:NCH*CH]);m0=rt.base;st_all=clone_state(rt.state_all)
+    seg=(np.arange(CH)//CH).astype(np.int32);loc=(np.arange(CH)%CH).astype(np.int32);pm=jnp.asarray(packing.prefix_mask(seg,W));samenext=np.concatenate([seg[1:]==seg[:-1],[False]])
+    f32=lambda t:[np.asarray(x,np.float32).ravel() for x in jax.tree.leaves(t)];p0=jax.tree.leaves(m0.inner_parameters());res={'chunks':{},'dtype_W0':sorted({str(np.asarray(x).dtype) for x in p0})}
+    with rt.mesh:
+        for k in ks:
+            c=ids[k*CH:(k+1)*CH];full=[int(t) for t in c];mask=np.zeros(CH,dtype=bool);mask[:CH-1]=True
+            seq=rt.seq(full,mask=mask);pref=rt.prefix(rt.base,seq);opt=m0.inner_optimizer(clone_state(rt.state_all)).init(m0.inner_parameters());st=(st_all,clone_state(rt.state_suffix))
+            r=rt.update(m0,opt,st,rt.chunk(seq,0),pref[:CH]);A=r.new_model.inner_parameters();del r
+            tg=np.concatenate([ids[k*CH+1:(k+1)*CH+1],[rt.eos]])[:CH].astype(np.int32);pr2=L.prefix_iso(rt.base,jnp.asarray(c),jnp.asarray(loc),pm)
+            B,gn,coef,ce=L.step(m0,st_all,jnp.asarray(c),jnp.asarray(tg),jnp.asarray(samenext),pr2,jnp.asarray(seg),jnp.asarray(loc),jnp.float32(1.0))
+            a_,b_,z=f32(A),f32(B),f32(m0.inner_parameters());dA=np.concatenate([x-y for x,y in zip(a_,z)]);dB=np.concatenate([x-y for x,y in zip(b_,z)])
+            na,nb=float(np.linalg.norm(dA)),float(np.linalg.norm(dB));cos=float(dA@dB/max(na*nb,1e-30))
+            la,lb=jax.tree.leaves(A),jax.tree.leaves(B)
+            res['chunks'][k]={'dtype_rt_update':sorted({str(np.asarray(x).dtype) for x in la}),'dtype_step':sorted({str(np.asarray(x).dtype) for x in lb}),'update_norm_rt_update':na,'update_norm_step':nb,'cosine':cos,
+                'norm_of_difference_over_norm_rt_update':float(np.linalg.norm(dA-dB)/max(na,1e-30)),'leaves_bitwise_equal':sum(bool(np.array_equal(np.asarray(x),np.asarray(y))) for x,y in zip(la,lb)),'n_leaves':len(la),'step_grad_norm':float(gn),'step_clip_coef':float(coef)}
+            print('U5/U6 chunk',k,res['chunks'][k],flush=True);del A,B
+    res['U6_note']=('R2 (L0reset P=1) and masked-fs (run_L0_masked block=1024) both read each chunk alone (fresh suffix KV, prefix recomputed on the chunk, positions restart, last-token loss masked). '
+        'Differences: R2 uses rt.update (optimizer path, rt.prefix, rt.seq targets) vs masked-fs L.step (packed isolated-row prefix_iso, explicit clip/scale, params cast back to the parameter dtype); '
+        'R2 resets once per block and carries the optimizer state, masked-fs has no optimizer state; masked-fs L0mwfs streams pass-wise fresh filler like R2. The numbers above are the one-step update difference from W0.')
+    json.dump(res,open(OUT/f'e35_u56_s{world_seed}.json','w'),indent=1);print('wrote',OUT/f'e35_u56_s{world_seed}.json')
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L1fillfresh','L1smallbatch','L0reset']);ap.add_argument('--reset-period',type=int,default=64);ap.add_argument('--passes',type=int,default=4);ap.add_argument('--epochs',type=int,default=4)
     ap.add_argument('--worlds',default='AB');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='e35');ap.add_argument('--mode',choices=['full','save','eval'],default='full')
-    ap.add_argument('--keep',action='store_true');ap.add_argument('--log-clip',action='store_true');ap.add_argument('--cpu-checks',action='store_true');ap.add_argument('--compare-hash',default=None);a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
+    ap.add_argument('--keep',action='store_true');ap.add_argument('--log-clip',action='store_true');ap.add_argument('--cpu-checks',action='store_true');ap.add_argument('--u56',action='store_true');ap.add_argument('--compare-hash',default=None);a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
     if a.cpu_checks:cpu_checks(a.world_seed);return
+    if a.u56:
+        assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','');rt=Runtime();u56(L35(rt,a.world_seed,readout=False),a.world_seed);return
     assert a.level,'--level required';assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     vp=LD.ROOT/'experiments/exp05_write_dynamics/run3_readouts/verify_packing_fp32.log';base=[l for l in open(vp) if l.startswith('base ')]
     import ast;b=ast.literal_eval(base[0][5:]) if base else {};assert b and max(b['S_maxdiff_R1'],b['S_maxdiff_R0'],b['L_maxdiff_R1'])<=1e-3,'packed fp32 readout not verified - refusing to run'
