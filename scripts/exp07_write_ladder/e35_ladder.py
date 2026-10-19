@@ -98,20 +98,23 @@ def audit(bg_by_pass,tails,base=None):
         rep['dup_within_pass'][p]=len(v)-len(set(v));ok&=(rep['dup_within_pass'][p]==0 or p==1);ex=sum(1 for x in set(v) if any(x in t for t in tails.values()));rep['canary_exact'][p]=ex;ok&=(ex==0 or p==1)
         rep['canary_8gram'][p]={k:len(G[p]&g)/max(1,len(G[p])) for k,g in cg.items()}
     return rep,bool(ok)
-def f_table(w,swap,tok,Ps=(1,4,8,64)):
+def f_table(w,swap,tok,Ps=(1,4,8,63,64)):
     """U2: share of exposure sentences (with an earlier same-triple exposure) whose context contains a same-triple earlier sentence / another triple of the same pair, as a function of the reset period P (chunks).
     context of the place token x in chunk k: positions >= max(block_start, x - 8192) (suffix and prefix layers both look back at most 8192)."""
     import suppress as SP
     tab=SETS.sentence_table(w,swap,tok,gw,SP);out={}
     for P in Ps:
-        n=0;same=0;oth=0
+        n=0;same=0;oth=0;n3=0;all3=0;fr3=0.0
         for s in tab:
             x=s['place'][0];b0=(x//CH//P)*P*CH;lo=max(b0,x-8192)
+            prev=[u for u in tab if u['pair']==s['pair'] and u['round']==s['round']-1]   # third definition (L1-ctx scale): every sentence of the same pair's previous round
+            if prev:
+                inn=[lo<=u['place'][0]<x for u in prev];n3+=1;all3+=all(inn);fr3+=sum(inn)/len(inn)
             prior=[u for u in tab if u['t']==s['t'] and u['round']<s['round']]
             if not prior:continue
             n+=1;same+=any(lo<=u['place'][0]<x for u in prior)
             oth+=any(u['pair']==s['pair'] and u['t']!=s['t'] and lo<=u['place'][0]<x for u in tab)
-        out[P]={'n_sentences_with_prior':n,'f_same_triple':same/max(n,1),'f_other_triple_same_pair':oth/max(n,1)}
+        out[P]={'n_sentences_with_prior':n,'f_same_triple':same/max(n,1),'f_other_triple_same_pair':oth/max(n,1),'n_sentences_with_prev_round':n3,'f_pair_prev_round_all':all3/max(n3,1),'f_pair_prev_round_mean_fraction':fr3/max(n3,1)}
     return out
 class L35(LD.Ladder):
     def fresh_streams(self,swap,passes):
@@ -185,8 +188,8 @@ def cpu_checks(seed):
     res['U3_kind_sequence_identical']=all([t['kind'] for t in ww['texts']][:len(w['texts'])]==[t['kind'] for t in w['texts']] for ww,_ in worlds[1:])
     res['U3_bg_differs']=all(bgs[p]!=bgs[1] for p in bgs if p>1)
     res['U2_f_table']={'A':f_table(w,False,G.TOK)};json.dump(res,open(OUT/f'e35_cpu_checks_s{seed}.json','w'),indent=1,default=str)
-    md=[f'# E35 CPU checks (seed {seed})\n',f'U1 audit pass: {ok}; books: {meta}\n',f"pair overlap: {rep['pair_overlap']}\ncanary exact: {rep['canary_exact']}  canary 8-gram: {rep['canary_8gram']}\n",f"U3 expo identical: {res['U3_expo_identical']}, bg differs: {res['U3_bg_differs']}\n",'## U2 f(P) (same-triple earlier exposure inside the reset context)\n','| P (chunks) | n | f same triple | f other triple, same pair |','|---|---|---|---|']
-    for P,v in res['U2_f_table']['A'].items():md.append(f"| {P} | {v['n_sentences_with_prior']} | {v['f_same_triple']:.3f} | {v['f_other_triple_same_pair']:.3f} |")
+    md=[f'# E35 CPU checks (seed {seed})\n',f'U1 audit pass: {ok}; books: {meta}\n',f"pair overlap: {rep['pair_overlap']}\ncanary exact: {rep['canary_exact']}  canary 8-gram: {rep['canary_8gram']}\n",f"U3 expo identical: {res['U3_expo_identical']}, bg differs: {res['U3_bg_differs']}\n",'## U2 f(P) (same-triple earlier exposure inside the reset context)\n','| P (chunks) | n | f same triple | f other triple, same pair | n (round>=2) | f all previous-round pair sentences (L1-ctx scale) | mean fraction of them |','|---|---|---|---|---|---|---|']
+    for P,v in res['U2_f_table']['A'].items():md.append(f"| {P} | {v['n_sentences_with_prior']} | {v['f_same_triple']:.3f} | {v['f_other_triple_same_pair']:.3f} | {v['n_sentences_with_prev_round']} | {v['f_pair_prev_round_all']:.3f} | {v['f_pair_prev_round_mean_fraction']:.3f} |")
     (OUT/f'e35_cpu_checks_s{seed}.md').write_text('\n'.join(md)+'\n');print('\n'.join(md))
 def u56(L,world_seed,ks=(1,5,20)):
     """U5: dtypes of the inner parameters after one update by the native path (rt.update, block = one chunk, as L0reset P=1) and by the L1/masked-fs path (L.step);
