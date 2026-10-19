@@ -75,16 +75,18 @@ def build_ops(L,rt32):
             ref=lm.suffix_call(prefix_outputs=pref_,state=st,seq=c).last_hidden_states
             return jnp.stack(xin),jnp.stack(xmid),jnp.max(jnp.abs(jax.vmap(lm.model.ln_f)(x)-ref)),jnp.max(jnp.abs(ref))
         finally:S3SUF.clear()
+    fspec=reuse.get_filter_spec(rt32.base,rt32.cfg.training.spec_inner,'inner parameters')   # differentiate only the inner parameters (a whole-model fp32 gradient asked for a 23 GiB temporary: OOM)
     @eqx.filter_jit
     def ref_grad(m,c,st,pref_,kmask):
-        S3SUF['kmask']=kmask
+        S3SUF['kmask']=kmask;inner,outer_=eqx.partition(m,fspec)
         try:
-            g=eqx.filter_grad(lambda mm:MetaModel.lm_loss(mm,c,st,prefix_outputs=pref_)[0])(m)
+            g=eqx.filter_grad(lambda ip:MetaModel.lm_loss(eqx.combine(ip,outer_),c,st,prefix_outputs=pref_)[0])(inner)
         finally:S3SUF.clear()
-        p=g.language_model.model.h.suffix_blocks.feed_forward_prime;return p.w1.weight,p.w3.weight,p.w2.weight,optax.global_norm(g.inner_parameters())
+        p=g.language_model.model.h.suffix_blocks.feed_forward_prime;return p.w1.weight,p.w3.weight,p.w2.weight,optax.global_norm(jax.tree_util.tree_leaves(g))
     @eqx.filter_jit
     def outer(xin,xmid,d1,d3,d2):
-        return jnp.einsum('ltd,ltf->ldf',xin,d1),jnp.einsum('ltd,ltf->ldf',xin,d3),jnp.einsum('ltf,ltd->lfd',xmid,d2)
+        one=lambda a:(jnp.einsum('td,tf->df',a[0],a[1]),jnp.einsum('td,tf->df',a[0],a[2]),jnp.einsum('tf,td->fd',a[3],a[4]))   # one layer at a time (bounded temporaries)
+        return jax.lax.map(one,(xin,d1,d3,xmid,d2))
     @eqx.filter_jit
     def add(acc,g,w):return tuple(a+w*b for a,b in zip(acc,g))
     @eqx.filter_jit
