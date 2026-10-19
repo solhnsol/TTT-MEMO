@@ -76,7 +76,7 @@ class Ladder:
                 return m.language_model.prefix_call(m.language_model.model.h.prefix_blocks,m.language_model.wte_call(ids_),clone_state(rt.state_prefix),seq).last_hidden_state
             finally:packing.PACK_PRE.clear()
         @eqx.filter_jit
-        def step(m,st_all,ids_,tg_,mk_,pref_,seg_,loc_):
+        def step(m,st_all,ids_,tg_,mk_,pref_,seg_,loc_,scale=1.0):
             """one inner-rule step on a chunk of packed isolated sentences (empty suffix KV, no carry)."""
             packing.PACK_SUF['seg']=seg_;packing.PACK_SUF['loc']=loc_
             try:
@@ -84,7 +84,7 @@ class Ladder:
                 (_l,(ce,_n,_s)),grads=eqx.filter_value_and_grad(MetaModel.lm_loss,has_aux=True)(m,seq,clone_state(rt.state_suffix),prefix_outputs=pref_)
             finally:packing.PACK_SUF.clear()
             g=grads.inner_parameters();gn=optax.global_norm(g);coef=jnp.where(gn<clip,1.0,clip/jnp.maximum(gn,1e-30))
-            s=lr*m.get_ilr_multiplier(st_all.get(m.step_index))
+            s=lr*m.get_ilr_multiplier(st_all.get(m.step_index))*scale
             newp=jax.tree.map(lambda p,x:(p+(-s*coef*x).astype(p.dtype)).astype(p.dtype),m.inner_parameters(),g)
             return newp,gn,coef,ce
         @eqx.filter_jit
@@ -95,7 +95,12 @@ class Ladder:
             s_=lr*m.get_ilr_multiplier(st_all.get(m.step_index))*scale
             newp=jax.tree.map(lambda q,x:(q+(-s_*coef*x).astype(q.dtype)).astype(q.dtype),m.inner_parameters(),g)
             return newp,new_st
-        self.prefix_iso=prefix_iso;self.step=step;self.native_scaled=native_scaled
+        @eqx.filter_jit
+        def gnorm_only(m,st_suf,c,p):
+            """global gradient norm of the native chunk loss (logging only; no update)."""
+            (_l,(ce,_n,_s)),grads=eqx.filter_value_and_grad(MetaModel.lm_loss,has_aux=True)(m,c,st_suf,prefix_outputs=p);return optax.global_norm(grads.inner_parameters())
+        self.gnorm_only=gnorm_only;self.log_clip=False
+        self.prefix_iso=prefix_iso;self.step=step;self.native_scaled=native_scaled;self.Batch=Batch
     def set_inner(self,m,newp):
         inner,outer=eqx.partition(m,self.f)
         assert jax.tree_util.tree_structure(inner)==jax.tree_util.tree_structure(newp)
@@ -158,12 +163,19 @@ class Ladder:
         _,_,spans=gw.realize(self.T.w,swap);enc=lambda t:stage2.enc(self.T.tok,t).ids;tri={t['id']:t for t in self.T.w['triples']}
         rows=[]
         if variant in ('plain','fill'):rows=[(x,(0,len(x)-1)) for x in (enc('\n\n'+s_['text']) for s_ in spans)]
-        if variant=='ctx':
+        if variant in ('ctx','irr'):
             by={}
             for s_ in spans:by.setdefault((tri[s_['t']]['pair'],s_['round']),[]).append(s_['text'])
+            npairs=self.T.w['pairs']
             for s_ in spans:
                 cur=enc('\n\n'+s_['text']);r=s_['round'];pr=tri[s_['t']]['pair']
                 ctx=enc('\n\n'+'\n\n'.join(by[(pr,r-1)])) if r>=2 else []
+                if variant=='irr' and ctx:
+                    # same-length context made of OTHER pairs' sentences from the same previous round (no name/place of pair pr)
+                    k=int(pr[1:]);irr=[];j=1
+                    while len(irr)<len(ctx):
+                        irr+=enc('\n\n'+'\n\n'.join(by[(f'p{(k+j)%npairs}',r-1)]));j+=1
+                    ctx=irr[:len(ctx)]
                 rows.append((ctx+cur,(max(len(ctx)-1,0),len(ctx)+len(cur)-1)))
         if variant=='fill':
             for t in self.T.w['texts']:
@@ -206,19 +218,49 @@ class Ladder:
                 st_all=st[0]
                 log.append({'epoch':ps,'cum_update_norm':cum,'margins':self.evaluate(m)});print(f'  L0mp {"B" if swap else "A"} pass {ps}',flush=True)
         return log
-    def _native_passes(self,streams,tag):
-        """native TTT over a list of token streams (one per pass); weights carry over, KV restarts each pass."""
+    def _native_passes(self,streams,tag,scale=None):
+        """native TTT over a list of token streams (one per pass); weights carry over, KV restarts each pass.
+        scale (default None = the original rt.update path): every native step multiplied by `scale` after clipping (native_scaled, the verified L0x path)."""
         rt=self.rt;log=[];m=rt.base;opt=m.inner_optimizer(clone_state(rt.state_all)).init(m.inner_parameters());st_all=clone_state(rt.state_all);cum=0.0
         with rt.mesh:
             log.append({'epoch':0,'margins':self.evaluate(m)})
             for ps,ids in enumerate(streams,1):
                 n=len(ids);pad=(-n)%CH;full=list(ids)+[rt.eos]*pad;mask=np.zeros(len(full),dtype=bool);mask[:n-1]=True
-                seq=rt.seq(full,mask=mask);pref=rt.prefix(rt.base,seq);st=(st_all,clone_state(rt.state_suffix))
+                seq=rt.seq(full,mask=mask);pref=rt.prefix(rt.base,seq);st=(st_all,clone_state(rt.state_suffix));clips=[]
                 for k in range(len(full)//CH):
-                    old=m;r=rt.update(m,opt,st,rt.chunk(seq,k),pref[k*CH:(k+1)*CH]);m,opt,st=r.new_model,r.new_optimizer_state,r.new_state;del r
+                    if self.log_clip:
+                        gn_=float(self.gnorm_only(m,st[1],rt.chunk(seq,k),pref[k*CH:(k+1)*CH]));clips.append((gn_,min(1.0,self.clip/max(gn_,1e-30))))
+                    if scale is None:old=m;r=rt.update(m,opt,st,rt.chunk(seq,k),pref[k*CH:(k+1)*CH]);m,opt,st=r.new_model,r.new_optimizer_state,r.new_state;del r
+                    else:
+                        newp,sf=self.native_scaled(m,st_all,st[1],rt.chunk(seq,k),pref[k*CH:(k+1)*CH],jnp.float32(scale));old=m;m=self.set_inner(m,newp);st=(st[0],sf)
                     cum+=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5
                 st_all=st[0];del pref
-                log.append({'epoch':ps,'chunks':len(full)//CH,'cum_update_norm':cum,'margins':self.evaluate(m)});print(f'  {tag} pass {ps}',flush=True)
+                log.append({'epoch':ps,'chunks':len(full)//CH,'cum_update_norm':cum,**({'clip':clips} if self.log_clip else {}),'margins':self.evaluate(m)});print(f'  {tag} pass {ps}',flush=True)
+        return log
+    def run_L0_masked(self,swap,passes,block=1024,scale=1.0,streams=None):
+        """context-masked write (method pilot): the stream is read as usual, but every inner update is computed with
+        attention restricted to blocks of `block` tokens inside its chunk (block = 1024: the chunk alone; prefix recomputed
+        on the chunk, positions restart per block, empty suffix KV), so no earlier exposure outside the block is visible
+        to the write. Loss on tokens whose target is in the same block. Step = native rule x `scale`; one step per chunk;
+        passes re-read the full stream; evaluation after each pass. `streams` (L0mwfs): one token list per pass, each
+        NCH*CH long, instead of the same stream every pass."""
+        rt=self.rt;W=int(rt.cfg.model.sliding_window_size);Pw=self.T.P[swap];log=[];m=rt.base;st_all=clone_state(rt.state_all);cum=0.0
+        if streams is None:streams=[Pw.ids]*passes
+        assert len(streams)==passes
+        seg=(np.arange(CH)//block).astype(np.int32);loc=(np.arange(CH)%block).astype(np.int32);pm=jnp.asarray(packing.prefix_mask(seg,W))
+        samenext=np.concatenate([seg[1:]==seg[:-1],[False]])
+        with rt.mesh:
+            log.append({'epoch':0,'margins':self.evaluate(m)})
+            for ps in range(1,passes+1):
+                ids=np.asarray(streams[ps-1])
+                for k in range(NCH):
+                    c=ids[k*CH:(k+1)*CH];tg=np.concatenate([ids[k*CH+1:(k+1)*CH+1],[rt.eos]])[:CH].astype(np.int32)
+                    mk=samenext.copy()
+                    pref=self.prefix_iso(rt.base,jnp.asarray(c),jnp.asarray(loc),pm)
+                    newp,gn,coef,ce=self.step(m,st_all,jnp.asarray(c),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc),jnp.float32(scale))
+                    old=m;m=self.set_inner(m,newp)
+                    cum+=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5
+                log.append({'epoch':ps,'cum_update_norm':cum,'margins':self.evaluate(m)});print(f'  L0mw b{block} x{scale} {"B" if swap else "A"} pass {ps}',flush=True)
         return log
     def run_L0_oracle(self,swap,passes):
         """(a) oracle: pass 1 = the full native stream; passes 2.. re-read ONLY the exposure sentences, in stream order,
@@ -226,11 +268,14 @@ class Ladder:
         Pw=self.T.P[swap];_,_,spans=gw.realize(self.T.w,swap)
         expo=[self.rt.bos]+stage2.enc(self.T.tok,'\n\n'.join(s['text'] for s in spans)).ids
         return self._native_passes([Pw.ids]+[expo]*(passes-1),'L0or')
-    def run_L0_fillerswap(self,swap,passes):
+    def run_L0_fillerswap(self,swap,passes,scale=None):
         """(b) every pass reads the same exposure sentences at the same schedule positions in the text list, with the
         background paragraphs replaced by a different draw (pass 1 = the original stream)."""
+        return self._native_passes(self.fs_streams(swap,passes),'L0fs' if scale is None else f'L0fs x{scale:g}',scale)
+    def fs_streams(self,swap,passes):
+        """the L0fs streams: pass 1 = the original stream, pass p >= 2 = same texts with background draw 7000+p."""
         import copy
-        Pw=self.T.P[swap];streams=[Pw.ids];w0=self.T.w
+        Pw=self.T.P[swap];streams=[Pw.ids];w0=self.T.w;self._fs_worlds={swap:[w0]}
         for ps in range(2,passes+1):
             w=copy.deepcopy(w0);pool=gw.background(random.Random(7000+ps));bi=0;new=[]
             for t in w['texts']:
@@ -239,8 +284,15 @@ class Ladder:
             w['texts']=new;ids=[self.rt.bos]+stage2.enc(self.T.tok,gw.realize(w,swap)[0]).ids
             while len(ids)<NCH*CH:
                 w['texts'].append({'kind':'bg','text':pool[bi%len(pool)]});bi+=1;ids=[self.rt.bos]+stage2.enc(self.T.tok,gw.realize(w,swap)[0]).ids
-            streams.append(ids[:NCH*CH])
-        return self._native_passes(streams,'L0fs')
+            streams.append(ids[:NCH*CH]);self._fs_worlds[swap].append(w)
+        # check (L0mwfs registration F2): every pass is NCH*CH tokens, keeps every exposure sentence, and has new filler
+        _,_,spans=gw.realize(w0,swap)
+        for ps,ids in enumerate(streams,1):
+            assert len(ids)>=NCH*CH,(ps,len(ids));txt=self.T.tok.decode(list(ids[:NCH*CH]))
+            miss=[s_['text'] for s_ in spans if s_['text'] not in txt];assert not miss,(ps,len(miss),miss[:2])
+            if ps>1:assert list(ids[:NCH*CH])!=list(streams[0][:NCH*CH]),ps
+        print('fs_streams check passed:',passes,'passes,',len(spans),'exposure sentences each',flush=True)
+        return streams
     def run_L0_ksteps(self,swap,K,eval_every=16):
         """one pass, K native inner steps on every chunk (same chunk, same incoming KV); KV for the next chunk from the
         last step's forward. K sweep (reviewer stage 3); canary rule applies."""
@@ -279,8 +331,8 @@ class Ladder:
         return log
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB')
-    ap.add_argument('--epochs',type=int,default=32);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='main');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--mode',choices=['full','save','eval'],default='full');ap.add_argument('--save-epochs',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--k',type=int,default=1);ap.add_argument('--l1-variant',default='plain',choices=['plain','ctx','fill'])
+    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k','L0mw','L0mwfs'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB');ap.add_argument('--log-clip',action='store_true',help='native passes: also log the per-chunk gradient norm and clip coefficient (extra forward/backward, no effect on the update)');ap.add_argument('--fs-scale',type=float,default=None,help='L0fs only: native step multiplier (default None = the original rt.update path)')
+    ap.add_argument('--epochs',type=int,default=32);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='main');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--mode',choices=['full','save','eval'],default='full');ap.add_argument('--save-epochs',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--k',type=int,default=1);ap.add_argument('--l1-variant',default='plain',choices=['plain','ctx','fill','irr']);ap.add_argument('--block',type=int,default=1024)
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     vp=ROOT/'experiments/exp05_write_dynamics/run3_readouts/verify_packing_fp32.log'
@@ -288,7 +340,7 @@ def main():
     import ast;b=ast.literal_eval(base[0][5:]) if base else {}
     assert b and max(b['S_maxdiff_R1'],b['S_maxdiff_R0'],b['L_maxdiff_R1'])<=1e-3,'packed fp32 readout not verified - refusing to run'
     rt=Runtime();SD=OUT/'states'/f'{a.level}_{a.tag}_s{a.world_seed}'
-    L=Ladder(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD)
+    L=Ladder(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD);L.log_clip=a.log_clip
     meta={'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'clip':L.clip,'level':a.level,'epochs':a.epochs,'seed':a.seed,'xla_flags':os.environ.get('XLA_FLAGS')}
     json.dump(meta,open(OUT/f'meta_{a.level}_{a.tag}_s{a.world_seed}.json','w'),indent=1)
     for w in a.worlds:
@@ -311,7 +363,9 @@ def main():
         if a.level=='L1':log=L.run_L1(w=='B',a.epochs,a.seed,save_epochs=se,save_dir=SD/w,variant=a.l1_variant)
         elif a.level=='L0mp':log=L.run_L0_multipass(w=='B',a.passes)
         elif a.level=='L0or':log=L.run_L0_oracle(w=='B',a.passes)
-        elif a.level=='L0fs':log=L.run_L0_fillerswap(w=='B',a.passes)
+        elif a.level=='L0mw':log=L.run_L0_masked(w=='B',a.passes,a.block,a.scale)
+        elif a.level=='L0fs':log=L.run_L0_fillerswap(w=='B',a.passes,a.fs_scale)
+        elif a.level=='L0mwfs':log=L.run_L0_masked(w=='B',a.passes,a.block,a.scale,streams=L.fs_streams(w=='B',a.passes))
         elif a.level=='L0x':log=L.run_L0_scaled(w=='B',a.scale)
         elif a.level=='L0k':log=L.run_L0_ksteps(w=='B',a.k)
         else:log=L.run_L0(w=='B',set(range(NCH+1)))
