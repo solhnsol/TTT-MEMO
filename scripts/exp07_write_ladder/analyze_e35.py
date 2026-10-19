@@ -87,6 +87,9 @@ def analyse(OUT,seed,nb=NB):
         for k in ks:
             dl[k]=None if prev is None else ci(logQ[k]-logQ[prev]);prev=k
         out={'Q':Q,'DeltaL_vs_previous_cell':dl}
+        if 'R5' in Q and 'R2' in Q and Q['R5']['Q_ci'][1]<=0:   # E35 5.7: R5's Q has no clear lower bound -> also decompose the raw D differences (not only log Q)
+            bR,b2,b5=b0,bm(data['R2']['D'][e]),bm(data['R5']['D'][e])
+            out['D_difference_decomposition']={'condition':'lower CI bound of Q(R5) <= 0','D_L1_minus_D_R2':ci(bR-b2),'D_R2_minus_D_R5':ci(b2-b5),'D_L1_minus_D_R5_total':ci(bR-b5)}
         if 'R5' in logQ:
             ltot=logQ['R5'];lt=ci(ltot);out['L_tot']=lt
             if 'R2' in logQ:
@@ -116,6 +119,71 @@ def md_of(res):
             for key in ('outside_part_R0_to_R2','context_part_R2_to_R5','G_outside','G_context'):
                 if key in o:L.append(f"- {key}: {fmt(o[key])}")
             L.append(f"- verdict (rule 2.4): {o.get('verdict')}")
+        if 'D_difference_decomposition' in o:
+            d=o['D_difference_decomposition'];L.append(f"\nD difference decomposition (Q(R5) lower CI bound <= 0; mean [95% CI], paired bootstrap): D_L1 - D_R2 = {fmt(d['D_L1_minus_D_R2'])}; D_R2 - D_R5 = {fmt(d['D_R2_minus_D_R5'])}; total D_L1 - D_R5 = {fmt(d['D_L1_minus_D_R5_total'])}")
+    return '\n'.join(L)+'\n'
+PCT=(0,10,25,50,75,90,100)
+NCH_DEFAULT=63
+def _load_log(OUT,stem):
+    for nm in (f'{stem}.json',f'{stem}.saved.json'):
+        if (OUT/nm).exists():return json.load(open(OUT/nm))['log'],nm
+    return None,None
+def pass_records(log,nch=None):
+    """per pass (epoch >= 1): per-chunk lists coef / gn / upd where logged, plus the mean update norm from the cumulative increment. Accepts the real formats:
+    job 37 (L0fs, ladder._native_passes with log_clip): entry['clip'] = [(grad_norm, clip_coef), ...] per chunk, only cum_update_norm per pass;
+    R5 (L0reset): entry['steps'] = [{'chunk','update_norm','cum_update_norm', optional 'grad_norm','clip_coef'}]; flat step rows with 'update_norm' (L1 style) are read too."""
+    ents=[e for e in log if 'margins' in e and e.get('epoch',0)>=1];recs=[];prev=0.0
+    for e in sorted(ents,key=lambda x:x['epoch']):
+        r={'pass':e['epoch'],'coef':None,'gn':None,'upd':None,'upd_mean_from_cum':None,'n_chunks':e.get('chunks')}
+        if isinstance(e.get('clip'),list) and e['clip']:r['gn']=[float(x[0]) for x in e['clip']];r['coef']=[float(x[1]) for x in e['clip']];r['n_chunks']=len(e['clip'])
+        st=e.get('steps')
+        if isinstance(st,list) and st:
+            if all('update_norm' in x for x in st):r['upd']=[float(x['update_norm']) for x in st]
+            if all('clip_coef' in x for x in st):r['coef']=[float(x['clip_coef']) for x in st];r['gn']=[float(x['grad_norm']) for x in st]
+            r['n_chunks']=len(st)
+        rows=[x for x in log if x.get('epoch')==e['epoch'] and 'update_norm' in x and 'margins' not in x]
+        if rows and r['upd'] is None:
+            r['upd']=[float(x['update_norm']) for x in rows]
+            if all('clip_coef' in x for x in rows) and r['coef'] is None:r['coef']=[float(x['clip_coef']) for x in rows];r['gn']=[float(x['grad_norm']) for x in rows]
+            r['n_chunks']=len(rows)
+        c=e.get('cum_update_norm')
+        if c is not None:
+            n=r['n_chunks'] or nch
+            if n:r['upd_mean_from_cum']=(float(c)-prev)/n
+            prev=float(c)
+        recs.append(r)
+    return recs
+def _stats(r):
+    o={'n_chunks':r['n_chunks'],'clip_ratio':None,'coef_pct':None,'coef_hist':None,'upd_mean':None,'upd_var':None,'upd_mean_source':None}
+    if r['coef']:
+        c=np.asarray(r['coef']);o['clip_ratio']=float(np.mean(c<1.0));o['coef_pct']={str(q):float(np.percentile(c,q)) for q in PCT}
+        o['coef_hist']={'<0.25':int((c<0.25).sum()),'0.25-0.5':int(((c>=0.25)&(c<0.5)).sum()),'0.5-0.75':int(((c>=0.5)&(c<0.75)).sum()),'0.75-<1':int(((c>=0.75)&(c<1.0)).sum()),'=1 (unclipped)':int((c>=1.0).sum())}
+    if r['upd']:u=np.asarray(r['upd']);o['upd_mean']=float(u.mean());o['upd_var']=float(u.var(ddof=1)) if len(u)>1 else None;o['upd_mean_source']='per-chunk update_norm'
+    elif r['upd_mean_from_cum'] is not None:o['upd_mean']=r['upd_mean_from_cum'];o['upd_mean_source']='cumulative increment / chunks'
+    return o
+CLIP_CELLS=(('job37','L0fs_fskeep'),('R5','L0reset_P63_r5fresh'))
+def clip_table(OUT,seed):
+    """job 37 (native fs x1 on the existing background) vs R5 (job 51, fresh background): per pass and world, clip ratio, update-norm mean/variance, clip-coefficient distribution. Existing logs only."""
+    res={'cells':{},'notes':[]}
+    for key,stem in CLIP_CELLS:
+        res['cells'][key]={}
+        for w in 'AB':
+            log,nm=_load_log(OUT,f'{stem}_s{seed}_{w}')
+            if log is None:res['notes'].append(f'{key} world {w}: {stem}_s{seed}_{w}.json/.saved.json missing');continue
+            recs=pass_records(log,NCH_DEFAULT);res['cells'][key][w]={'file':nm,'passes':{r['pass']:_stats(r) for r in recs}}
+            if recs and all(r['coef'] is None for r in recs):res['notes'].append(f'{key} world {w} ({nm}): no per-chunk clip coefficient / grad norm in this log (needs log_clip / --log-clip); clip ratio and coefficient distribution unavailable')
+            if recs and all(r['upd'] is None for r in recs):res['notes'].append(f'{key} world {w} ({nm}): no per-chunk update norm; mean is the cumulative-norm increment per chunk, variance unavailable')
+    return res
+def clip_md(ct):
+    L=['\n# job 37 (native fs x1, existing background) vs R5 (job 51, fresh background): clipping and update norm per pass (existing logs only)\n']+[f'- note: {x}' for x in ct['notes']]
+    L+=['\n| cell | world | pass | chunks | clip ratio (coef < 1) | update norm mean | update norm var | coef min / p10 / p25 / median / p75 / p90 / max | coef histogram (<.25, .25-.5, .5-.75, .75-<1, =1) |','|---|---|---|---|---|---|---|---|---|']
+    f=lambda x,d=3:'-' if x is None else format(x,f'.{d}f')
+    for key,wd in ct['cells'].items():
+        for w,v in wd.items():
+            for ps,s in sorted(v['passes'].items()):
+                pc=s['coef_pct'];h=s['coef_hist']
+                L.append(f"| {key} | {w} | {ps} | {s['n_chunks']} | {f(s['clip_ratio'])} | {f(s['upd_mean'],4)}{'' if s['upd_mean_source']=='per-chunk update_norm' else ' *'} | {f(s['upd_var'],6)} | {'-' if pc is None else ' / '.join(f(pc[str(q)],2) for q in PCT)} | {'-' if h is None else ', '.join(str(x) for x in h.values())} |")
+    L.append('\n* mean = cumulative-update-norm increment of the pass / number of chunks (per-chunk norms not logged there; variance unavailable).')
     return '\n'.join(L)+'\n'
 def selftest():
     tmp=Path(tempfile.mkdtemp());rng=np.random.default_rng(1);n=15;pairs=[f'p{i}' for i in range(n)]
@@ -130,9 +198,19 @@ def selftest():
                 e=entry(ep,0.0 if ep==0 else dm[ep-1],cums[ep],can[ep]);e['margins']['_alt']['L3']=[sign*x for x in e['margins']['_alt']['L3']];log.append(e)
             json.dump({'log':log},open(tmp/f'{level}_{tag}_s101_{w}.json','w'))
     wr('L1','ck',[0.3,0.5,0.6,0.7],[0,1,2,3,4],[0,0,0,0,0]);wr('L0reset_P1','r2p1',[0.1,0.25,0.3,0.35],[0,10,20,30,40],[0,0,0,0,0.05]);wr('L0reset_P63','r5fresh',[0.02,0.1,0.15,0.2],[0,12,25,38,50],[0,0,0,0,0.2])
-    r=analyse(tmp,101,nb=500);print(md_of(r));assert abs(r['epochs'][4]['Q']['R5']['Q_point']-0.2/0.7)<0.1;assert r['epochs'][4]['Q']['R5']['damage_flag'];print('SELFTEST OK')
+    # job-37-style (entry['clip'] = per-chunk (gn, coef), cum per pass) and R5-style (steps rows) logs; world B of R5 without clip fields
+    tmp2=Path(tempfile.mkdtemp())   # separate dir: in the real run the scored .json is a copy of the .saved.json, here wr() already wrote D-only .json files
+    for w in 'AB':
+        j37=[{'epoch':0,'margins':{}}]+[{'epoch':ps,'chunks':63,'cum_update_norm':63*0.5*ps,'clip':[(1.0+0.02*i*ps,min(1.0,1.0/(1.0+0.02*i*ps))) for i in range(63)],'margins':{}} for ps in (1,2)]
+        json.dump({'log':j37},open(tmp2/f'L0fs_fskeep_s101_{w}.saved.json','w'))
+        r5=[{'epoch':0,'margins':{}}]+[{'epoch':ps,'cum_update_norm':63*0.4*ps,'steps':[{'chunk':i,'update_norm':0.4+0.01*(i%5),**({'grad_norm':0.8+0.01*i,'clip_coef':min(1.0,1.0/(0.8+0.01*i))} if w=='A' else {})} for i in range(63)],'margins':{}} for ps in (1,2)]
+        json.dump({'log':r5},open(tmp2/f'L0reset_P63_r5fresh_s101_{w}.saved.json','w'))
+    ct=clip_table(tmp2,101);c37=ct['cells']['job37']['A']['passes'][1];assert 0<c37['clip_ratio']<1 and abs(c37['upd_mean']-0.5)<1e-9 and c37['upd_var'] is None
+    c5=ct['cells']['R5']['A']['passes'][2];assert c5['upd_var']>0 and c5['clip_ratio']>=0;assert ct['cells']['R5']['B']['passes'][1]['clip_ratio'] is None and any('no per-chunk clip' in x for x in ct['notes']);print(clip_md(ct))
+    r=analyse(tmp,101,nb=500);print(md_of(r))
+    for e_,o_ in r['epochs'].items():assert ('D_difference_decomposition' in o_)==(o_['Q']['R5']['Q_ci'][1]<=0)   # present exactly when the R5 Q lower CI bound <= 0;assert abs(r['epochs'][4]['Q']['R5']['Q_point']-0.2/0.7)<0.1;assert r['epochs'][4]['Q']['R5']['damage_flag'];print('SELFTEST OK')
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int,default=101);ap.add_argument('--out',default=os.environ.get('EXP07_OUT',str(ROOT/'experiments/exp07_write_ladder')));ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
-    OUT=Path(a.out);res=analyse(OUT,a.seed);(OUT/f'e35_analysis_s{a.seed}.md').write_text(md_of(res));json.dump(res,open(OUT/f'e35_analysis_s{a.seed}.json','w'),indent=1,default=float);print(md_of(res))
+    OUT=Path(a.out);res=analyse(OUT,a.seed);res['clip_table']=clip_table(OUT,a.seed);txt=md_of(res)+clip_md(res['clip_table']);(OUT/f'e35_analysis_s{a.seed}.md').write_text(txt);json.dump(res,open(OUT/f'e35_analysis_s{a.seed}.json','w'),indent=1,default=float);print(txt)
 if __name__=='__main__':main()
