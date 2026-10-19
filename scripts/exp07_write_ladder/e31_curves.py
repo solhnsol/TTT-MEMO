@@ -64,10 +64,10 @@ def reach(curve,ex,t):
         if curve[i]>=t and curve[i-1]<t:return ex[i-1]+(t-curve[i-1])/(curve[i]-curve[i-1])*(ex[i]-ex[i-1])
     return np.inf
 for t in map(float,a.targets.split(',')):
-    eL=reach(L1['D'].mean(0),L1['ex'],t);le='<=1 (upper bound)' if eL<=1 else f'{eL:.2f}'
+    eL=reach(L1['D'].mean(1),L1['ex'],t);le='<=1 (upper bound)' if eL<=1 else f'{eL:.2f}'
     md.append(f"- D*={t}: e_L1 = {le}")
     for c in nat:
-        ks=kstar(c);ex=c['ex'][:ks+1];e=reach(c['D'][:ks+1].mean(0),ex,t);assert np.isinf(e) or e>=ex[0],(c['name'],ex,e)
+        ks=kstar(c);ex=c['ex'][:ks+1];e=reach(c['D'][:ks+1].mean(1),ex,t);assert np.isinf(e) or e>=ex[0],(c['name'],ex,e)
         eb=np.array([reach(c['D'][:ks+1][:,b].mean(1),ex,t) for b in BI]);cens=float(np.isinf(eb).mean())
         el=np.array([reach(L1['D'][:,b].mean(1),L1['ex'],t) for b in BI]);rb=eb/np.maximum(el,1e-9)
         md.append(f"  - {c['name']}: e = {'> %d (censored, damage-free range)'%ex[-1] if np.isinf(e) else f'{e:.2f}'}; boot censored fraction {cens:.2f}; ratio e/e_L1 (finite part) median {np.nanmedian(rb[np.isfinite(rb)]) if np.isfinite(rb).any() else float('nan'):.2f}")
