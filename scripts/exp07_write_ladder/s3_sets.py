@@ -73,22 +73,15 @@ class Sets:
         """E39: total masked tokens wanted in chunk k = round(frac x length of the write window before the chunk) (2048 for k >= 8 at 0.25)."""
         return int(round(frac*len(self.window_before(k))))
     def oraclefill(self,k,frac=None):
-        """E39: O (the oracle set, kept whole) plus a random fill F so that |S| = T = round(frac*window). F is drawn from window positions that are not O tokens, with the distance-bin distribution of the O tokens
-        (before the chunk) scaled up to |F| (largest-remainder rounding), same _fill rule as randdist (nearest bin with capacity when a bin runs out; match_frac = fraction taken from the requested bin).
+        """E39: O (the oracle set, kept whole) plus a random fill F so that |S| = T = round(frac*window). F is drawn from window positions that are not O tokens, uniformly over all
+        non-O positions of the window (no distance-bin matching; match_frac is reported as 1.0).
         No O in the chunk -> nothing is masked (as every O-matched cell). frac = 0 -> S = O exactly."""
         frac=self.frac if frac is None else frac;O=self.oracle(k)
         if not O:return [],1.0
         k0=k*CH;lo=max(0,k0-W);Oset=set(O);nF=max(0,self._target(k,frac)-len(O))
         if nF==0:return list(O),1.0
-        cand=[p for p in range(lo,k0) if p not in Oset];pool={}
-        for p in cand:pool.setdefault((k0-p)//BIN,[]).append(p)
-        ob=_dist_bins([p for p in O if p<k0],k0);cnt={}
-        for b in ob:cnt[int(b)]=cnt.get(int(b),0)+1
-        if not cnt:cnt={b:len(v) for b,v in pool.items()}   # all O tokens inside the chunk: no distance information, follow the window
-        tot=sum(cnt.values());raw={b:nF*c/tot for b,c in cnt.items()};base={b:int(v) for b,v in raw.items()};left=nF-sum(base.values())
-        for b in sorted(raw,key=lambda b:(-(raw[b]-base[b]),b))[:left]:base[b]+=1
-        need=[b for b in sorted(base) for _ in range(base[b])]
-        ch,fr=_fill(need,pool,self._rng('oraclefill',k));return sorted(Oset|set(ch)),fr
+        cand=[p for p in range(lo,k0) if p not in Oset];n=min(nF,len(cand))   # E39 decision (before results): uniform draw over all non-O window positions, no distance matching, match_frac = 1.0
+        ch=self._rng('oraclefill',k).sample(cand,n);return sorted(Oset|set(ch)),1.0
     def randfill(self,k,frac=None):
         """E39 optional control: the same total T but WITHOUT O: T positions drawn uniformly from the window before the chunk (O tokens excluded from the draw, not masked). Chunks without O mask nothing."""
         frac=self.frac if frac is None else frac;O=self.oracle(k)
