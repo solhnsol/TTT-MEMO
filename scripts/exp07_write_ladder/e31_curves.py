@@ -19,16 +19,20 @@ def load(prefix):
 def alt(e):return {'margins':e['margins']['_alt']}
 def cell(name,prefix):
     A,B=load(prefix);b=(alt(A[0]),alt(B[0]));ex=[e.get('epoch',e.get('state')) for e in A]
+    if ex!=list(range(len(A))):   # exposure axis must be pass/epoch 0..K; anything else (labels like -1, None, state counters) is replaced by the position and flagged
+        print(f'WARNING {name}: point labels {ex} are not 0..{len(A)-1}; using position index as pass number',file=sys.stderr);WARN.append(f'{name}: labels {ex} replaced by 0..{len(A)-1}');ex=list(range(len(A)))
     D=np.stack([AL.stats(alt(x),alt(y),b)['D'] for x,y in zip(A,B)]);D1=np.stack([AL.stats(x,y,(A[0],B[0]))['D'] for x,y in zip(A,B)])
     can=np.array([[max(e['margins']['_gen_nll']-E[0]['margins']['_gen_nll'],e['margins']['_tail_nll']-E[0]['margins']['_tail_nll']) for e in E] for E in (A,B)]).max(0)
     return dict(name=name,ex=ex,Draw=D,D=D-D[0],R1=D1-D1[0],canary=can,cum=[e.get('cum_update_norm') for e in A],
                 steps=[(x or 0)*(63 if name!='L1' else STEPS['L1']) for x in ex])
+WARN=[]
 cells=[cell(*kv.split('=')) for kv in a.cells.split(',')]
 L1=next(c for c in cells if c['name']=='L1');nat=[c for c in cells if c['name']!='L1']
 ci=lambda v:(float(np.mean(v)),*np.percentile(v,[2.5,97.5]).tolist())
 f3=lambda t:f'{t[0]:+.3f} [{t[1]:+.3f},{t[2]:+.3f}]'
 n=L1['D'].shape[1];BI=rng.integers(0,n,(a.nboot,n))   # shared pair resamples across all cells
 md=[f'# E31 curves, seed {a.seed}, R1-alt D (baseline-removed), 15 pairs, pair bootstrap {a.nboot}\n'];res={}
+md+= [f'AXIS WARNING: {w}\n' for w in WARN]
 md.append(f"Raw D_alt at W0 (not removed): "+', '.join(f"{c['name']} {c['Draw'][0].mean():+.3f}" for c in cells)+'\n')
 def kstar(c):
     k=0
@@ -57,13 +61,13 @@ for c in cells:
 md.append('\n## A2 exposures needed to first reach D* (linear interpolation; censored = not reached within the measured range, no extrapolation)\n')
 def reach(curve,ex,t):
     for i in range(1,len(ex)):
-        if curve[i]>=t:return ex[i-1]+(t-curve[i-1])/(curve[i]-curve[i-1])*(ex[i]-ex[i-1])
+        if curve[i]>=t and curve[i-1]<t:return ex[i-1]+(t-curve[i-1])/(curve[i]-curve[i-1])*(ex[i]-ex[i-1])
     return np.inf
 for t in map(float,a.targets.split(',')):
     eL=reach(L1['D'].mean(0),L1['ex'],t);le='<=1 (upper bound)' if eL<=1 else f'{eL:.2f}'
     md.append(f"- D*={t}: e_L1 = {le}")
     for c in nat:
-        ks=kstar(c);ex=c['ex'][:ks+1];e=reach(c['D'][:ks+1].mean(0),ex,t)
+        ks=kstar(c);ex=c['ex'][:ks+1];e=reach(c['D'][:ks+1].mean(0),ex,t);assert np.isinf(e) or e>=ex[0],(c['name'],ex,e)
         eb=np.array([reach(c['D'][:ks+1][:,b].mean(1),ex,t) for b in BI]);cens=float(np.isinf(eb).mean())
         el=np.array([reach(L1['D'][:,b].mean(1),L1['ex'],t) for b in BI]);rb=eb/np.maximum(el,1e-9)
         md.append(f"  - {c['name']}: e = {'> %d (censored, damage-free range)'%ex[-1] if np.isinf(e) else f'{e:.2f}'}; boot censored fraction {cens:.2f}; ratio e/e_L1 (finite part) median {np.nanmedian(rb[np.isfinite(rb)]) if np.isfinite(rb).any() else float('nan'):.2f}")
