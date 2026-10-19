@@ -134,7 +134,7 @@ def main():
         ids=stream_ids(L,w);mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True
         with rt32.mesh,jax.default_matmul_precision('highest'):
             seq32=rt32.seq(ids,mask=mask);pref_nat,pd=pref_native32(rt,rt32,seq32,ids);man[f'pref_dtype_{w}']=pd
-            ks=list(range(NCH)) if a.chunks=='all' else [int(x) for x in a.chunks.split(',')]
+            ks=list(range(NCH)) if a.chunks=='all' else (sorted({x[3]['k'] for x in SP.chunk_rows(L.T.w,w=='B',L.T.tok,rt.bos,rt.eos,'X')[0]}) if a.chunks=='c2' else [int(x) for x in a.chunks.split(',')])   # c2 = the 26 fact-intact chunks of the screen (NTP loss kept)
             if a.smoke:ks=ks[:a.smoke]
             nk={k:int(np.asarray(rt32.chunk(seq32,k).loss_masks).sum()) for k in ks};N=sum(nk.values());acc={cc:tuple(jnp.zeros(s,jnp.float32) for s in ((O['NL'],O['dm'],O['dff']),(O['NL'],O['dm'],O['dff']),(O['NL'],O['dff'],O['dm']))) for cc in cells}
             st=clone_state(rt32.state_suffix);t0=time.monotonic();chk={}
