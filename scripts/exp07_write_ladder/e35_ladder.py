@@ -28,8 +28,8 @@ norm=lambda s:' '.join(s.split())
 def book_paras(fname,rng):
     """gen_world.background for ONE named book (same cleaning, name scrubbing and shuffle), no book choice."""
     t=(DATA/fname).read_text(errors='ignore');t=t[t.find('CHAPTER'):] if 'CHAPTER' in t else t
-    t=t[len(t)//5:];t=re.sub(r'\r','',t)
-    paras=[p for p in re.split(r'\n\s*\n',t) if 200<len(p)<900 and not re.search(r'CHAPTER|\bVol|\[|\]|\*',p)];out=[]
+    t=t[len(t)//5:];t=re.sub(r'\r','',t);e=t.find('*** END');t=t[:e] if e>0 else t
+    paras=[p for p in re.split(r'\n\s*\n',t) if 200<len(p)<900 and not re.search(r'CHAPTER|\bVol|\[|\]|\*|Gutenberg|indemnif|royalt|copyright|trademark|licen[sc]e|donat',p,re.I)];out=[]
     for p in paras:
         p=re.sub(r'(?<=[a-z,;] )(?:[A-Z][a-z]+)(?: [A-Z][a-z]+)*','someone',p)
         p=re.sub(r"\b(?:Mr|Mrs|Miss|Dr|Sir|Lady|Lord)\.? \w+",'the stranger',p);out.append(' '.join(p.split()))
@@ -39,7 +39,7 @@ def candidate_books(own_bg,seed):
     own=set(own_bg);c=[]
     for f in sorted(p.name for p in DATA.glob('pg*.txt') if p.name not in EXCL):
         paras=book_paras(f,random.Random(0))
-        if len(paras)>=100 and not (set(paras)&own):c.append(f)
+        if len(paras)>=100 and len(set(paras)&own)<=MAX_OVERLAP*len(own):c.append(f)
     random.Random(f'e35|{seed}').shuffle(c);return c
 def fresh_pool(own_bg,passno,seed):
     c=candidate_books(own_bg,seed);i=passno-2
