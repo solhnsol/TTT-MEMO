@@ -34,17 +34,34 @@ def book_paras(fname,rng):
         p=re.sub(r'(?<=[a-z,;] )(?:[A-Z][a-z]+)(?: [A-Z][a-z]+)*','someone',p)
         p=re.sub(r"\b(?:Mr|Mrs|Miss|Dr|Sir|Lady|Lord)\.? \w+",'the stranger',p);out.append(' '.join(p.split()))
     rng.shuffle(out);return out
+_CB={}
 def candidate_books(own_bg,seed):
+    key=(hashlib.sha1('|'.join(own_bg).encode()).hexdigest(),seed)
+    if key not in _CB:_CB[key]=_candidate_books(own_bg,seed)
+    return _CB[key]
+def _candidate_books(own_bg,seed):
     """books usable as fresh background: not the canary books, not the world's own background book (detected by exact paragraph overlap), in a seeded order."""
     own=set(own_bg);c=[]
     for f in sorted(p.name for p in DATA.glob('pg*.txt') if p.name not in EXCL):
         paras=book_paras(f,random.Random(0))
         if len(paras)>=100 and len(set(paras)&own)<=MAX_OVERLAP*len(own):c.append(f)
     random.Random(f'e35|{seed}').shuffle(c);return c
-def fresh_pool(own_bg,passno,seed):
-    c=candidate_books(own_bg,seed);i=passno-2
-    assert i<len(c),f'not enough fresh books ({len(c)}) for pass {passno}: {c}'
-    return book_paras(c[i],random.Random(f'e35|{seed}|{passno}')),c[i]
+def fresh_pool(own_bg,passno,seed,passes,nslots,margin=200):
+    """pass p>=2 gets 2-3 books (as many as needed for nslots+margin paragraphs); books are disjoint across passes (candidates in seeded order, taken in sequence). Aborts if the candidates run out."""
+    c=candidate_books(own_bg,seed);k=0
+    for ps in range(2,passno+1):
+        got=[];tot=0
+        while tot<nslots+margin:
+            assert k<len(c),f'ran out of fresh books at pass {ps} ({len(c)} candidates)'
+            f=c[k];k+=1;pa=book_paras(f,random.Random(f'e35|{seed}|{f}'));got.append((f,pa));tot+=len(pa)
+    pool=[x for f,pa in got for x in pa];return pool,[f for f,_ in got],c
+def baseline_overlap(c):
+    """word 8-gram overlap between unrelated book pairs (the 6 last candidates), same formula as audit()."""
+    out=[]
+    for i in (1,3,5):
+        if len(c)<i+1:break
+        g=[grams(norm(' '.join(book_paras(f,random.Random(0))))) for f in (c[-i],c[-i-1])];out.append(len(g[0]&g[1])/max(1,min(len(g[0]),len(g[1]))))
+    return out
 def grams(s,n=8):
     w=s.split();return {tuple(w[i:i+n]) for i in range(len(w)-n+1)}
 def canary_texts():
@@ -56,28 +73,29 @@ def build_fresh_worlds(w0,passes):
     """text-level worlds per pass (pass 1 = w0): the exposure texts stay in place, every 'bg' text is replaced by the pass's fresh pool paragraph (cycling if short), as ladder.fs_streams."""
     seed=w0['seed'];own=[t['text'] for t in w0['texts'] if t['kind']=='bg'];worlds=[w0];meta=[{'pass':1,'book':'world'}]
     for ps in range(2,passes+1):
-        pool,book=fresh_pool(own,ps,seed);w=copy.deepcopy(w0);bi=0;new=[]
+        pool,book,c=fresh_pool(own,ps,seed,passes,len(own));w=copy.deepcopy(w0);bi=0;new=[]
         for t in w['texts']:
-            if t['kind']=='bg':new.append({'kind':'bg','text':pool[bi%len(pool)]});bi+=1
+            if t['kind']=='bg':new.append({'kind':'bg','text':pool[bi]});bi+=1
             else:new.append(t)
-        w['texts']=new;worlds.append((w,pool));meta.append({'pass':ps,'book':book,'pool_size':len(pool)})
+        w['texts']=new;worlds.append((w,pool));meta.append({'pass':ps,'books':book,'pool_size':len(pool)})
+    meta[0]['baseline_overlap']=baseline_overlap(c) if passes>1 else []
     return worlds,meta
 def pad_to_tokens(w,pool,swap,enc_ids,bos,nt):
     """extend a world's text with further pool paragraphs until the stream has nt tokens (as fs_streams does)."""
     bi=sum(1 for t in w['texts'] if t['kind']=='bg');ids=[bos]+enc_ids(gw.realize(w,swap)[0])
     while len(ids)<nt:
-        w['texts'].append({'kind':'bg','text':pool[bi%len(pool)]});bi+=1;ids=[bos]+enc_ids(gw.realize(w,swap)[0])
+        assert bi<len(pool),'fresh pool exhausted while padding the stream: abort';w['texts'].append({'kind':'bg','text':pool[bi]});bi+=1;ids=[bos]+enc_ids(gw.realize(w,swap)[0])
     return ids[:nt]
-def audit(bg_by_pass,tails):
+def audit(bg_by_pass,tails,base=None):
     """bg_by_pass: {pass: [bg texts]}; returns the report and a pass flag."""
     G={p:grams(norm(' '.join(v))) for p,v in bg_by_pass.items()};rep={'pair_overlap':{},'dup_within_pass':{},'canary_exact':{},'canary_8gram':{}};ok=True
-    ps=sorted(G)
+    ps=sorted(G);thr=(max(base)+0.02) if base else MAX_OVERLAP;rep['threshold']=thr;rep['baseline']=base
     for i in ps:
         for j in ps:
-            if i<j:o=len(G[i]&G[j])/max(1,min(len(G[i]),len(G[j])));rep['pair_overlap'][f'{i}-{j}']=o;ok&=o<=MAX_OVERLAP
+            if i<j:o=len(G[i]&G[j])/max(1,min(len(G[i]),len(G[j])));rep['pair_overlap'][f'{i}-{j}']=o;ok&=o<=thr
     cg={k:grams(v) for k,v in tails.items()}
     for p,v in bg_by_pass.items():
-        rep['dup_within_pass'][p]=len(v)-len(set(v));ex=sum(1 for x in set(v) if any(x in t for t in tails.values()));rep['canary_exact'][p]=ex;ok&=(ex==0 or p==1)
+        rep['dup_within_pass'][p]=len(v)-len(set(v));ok&=(rep['dup_within_pass'][p]==0 or p==1);ex=sum(1 for x in set(v) if any(x in t for t in tails.values()));rep['canary_exact'][p]=ex;ok&=(ex==0 or p==1)
         rep['canary_8gram'][p]={k:len(G[p]&g)/max(1,len(G[p])) for k,g in cg.items()}
     return rep,bool(ok)
 def f_table(w,swap,tok,Ps=(1,4,8,64)):
@@ -104,7 +122,7 @@ class L35(LD.Ladder):
         _,_,spans=gw.realize(w0,swap)
         for ps,ids in enumerate(streams,1):
             assert len(ids)>=NCH*CH;txt=self.T.tok.decode(list(ids[:NCH*CH]));miss=[s_['text'] for s_ in spans if s_['text'] not in txt];assert not miss,(ps,len(miss),miss[:2])
-        rep,ok=audit({i+1:[t['text'] for t in w['texts'] if t['kind']=='bg'] for i,w in enumerate(worlds)},canary_texts());print('fresh background audit',json.dumps(rep)[:600],'PASS' if ok else 'FAIL',flush=True)
+        rep,ok=audit({i+1:[t['text'] for t in w['texts'] if t['kind']=='bg'] for i,w in enumerate(worlds)},canary_texts(),self._bgmeta[0].get('baseline_overlap'));print('fresh background audit',json.dumps(rep)[:600],'PASS' if ok else 'FAIL',flush=True)
         assert ok,'background audit failed'
         self._fw=worlds;self._audit=rep;return streams
     def run_L1_fresh(self,swap,epochs,seed=0,variant='fillfresh',save_epochs=(),save_dir=None):
@@ -160,7 +178,7 @@ def cpu_checks(seed):
     import gen_world as G;w=G.build_world(seed);res={'seed':seed}
     worlds,meta=build_fresh_worlds(w,4);bgs={1:[t['text'] for t in w['texts'] if t['kind']=='bg']}
     for i,(ww,pool) in enumerate(worlds[1:],2):bgs[i]=[t['text'] for t in ww['texts'] if t['kind']=='bg']
-    rep,ok=audit(bgs,canary_texts());res['U1_audit']=rep;res['U1_pass']=ok;res['books']=meta
+    rep,ok=audit(bgs,canary_texts(),meta[0].get('baseline_overlap'));res['U1_audit']=rep;res['U1_pass']=ok;res['books']=meta
     # U3 (text level): the exposure texts and their order are identical in every pass; only the bg texts differ
     base=[(t['t'],t['round'],t['text']) for t in w['texts'] if t['kind']=='expo']
     res['U3_expo_identical']=all([(t['t'],t['round'],t['text']) for t in ww['texts'] if t['kind']=='expo']==base for ww,_ in worlds[1:])
