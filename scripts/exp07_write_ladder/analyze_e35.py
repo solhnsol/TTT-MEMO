@@ -208,7 +208,8 @@ def selftest():
     ct=clip_table(tmp2,101);c37=ct['cells']['job37']['A']['passes'][1];assert 0<c37['clip_ratio']<1 and abs(c37['upd_mean']-0.5)<1e-9 and c37['upd_var'] is None
     c5=ct['cells']['R5']['A']['passes'][2];assert c5['upd_var']>0 and c5['clip_ratio']>=0;assert ct['cells']['R5']['B']['passes'][1]['clip_ratio'] is None and any('no per-chunk clip' in x for x in ct['notes']);print(clip_md(ct))
     r=analyse(tmp,101,nb=500);print(md_of(r))
-    for e_,o_ in r['epochs'].items():assert ('D_difference_decomposition' in o_)==(o_['Q']['R5']['Q_ci'][1]<=0)   # present exactly when the R5 Q lower CI bound <= 0;assert abs(r['epochs'][4]['Q']['R5']['Q_point']-0.2/0.7)<0.1;assert r['epochs'][4]['Q']['R5']['damage_flag'];print('SELFTEST OK')
+    for e_,o_ in r['epochs'].items():assert ('D_difference_decomposition' in o_)==(o_['Q']['R5']['Q_ci'][1]<=0)   # present exactly when the R5 Q lower CI bound <= 0
+    assert abs(r['epochs'][4]['Q']['R5']['Q_point']-0.2/0.7)<0.1;assert r['epochs'][4]['Q']['R5']['damage_flag'];print('SELFTEST OK')
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int,default=101);ap.add_argument('--out',default=os.environ.get('EXP07_OUT',str(ROOT/'experiments/exp07_write_ladder')));ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
