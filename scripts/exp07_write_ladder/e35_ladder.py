@@ -48,12 +48,12 @@ def _candidate_books(own_bg,seed):
     random.Random(f'e35|{seed}').shuffle(c);return c
 def fresh_pool(own_bg,passno,seed,passes,nslots,margin=200):
     """pass p>=2 gets 2-3 books (as many as needed for nslots+margin paragraphs); books are disjoint across passes (candidates in seeded order, taken in sequence). Aborts if the candidates run out."""
-    c=candidate_books(own_bg,seed);k=0
+    c=candidate_books(own_bg,seed);k=0;seen=set(own_bg)
     for ps in range(2,passno+1):
         got=[];tot=0
         while tot<nslots+margin:
             assert k<len(c),f'ran out of fresh books at pass {ps} ({len(c)} candidates)'
-            f=c[k];k+=1;pa=book_paras(f,random.Random(f'e35|{seed}|{f}'));got.append((f,pa));tot+=len(pa)
+            f=c[k];k+=1;pa=[x for x in book_paras(f,random.Random(f'e35|{seed}|{f}')) if x not in seen];pa=list(dict.fromkeys(pa));seen.update(pa);got.append((f,pa));tot+=len(pa)
     pool=[x for f,pa in got for x in pa];return pool,[f for f,_ in got],c
 def baseline_overlap(c):
     """word 8-gram overlap between unrelated book pairs (the 6 last candidates), same formula as audit()."""
