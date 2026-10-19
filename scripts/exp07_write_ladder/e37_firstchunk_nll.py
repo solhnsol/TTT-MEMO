@@ -29,7 +29,7 @@ def main():
         with rt.mesh:
             sq=rt.seq(ids);pf=rt.prefix(orig,sq);_,lp=rt.chunk_logp(m,clone_state(rt.state_suffix),rt.chunk(sq,0),pf[:CH])
         return float(-np.asarray(lp,np.float64)[:CH-1].mean())
-    states=[('W0',None)]+[(s.split('=',1)[0],s.split('=',1)[1]) for s in a.state];res={'ids':a.ids,'n':ns,'chunk':a.chunk,'states':{},'bos_first_token_frac':float((S[:,lo]==rt.bos).mean())};t0=time.monotonic()
+    states=[('W0',None)]+[(s.split('=',1)[0],s.split('=',1)[1]) for s in a.state];res={'ids':a.ids,'n':ns,'chunk':a.chunk,'sample_index':list(range(ns)),'token_offset':[i*SAMPLE+lo for i in range(ns)],'states':{},'bos_first_token_frac':float((S[:,lo]==rt.bos).mean())};t0=time.monotonic()
     for lab,p in states:
         if p is None:m=orig
         else:
@@ -41,7 +41,7 @@ def main():
         v2=[read(orig,S[i]) for i in range(ns)];d=np.abs(np.array(v2)-np.array(res['states']['W0']['nll']));res['W0_repeat']={'nll':v2,'max_abs_diff':float(d.max())};print('W0 repeat max |diff|',d.max())
     json.dump(res,open(OUT/f'e37_firstchunk_{a.tag}.json','w'),indent=0)
     with open(OUT/f'e37_firstchunk_{a.tag}.csv','w',newline='') as f:
-        w=csv.writer(f);labs=list(res['states']);w.writerow(['sample']+labs+(['W0_repeat'] if 'W0_repeat' in res else []))
-        for i in range(ns):w.writerow([i]+[res['states'][l]['nll'][i] for l in labs]+([res['W0_repeat']['nll'][i]] if 'W0_repeat' in res else []))
+        w=csv.writer(f);labs=list(res['states']);w.writerow(['sample','token_offset']+labs+(['W0_repeat'] if 'W0_repeat' in res else []))
+        for i in range(ns):w.writerow([i,i*SAMPLE+lo]+[res['states'][l]['nll'][i] for l in labs]+([res['W0_repeat']['nll'][i]] if 'W0_repeat' in res else []))
     print('wrote',OUT/f'e37_firstchunk_{a.tag}.json')
 if __name__=='__main__':main()
