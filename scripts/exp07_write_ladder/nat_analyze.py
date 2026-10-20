@@ -90,39 +90,55 @@ def analyze(d,stream,tag='nat',w0cut=None,w='A'):
     rep['pass_info']={c:cells[c].get('pass_info') for c in ('L0fs','L0mwfs') if cells[c]}
     return rep,'\n'.join(L)+'\n'
 
-def Dpair(meta,eA,eB,alt):
-    """registered-style D per pair (analyze_ladder.stats): mean over the pair's items of (mA - mB)/2 for L3 minus the same for XP."""
-    def M(f):
-        its=fam_items(meta,f);a=np.asarray(eA['_alt'][f] if alt else eA[f]);b=np.asarray(eB['_alt'][f] if alt else eB[f]);d={}
-        for it,x in zip(its,(a-b)/2):d.setdefault(it['pair'],[]).append(x)
-        ks=sorted(d,key=lambda s:int(s[1:]));return np.asarray([np.mean(d[k]) for k in ks])
-    return M('L3')-M('XP')
+def Dperson(meta,eA,eB,alt):
+    """E33 2.11 D per person: [mA(L3_i) - mB(L3_i)] - [mA(XP_i) - mB(XP_i)] (un-halved; analyze_ladder.py's D is half of this)."""
+    l3a,l3b=person_vec(meta,eA,'L3',alt),person_vec(meta,eB,'L3',alt);xpa,xpb=person_vec(meta,eA,'XP',alt),person_vec(meta,eB,'XP',alt)
+    return {t:(l3a[t]-l3b[t])-(xpa[t]-xpb[t]) for t in l3a}
 def accflip(meta,eA,eB,alt):
     a=np.asarray((eA['_alt']['L3'] if alt else eA['L3']));b=np.asarray((eB['_alt']['L3'] if alt else eB['L3']));return float(((a>0).mean()+(b<0).mean())/2),float(((a>0)&(b<0)).mean())
-def bootv(v,rng):
-    v=np.asarray(v);b=[v[rng.integers(0,len(v),len(v))].mean() for _ in range(NB)];return float(v.mean()),float(np.percentile(b,2.5)),float(np.percentile(b,97.5))
+def ratio_boot(a,b,pairs,rng):
+    """ratio of person means a/b with pair-cluster bootstrap"""
+    P=sorted(set(pairs.values()));ts=list(a);pt=np.mean([a[t] for t in ts])/np.mean([b[t] for t in ts]);bs=[]
+    for _ in range(NB):
+        s=rng.integers(0,len(P),len(P));tt=[t for i in s for t in ts if pairs[t]==P[i]];den=np.mean([b[t] for t in tt]);bs.append(np.mean([a[t] for t in tt])/den if abs(den)>1e-9 else np.nan)
+    lo,hi=np.nanpercentile(bs,[2.5,97.5]);return float(pt),float(lo),float(hi)
+def exposure_groups(cells):
+    """persons by their pass-1 fact exposures (real tokenization, world A): single = one fact unit, window = a repeat inside 8K (s_cross + s_same >= 1), out = repeats only outside the window."""
+    pi=None
+    for c in ('L0fs','L0mwfs'):
+        j=cells[c][0]
+        if j and j.get('pass_info'):pi=j['pass_info'].get('False') or j['pass_info'].get('true');break
+    if not pi:return {}
+    st=pi[0]['strata'];g={'single':[],'window':[],'out':[]}
+    for t,v in st.items():
+        t=int(t);(g['single'] if v['n_fact']<=1 else g['window'] if v['s_cross']+v['s_same']>=1 else g['out']).append(t)
+    return g
 def analyze_D(d,stream,tag='nat'):
-    meta=json.load(open(Path(d)/f'meta_nat_{tag}_s{stream}.json'));rng=np.random.default_rng(1);L=['\n## D(A-B), registered definition (per pair, 13 pairs; state 0 = W0 gives D = 0 by construction)\n'];rep={}
+    meta=json.load(open(Path(d)/f'meta_nat_{tag}_s{stream}.json'));pairs=pair_of(meta);rng=np.random.default_rng(1);L=['\n## D(A-B) (E33 2.11 definition, per person, un-halved; 13 pair clusters; state 0 = W0 gives D = 0)\n'];rep={}
     cells={c:(load(d,c,tag,stream,'A'),load(d,c,tag,stream,'B')) for c in ('L0fs','L0mwfs','L1')}
     if not all(cells[c][0] and cells[c][1] for c in cells if cells[c][0] or cells[c][1]):return rep,'\nD(A-B): world B missing for some cell, skipped\n'
+    grp=exposure_groups(cells)
     for alt,nm in ((True,'R1-alt (SQuAD tail)'),(False,'R1 (pg1342 tail)')):
         tab={};rows=[]
         for c,lab in (('L0fs','native-fs pass'),('L0mwfs','masked-fs pass'),('L1','L1 doc epoch')):
             if not cells[c][0]:continue
             SA=states(cells[c][0]['log']);SB=states(cells[c][1]['log']);assert len(SA)==len(SB)
             for k in range(1,len(SA)):
-                e=SA[k].get('epoch',k);D=Dpair(meta,SA[k]['margins'],SB[k]['margins'],alt);tab[(c,e)]=D;ac,fl=accflip(meta,SA[k]['margins'],SB[k]['margins'],alt)
-                rows.append((f'{lab} {e}',bootv(D,rng),f'{ac:.2f} / {fl:.2f}'))
-        for e in sorted({e for c,e in tab if c=='L0fs'}&{e for c,e in tab if c=='L0mwfs'}):rows.append((f'masked - native pass {e}',bootv(tab[('L0mwfs',e)]-tab[('L0fs',e)],rng),''))
+                e=SA[k].get('epoch',k);D=Dperson(meta,SA[k]['margins'],SB[k]['margins'],alt);tab[(c,e)]=D;ac,fl=accflip(meta,SA[k]['margins'],SB[k]['margins'],alt)
+                rows.append((f'{lab} {e}',boot(D,pairs,rng),f'{ac:.2f} / {fl:.2f}'))
+        for e in sorted({e for c,e in tab if c=='L0fs'}&{e for c,e in tab if c=='L0mwfs'}):rows.append((f'masked - native pass {e}',boot({t:tab[('L0mwfs',e)][t]-tab[('L0fs',e)][t] for t in tab[('L0fs',e)]},pairs,rng),''))
         kl=[e for c,e in tab if c=='L1'];km=[e for c,e in tab if c=='L0mwfs']
-        if kl and km:
-            a=tab[('L0mwfs',max(km))];b=tab[('L1',max(kl))];P=len(a);bs=[]
-            for _ in range(NB):
-                s=rng.integers(0,P,P);den=b[s].mean();bs.append(a[s].mean()/den if abs(den)>1e-9 else np.nan)
-            lo,hi=np.nanpercentile(bs,[2.5,97.5]);rows.append((f'R* = masked pass {max(km)} D / L1 epoch {max(kl)} D',(float(a.mean()/b.mean()),float(lo),float(hi)),''))
+        if kl and km:rows.append((f'R* = masked pass {max(km)} D / L1 epoch {max(kl)} D (ratio of means)',ratio_boot(tab[('L0mwfs',max(km))],tab[('L1',max(kl))],pairs,rng),''))
+        if kl:
+            e=max(kl);rows.append((f'L1 epoch {e} D lower bound > 0 (readable)?',boot(tab[('L1',e)],pairs,rng),'yes' if boot(tab[('L1',e)],pairs,rng)[1]>0 else 'NO: stream not readable'))
+        if grp and km and ('L0fs',max(km)) in tab:
+            e=max(km)
+            for g,ts in grp.items():
+                if ts:
+                    df={t:tab[('L0mwfs',e)][t]-tab[('L0fs',e)][t] for t in ts};rows.append((f'S4 masked - native pass {e}, persons {g} (n={len(ts)}, table only)',(float(np.mean(list(df.values()))),float('nan'),float('nan')),''))
         rep[nm]=[(r,v,x) for r,v,x in rows]
-        L+=[f'\n### {nm}: D = [L3 - XP] of (mA - mB)/2, mean over pairs (95% bootstrap CI over pairs)\n','| cell | D | acc / flip |','|---|---|---|']+[f'| {r} | {fmt(v)} | {x} |' for r,v,x in rows]
-    L.append('\nreading aids: masked - native D at pass 3 lower bound > 0 and R* >= 0.30 and canary <= 0.10 are the E33 2.8 P1 criteria (13 pairs: low power, report either way).')
+        L+=[f'\n### {nm}: D, mean over persons (95% CI by bootstrap over pairs)\n','| cell | D | acc / flip |','|---|---|---|']+[f'| {r} | {fmt(v)} | {x} |' for r,v,x in rows]
+    L.append('\nE33 2.11 reading: S1 masked - native D(3) point >= +0.25 -> signal; CI inside +-0.2 -> not visible; S2 R* >= 0.30 at pass 3 (needs L1 e8 D lower bound > 0); S3 canary <= 0.10 (see canary table) and first-chunk NLL (e37 step); S4 tables without interpretation. D = C_A - C_B (change-from-W0 tables per world). analyze_ladder.py D is half of this D.')
     return rep,'\n'.join(L)+'\n'
 
 def export_person_margins(d,stream,tag='nat'):
@@ -163,8 +179,9 @@ def selftest():
         for k,e in enumerate(jB['log']):
             gg=([0]+g)[k];e['margins']['L3']=[w0[i]-gg+0.0 for i in range(2*P)];e['margins']['_alt']['L3']=[x+0.01 for x in e['margins']['L3']]
         json.dump(jB,open(d/f'{c}_nat_s9105_B.json','w'))
-    rd,mdD=analyze_D(d,9105);tD=dict((r,v) for r,v,x in rd['R1-alt (SQuAD tail)'])
-    assert abs(tD['native-fs pass 3'][0]-0.15)<0.06 and abs(tD['masked-fs pass 3'][0]-0.6)<0.06,tD
+    jA=json.load(open(d/'L0fs_nat_s9105_A.json'));jA['pass_info']={'False':[{'strata':{str(t):{'n_fact':1 if t<8 else 2,'s_cross':1 if t>=14 else 0,'s_same':0,'n_out':0 if t>=14 else (1 if t>=8 else 0)} for t in range(2*P)}}]};json.dump(jA,open(d/'L0fs_nat_s9105_A.json','w'))
+    rd,mdD=analyze_D(d,9105);assert sum('S4' in r for r,v,x in rd['R1-alt (SQuAD tail)'])==3,[r for r,v,x in rd['R1-alt (SQuAD tail)']];tD=dict((r,v) for r,v,x in rd['R1-alt (SQuAD tail)'])
+    assert abs(tD['native-fs pass 3'][0]-0.30)<0.08 and abs(tD['masked-fs pass 3'][0]-1.2)<0.08,tD
     rep,md=analyze(d,9105,w0cut=0.5);t=dict(rep['tables']['R1-alt (SQuAD tail)'])
     assert abs(t['native-fs pass 3'][0]-0.15)<0.06 and abs(t['masked-fs (chunk alone) pass 3'][0]-0.6)<0.06,t
     assert abs(t['masked - native pass 3'][0]-0.45)<0.08 and t['masked - native pass 3'][1]>0.3
