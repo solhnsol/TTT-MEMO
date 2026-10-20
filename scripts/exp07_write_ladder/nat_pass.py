@@ -127,7 +127,7 @@ def build_pass_stream_matched(w0,pool,swap,encode,decode,bos,target,slack=8,min_
     assert resid<=max_drift,f'exposure positions drift by up to {resid} tokens after {rounds} adjustments (allowed {max_drift}); per-unit drift {d}'
     late=[s for s in sp if s['tok_end']>=target]
     assert not late,f'{len(late)} exposure units fall beyond token {target}'
-    used=[x for i in slots for x in w['texts'][i]['text'].split('\n\n') if x]   # paragraphs actually used (the last one of a slot is the cut piece)
+    pset=set(pool);used=[x for i in slots for x in w['texts'][i]['text'].split('\n\n') if x and (x in pset or len(x.split())>=20)]   # audit texts: whole pool paragraphs actually used + cut pieces long enough to hold an 8-gram sentence-level overlap (a 1-3 word cut piece such as 'From' is neither a paragraph nor auditable and repeats by chance: job 61 'used more than once')
     if len(ids)<target:raise AssertionError(f'matched stream is {len(ids)} < {target} tokens')
     return w,ids,sp,{'rounds':rounds,'max_abs_drift':int(resid),'slots':len(slots),'tokens_cut_mean':float(np.mean([len(join_ids[i])-n[i] for i in slots])),'pool_tokens':pool_tok,'need_tokens':need_tok,'pool_ratio':pool_tok/need_tok,'paragraphs_consumed':cursor,'paragraphs_unused':len(pool)-cursor},used
 

@@ -37,7 +37,28 @@ def weights(counts):
 def parse_cells(s):
     names=[x for x in s.split(',') if x] if s not in ('core','all') else (CORE if s=='core' else ALL)
     bad=[x for x in names if x not in CELLS];assert not bad,f'unknown cells {bad}';return names
+def verdict(rows,old=None):
+    """selfcheck verdict from the measured rows (pure Python, CPU testable). Keys starting with 'gate' are the ones that decide (E30 design 10/20, 2nd revision); 'info_*' and 'warn_*' are descriptive.
+    gate_realctx_vs_windowref: cos >= 0.999 and |CE(context path) - CE(window reference)| < 0.01 on every row (rel_diff > 0.05 is only a warning); gate_F0_vs_M_cos_ge_0.999 (F0 vs M, when measured).
+    E30_GATES=old: the original gates decide (realctx vs native cos >= 0.99 and CE < 0.05, F0 vs M rel <= 1e-3)."""
+    import os
+    old=(os.environ.get('E30_GATES','new')=='old') if old is None else old;r={}
+    r['info_realctx_vs_native_cos_ge_0.99']=all(x['realctx_vs_native']['cos']>=0.99 and abs(x['ce_realctx_pipeline']-x['ce_native'])<0.05 for x in rows)
+    r['gate_realctx_vs_windowref']=all(x['realctx_vs_windowref']['cos']>=0.999 and abs(x['ce_realctx_pipeline']-x['ce_windowref'])<0.01 for x in rows)
+    r['warn_windowref_rel_gt_0.05']=[x['k'] for x in rows if x['realctx_vs_windowref']['rel_diff']>0.05]
+    have=all('F0_vs_M' in x for x in rows)
+    if have:
+        r['info_F0_vs_M_rel_diff_le_1e-3']=all(x['F0_vs_M']['rel_diff']<=1e-3 for x in rows);r['gate_F0_vs_M_cos_ge_0.999']=all(x['F0_vs_M']['cos']>=0.999 for x in rows)
+    if old:ok=r['info_realctx_vs_native_cos_ge_0.99'] and r.get('info_F0_vs_M_rel_diff_le_1e-3',True)
+    else:ok=r['gate_realctx_vs_windowref'] and r.get('gate_F0_vs_M_cos_ge_0.999',True)
+    r['gates_deciding']=['info_realctx_vs_native_cos_ge_0.99','info_F0_vs_M_rel_diff_le_1e-3'] if old else ['gate_realctx_vs_windowref']+(['gate_F0_vs_M_cos_ge_0.999'] if have else []);r['rc']=0 if ok else 4;return r
 def selftest():
+    row=lambda k,cw,ce,rel,cf=0.9999,rf=0.014:{'k':k,'ce_native':2.687,'ce_realctx_pipeline':2.6887,'ce_windowref':ce,'realctx_vs_native':{'cos':0.983},'realctx_vs_windowref':{'cos':cw,'rel_diff':rel},'F0_vs_M':{'cos':cf,'rel_diff':rf}}
+    v=verdict([row(8,0.99942,2.6871,0.034),row(17,0.99989,2.6871,0.0147)],old=False);assert v['rc']==0 and v['gate_realctx_vs_windowref'] and v['gate_F0_vs_M_cos_ge_0.999'] and v['info_F0_vs_M_rel_diff_le_1e-3'] is False and v['info_realctx_vs_native_cos_ge_0.99'] is False   # job 60 numbers pass
+    v=verdict([row(8,0.99942,2.6871,0.06)],old=False);assert v['rc']==0 and v['warn_windowref_rel_gt_0.05']==[8]
+    assert verdict([row(8,0.998,2.6871,0.03)],old=False)['rc']==4 and verdict([row(8,0.9995,2.70,0.03)],old=False)['rc']==4 and verdict([row(8,0.9995,2.6871,0.03,cf=0.99)],old=False)['rc']==4
+    assert verdict([row(8,0.99942,2.6871,0.034)],old=True)['rc']==4
+    print('e30_core verdict SELFTEST OK',{k:x for k,x in verdict([row(8,0.99942,2.6871,0.034)],old=False).items() if k!='rc'})
     for n in ALL:
         k=keep_vector(n);assert k.shape==(WIN+CH,) and k[WIN:].all()
     assert keep_vector('F0')[:WIN].sum()==0 and keep_vector('M')[:WIN].sum()==0
