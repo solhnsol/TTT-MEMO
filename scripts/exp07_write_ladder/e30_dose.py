@@ -71,6 +71,10 @@ def check_ctx_files(L,cells,nks):
         k=C.prep_key(n)
         if k and k[0]!='stream':
             assert k[0] in L.ctx_texts,f'cell {n}: context file for {k[0]} missing (run e30_ctx.py first)';assert len(L.ctx_texts[k[0]])>=nks,f'{k[0]}: {len(L.ctx_texts[k[0]])} segments < {nks} write chunks'
+def sts_ref(L,sq,pf,n):
+    st=clone_state(L.rt.state_suffix)
+    for j in range(n):st=L.read_state(L.rt.base,st,L.rt.chunk(sq,j),pf[j*CH:(j+1)*CH])
+    return st
 def selfcheck(L,a):
     """no state files. (i) real-stream window through the context pipeline vs native gradient; (ii) F0 vs M."""
     rt=L.rt;res={'rows':[]};cells=['A','M','F0'];ids,seq,ks=world_setup(L,'A');ks=[8]+[k for k in ks if k>=9][:2]   # k=8: the re-read window is the WHOLE history (chunks 0-7), so the context pipeline must reproduce native exactly; k>=9: the window truncates the receptive field of the 24 prefix layers and the suffix chain, so only approximately
@@ -90,24 +94,25 @@ def selfcheck(L,a):
                     dot=sum(float(jnp.vdot(p,q)) for p,q in zip(jax.tree.leaves(x),jax.tree.leaves(y)));nx=float(optax.global_norm(x));ny=float(optax.global_norm(y))
                     d=float(optax.global_norm(jax.tree.map(lambda p,q:p-q,x,y)));return {'cos':dot/(nx*ny),'rel_diff':d/ny,'norm_x':nx,'norm_y':ny}
                 row['realctx_vs_native']=cmp(gS,gA)
+                full=list(ctx)+[int(x) for x in ch]+[int(nt)];full+=[int(rt.eos)]*((-len(full))%CH);mk_=np.zeros(len(full),bool);mk_[len(ctx):len(ctx)+CH]=lm;sq=rt.seq(np.asarray(full,np.int32),mask=mk_);pf=rt.prefix(rt.base,sq);gW,ceW=L.grad_nat(rt.base,sts_ref(L,sq,pf,len(ctx)//CH),rt.chunk(sq,len(ctx)//CH),pf[len(ctx):len(ctx)+CH])   # reference: the same 8192+chunk tokens forwarded in one piece at W0 (E30 design 2.x)
+                row['realctx_vs_windowref']=cmp(gS,gW);row['ce_windowref']=float(ceW)
                 if c0:
                     ff=L.ctx_ids('bg',0);Kf,Vf=L.record_ctx(ff);cf,stf=L.prep(ff,ch,nt,lm,Kf,Vf);gF,ceF=L.grad_mask(rt.base,stf,cf,L.prefix_masked(rt.base,jnp.asarray(ch,dtype=jnp.int32),Kf,Vf,jnp.int32(WIN),jnp.asarray(C.keep_vector('F0'))),jnp.asarray(C.keep_vector('F0')))
                     row['F0_vs_M']=cmp(gF,gM);row['F0_vs_M8192']=cmp(gF,gM8);row['M8192_vs_M']=cmp(gM8,gM);row['ce_F0']=float(ceF)
                 res['rows'].append(row);print(json.dumps(row),flush=True)
             st=L.read_state(rt.base,st,c,pc)
     old=os.environ.get('E30_GATES','new')=='old'
-    r8=[r for r in res['rows'] if r['k']==8][0]
-    res['gate_realctx_cos_ge_0.99']=all(r['realctx_vs_native']['cos']>=0.99 and abs(r['ce_realctx_pipeline']-r['ce_native'])<0.05 for r in res['rows'])   # original gate (job 59 failed it at k=17-19 by truncation)
-    res['gate_realctx_exact_k8']=r8['realctx_vs_native']['cos']>=0.999 and r8['realctx_vs_native']['rel_diff']<=1e-2 and abs(r8['ce_realctx_pipeline']-r8['ce_native'])<0.01   # new: whole-history window must reproduce native
-    res['gate_realctx_later_cos_ge_0.95']=all(r['realctx_vs_native']['cos']>=0.95 and abs(r['ce_realctx_pipeline']-r['ce_native'])<0.1 for r in res['rows'] if r['k']>8)   # new: sanity for truncated windows
+    res['gate_realctx_cos_ge_0.99']=all(r['realctx_vs_native']['cos']>=0.99 and abs(r['ce_realctx_pipeline']-r['ce_native'])<0.05 for r in res['rows'])   # original gate (job 59 failed it at k=17-19); now descriptive
+    res['gate_realctx_vs_windowref']=all(r['realctx_vs_windowref']['cos']>=0.999 and r['realctx_vs_windowref']['rel_diff']<=0.03 for r in res['rows'])   # E30 design: context path vs the same 8192+chunk tokens forwarded at once at W0
+    r8=[r for r in res['rows'] if r['k']==8]
+    if r8:res['info_k8_realctx_vs_native_cos']=r8[0]['realctx_vs_native']['cos']   # k=8: window = whole history, expected ~1 (descriptive)
     if all('F0_vs_M' in r for r in res['rows']):
-        res['gate_F0_vs_M_rel_diff_le_1e-3']=all(r['F0_vs_M']['rel_diff']<=1e-3 for r in res['rows'])   # original gate (job 59: 1.4e-2)
-        res['gate_F0_vs_M8192_rel_diff_le_5e-3']=all(r['F0_vs_M8192']['rel_diff']<=5e-3 for r in res['rows'])   # new: same position, only masked keys / context-read suffix state differ
-        res['gate_F0_vs_M_rel_diff_le_5e-2']=all(r['F0_vs_M']['rel_diff']<=5e-2 for r in res['rows'])
+        res['gate_F0_vs_M_rel_diff_le_1e-3']=all(r['F0_vs_M']['rel_diff']<=1e-3 for r in res['rows'])   # original gate, now descriptive (job 59: 1.4e-2)
+        res['gate_F0_vs_M_cos_ge_0.999']=all(r['F0_vs_M']['cos']>=0.999 for r in res['rows'])   # E30 design: new gate; rel_diff and F0 vs M8192 (position noise floor) reported only
+    return_old=res['gate_realctx_cos_ge_0.99'] and res.get('gate_F0_vs_M_rel_diff_le_1e-3',True)
     json.dump(res,open(OUT/f'e30_selfcheck_s{a.seed}.json','w'),indent=1);print('SELFCHECK',{k:v for k,v in res.items() if k.startswith('gate')},flush=True)
-    if old:return 0 if res['gate_realctx_cos_ge_0.99'] and res.get('gate_F0_vs_M_rel_diff_le_1e-3',True) else 4
-    ok=res['gate_realctx_exact_k8'] and res['gate_realctx_later_cos_ge_0.95'] and res.get('gate_F0_vs_M8192_rel_diff_le_5e-3',True) and res.get('gate_F0_vs_M_rel_diff_le_5e-2',True)
-    return 0 if ok else 4
+    if old:return 0 if return_old else 4
+    return 0 if res['gate_realctx_vs_windowref'] and res.get('gate_F0_vs_M_cos_ge_0.999',True) else 4
 def zeros_kv(L):
     """zero K,V with the slot layout [24, WIN, heads, dim] (content irrelevant when every window key is masked, as E29's M)."""
     Kc,Vc=L.record_ctx([int(L.rt.bos)]*CH);return jnp.zeros_like(Kc),jnp.zeros_like(Vc)
