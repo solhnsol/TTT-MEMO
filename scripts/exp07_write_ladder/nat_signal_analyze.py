@@ -43,17 +43,26 @@ def analyze(res):
         c4a=None if (und or not ok) else bool(d['eps_attn']>=0.5 and d['diff_rand_ci'][0]>0)
         d['criteria']={'c1_mask_5_60pct':0.05<=d['mask_frac_all']<=0.60,'c2_O_recall_cand_ge_0.8':d['O_recall']>=0.8,'c3_enrichment_ge_1.5':d['enrichment']>=1.5,'c4a_eps_ge_0.5_and_attn_minus_rand_ci_lo_gt_0':c4a}   # c4b (attn - recency) is reported only
         d['c4b_report_only']={'diff_recency':d.get('diff_recency'),'ci':d.get('diff_recency_ci')}
-        v=list(d['criteria'].values());d['in_Kstar']='undetermined (eligible chunks < 15)' if und and all(x for x in v if x is not None) else (all(x is True for x in v));out['ks'][kk]=d
-    out['Kstar']=[kk for kk in ks if out['ks'][kk]['in_Kstar'] is True];return out
+        d['pass_tau0.8']=bool(d['O_recall']>=0.8);d['pass_tau0.6']=bool(d['O_recall']>=0.6);d['in_Kstar']=d['pass_tau0.8'];out['ks'][kk]=d   # E33 2.13 (Hans 10/20): K* = candidate O recall >= tau only (0.8 main, 0.6 sensitivity); c1, c3, c4a, c4b are report columns, not gates
+    out['Kstar']=[kk for kk in ks if out['ks'][kk]['pass_tau0.8']];out['Kstar_tau0.6']=[kk for kk in ks if out['ks'][kk]['pass_tau0.6']]
+    ps=out['Kstar'];sel=[]
+    if ps:
+        sel=[ps[0]]
+        mid=ps[len(ps)//2]
+        if mid not in sel:sel.append(mid)
+        if 256 in ps and 256 not in sel:sel.append(256)
+    out['comparison_k_candidates']=sel[:3];return out
 def report(res,out):
     L=[f"# E33 2.13 k-resolved attention signal, stream {res.get('stream')} {res.get('layout')} world {'B' if res.get('swap') else 'A'}\n",f"chunks {out['n_chunks']}, with O {out['n_chunks_with_O']}, epsilon-eligible {out['n_chunks_eligible']}, answer tokens {out['n_answer_tokens']}\n",
-       '| k | c1 mask frac (all) | mask frac (O chunks) | c2 O recall (candidates) | recall upper bound | O precision | c3 enrichment | background share | same-person unit share | c4a eps attn [CI] | eps rand | c4a attn-rand [CI] | c4b attn-recency [CI] (report only) | eligible chunks / answer tokens | in K* |','|'+'---|'*15]
+       '| k | c1 mask frac (all) | mask frac (O chunks) | c2 O recall (candidates) | recall upper bound | O precision | c3 enrichment | background share | same-person unit share | c4a eps attn [CI] | eps rand | c4a attn-rand [CI] | c4b attn-recency [CI] (report only) | eligible chunks / answer tokens | passes tau |','|'+'---|'*15]
     f=lambda x:f'{x:.3f}';c=lambda t,ci:f'{f(t)} [{f(ci[0])}, {f(ci[1])}]'
     for kk,d in out['ks'].items():
         e=('| '+' | '.join([c(d['eps_attn'],d['eps_attn_ci']),f(d['eps_rand']),c(d['diff_rand'],d['diff_rand_ci']),c(d['diff_recency'],d['diff_recency_ci'])])) if 'eps_attn' in d else '| n/a | n/a | n/a | n/a'
-        ks_=d['in_Kstar'] if isinstance(d['in_Kstar'],str) else ('yes' if d['in_Kstar'] else 'no')
+        ks_=('0.8' if d['pass_tau0.8'] else ('0.6' if d['pass_tau0.6'] else 'no'))
         L.append(f"| {kk} | {f(d['mask_frac_all'])} | {f(d['mask_frac_Ochunks'])} | {f(d['O_recall'])} | {f(d['O_recall_upper_bound'])} | {f(d['O_precision'])} | {f(d['enrichment'])} | {f(d['bg_share'])} | {f(d['same_person_share'])} {e} | {d['n_eligible_chunks']} / {d['n_answer_tokens']} | {ks_} |")
-    L.append(f"\nO recall / precision / enrichment use chunks with selectable O (n_O_cand > 0, {out['ks'][res['ks'][0]]['n_chunks_O']} of {out['ks'][res['ks'][0]]['n_chunks_O_all']} chunks with O) and the upper bound sum n_O_cand / sum n_O; c4a/c4b are 'undetermined' below 15 eligible chunks. K* (c1, c2, c3, c4a; main stream only): {out['Kstar'] or 'empty'}. Criteria per k are in the json (criteria). Few eligible chunks mean wide CIs; chunk-cluster bootstrap, {NB} resamples.")
+    sm=lambda lst:', '.join(f"k{kk} (mask {out['ks'][kk]['mask_frac_all']*100:.0f}%)" for kk in lst) or 'none'
+    L.append(f"\n**passing k, tau = 0.8: {sm(out['Kstar'])}**\n**passing k, tau = 0.6: {sm(out['Kstar_tau0.6'])}**\n\ncomparison-k candidates (smallest passing k, middle passing k, k256 if passing; at most 3; a person confirms): {out['comparison_k_candidates'] or 'none'}\n")
+    L.append(f"K* = candidate O recall >= tau only (E33 2.13, Hans 10/20); mask fraction, enrichment, background share, eps columns are reports, not gates. Recall / precision / enrichment use chunks with selectable O (n_O_cand > 0, {out['ks'][res['ks'][0]]['n_chunks_O']} of {out['ks'][res['ks'][0]]['n_chunks_O_all']} chunks with O), upper bound = sum n_O_cand / sum n_O; eps CIs are chunk-cluster bootstrap ({NB} resamples) and 'undetermined' as a statement below 15 eligible chunks ({out['n_chunks_eligible']} here).")
     return '\n'.join(L)+'\n'
 def selftest():
     rng=np.random.default_rng(1);ks=[4,16,64];chunks={}
