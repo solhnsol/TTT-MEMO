@@ -63,6 +63,15 @@ def analyze(d,stream,tag='nat'):
         for wi,w in enumerate('AB'):
             for r in signal_table(cells[c][wi]['log']):
                 rep['signal'].setdefault(c,[]).append((w,r));L.append(f"| {lab} | {w} | {r['pass']} | {r['mask_frac_window']:.3f} | {r['mask_frac_cand']:.3f} | {r['O_recall_in_cand']:.3f} | {r['enrichment']:.2f} | {r['n_chunks_with_O']} |")
+    L+=['\n### passes 2 and 3 vs pass 1: same positional mask, same evidence coverage? (flag: mask fraction of the window differs by > 0.002, O recall inside the candidates by > 0.02, or O-in-candidates counts differ in > 10% of the chunks)\n','| cell | world | pass | mask fraction diff vs pass 1 | O recall diff vs pass 1 | chunks whose O-in-candidates count differs | flag |','|---|---|---|---|---|---|---|']
+    rep['pass_consistency']=[]
+    for c,lab in have:
+        if not c.startswith('attn'):continue
+        for wi,w in enumerate('AB'):
+            lg=cells[c][wi]['log'];sg=signal_table(lg);ents=[e for e in lg if 'chunks' in e]
+            for r,e in list(zip(sg,ents))[1:]:
+                dm=r['mask_frac_window']-sg[0]['mask_frac_window'];dr=r['O_recall_in_cand']-sg[0]['O_recall_in_cand'];nd=sum(1 for a,b in zip(ents[0]['chunks'],e['chunks']) if a['n_Oc']!=b['n_Oc']);fl=abs(dm)>0.002 or abs(dr)>0.02 or nd>0.1*len(e['chunks'])
+                rep['pass_consistency'].append((c,w,r['pass'],dm,dr,nd,bool(fl)));L.append(f"| {lab} | {w} | {r['pass']} | {dm:+.4f} | {dr:+.3f} | {nd} | {'FLAG: drift changes the set or its coverage' if fl else 'ok'} |")
     L+=['\n### canary: change of NLL from W0 (gen pg11 / neutral tail pg1342), criterion <= 0.10, world A | world B\n','| cell | pass | gen A | tail A | gen B | tail B |','|---|---|---|---|---|---|']
     for c,lab in have:
         SA=NA.states(cells[c][0]['log']);SB=NA.states(cells[c][1]['log'])
@@ -87,7 +96,7 @@ def selftest():
         return {'log':log}
     for c,g,mk_ in (('L0fs',[0.05,0.1,0.15],None),('L0mwfs',[0.1,0.3,0.6],None),('attn8',[0.05,0.1,0.2],0.3),('attn64',[0.1,0.2,0.4],0.8)):
         json.dump(mk(g,1,mk_),open(d/f'{c}_nat_s9105_A.json','w'));json.dump(mk(g,-1,mk_),open(d/f'{c}_nat_s9105_B.json','w'))
-    rep,txt=analyze(d,9105);print(txt[:3500]);assert 'attn k=8' in txt and 'recovered fraction' in txt and 'enrichment' in txt and 'pass 3' in txt
+    rep,txt=analyze(d,9105);print(txt[:3500]);assert 'passes 2 and 3 vs pass 1' in txt and 'attn k=8' in txt and 'recovered fraction' in txt and 'enrichment' in txt and 'pass 3' in txt
     st=signal_table(json.load(open(d/'attn64_nat_s9105_A.json'))['log']);assert abs(st[0]['mask_frac_window']-800/8192)<1e-9 and abs(st[0]['mask_frac_cand']-800/7000)<1e-9 and st[0]['O_recall_in_cand']>0.9
     assert abs(signflip_p({t:1.0 for t in range(2*P)},{t:f'p{t//2}' for t in range(2*P)})-2/8192)<1e-9
     print('nat_attn_analyze SELFTEST OK')
