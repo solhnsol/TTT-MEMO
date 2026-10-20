@@ -1,4 +1,5 @@
 #!/bin/bash
+# EXPECTED RUN TIME (Hans confirms before it runs): well under 1 h (stated below) [estimate].
 # E37b read job (PROPOSED, NOT QUEUED): the same 200 DCLM samples (first 1024 tokens, no context) on W0 and on the chunk-only masked pass-4 states written by job 61.
 # Output: $OUT/e37_firstchunk_e37b.json / .csv (columns sample, token_offset, W0, mwfs_s101_A, mwfs_s101_B, W0_repeat). Must run after 61 (name order). Expected well under 1 h.
 set -e

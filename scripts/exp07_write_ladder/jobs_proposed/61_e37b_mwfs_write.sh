@@ -1,4 +1,5 @@
 #!/bin/bash
+# EXPECTED RUN TIME (Hans confirms before it runs): 1-2 h GPU (stated by the header below, from the old x1 runs) [estimate].
 # E37b write job (PROPOSED, NOT QUEUED): chunk-only masked write ("masked-fs", level L0mwfs, block 1024, step x1), world seed 101, worlds A and B, 4 passes
 # (pass-wise fresh filler = ladder.fs_streams as job 37), save mode: one inner-weight npz per pass under $OUT/states/L0mwfs_mwfskeep_s101/{A,B}/state_00{0..4}.npz (state_000 = W0).
 # Same code path as the old x1 runs; the new tag keeps the files. Reproducibility check afterwards: compare the per-pass inner hashes in L0mwfs_mwfskeep_s101_{A,B}.saved.json

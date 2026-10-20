@@ -1,4 +1,5 @@
 #!/bin/bash
+# EXPECTED RUN TIME (Hans confirms before it runs): world B alone: same as 56 (writes about 15-25 min + eval of 9 states + first-chunk NLL of 3 states) [estimates]. Total estimate: about 1-2 h.
 # E35 5.11 step 2, world B: R5 (job 51) extended to passes 1-8, tag r5fresh8 (PROPOSED, NOT QUEUED; needs Hans's approval together with R3/R4 = 54/55; the other world is 56_e35_r5p8_A.sh). Split by world to fit the 1-2 h limit.
 # No resume-from-state path exists, so this is a full 8-pass run; its passes 1-4 must reproduce job 51 (the pass 1-4 fresh pools do not depend on --passes): compare the per-pass inner_hash with L0reset_P63_r5fresh_s101_B.json afterwards.
 # --log-clip on (E35 5.11 criterion: clip ratio >= 0.4 per pass needs per-chunk clip coefficients; one extra forward/backward per chunk). If job 51's real command line differs (flags), diff against jobs/done/51_*.sh and copy it.
