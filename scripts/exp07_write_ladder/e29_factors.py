@@ -82,7 +82,16 @@ def build_ops(L,rt32):
     def ref_grad(m,c,st,pref_,kmask):
         S3SUF['kmask']=kmask;inner,outer_=eqx.partition(m,fspec)
         try:
-            g=eqx.filter_grad(lambda ip:MetaModel.lm_loss(eqx.combine(ip,outer_),c,st,prefix_outputs=pref_)[0])(inner)
+            if REMAT and os.environ.get('E29_REF','remat')!='lm':   # same loss as MetaModel.lm_loss written block by block with per-block remat (the whole-model lm_loss backward asked for 23 GiB, job 63 run 3); checked against the factor outer products by recon_err itself
+                def loss_fn(ip):
+                    mm=eqx.combine(ip,outer_);lm_=mm.language_model;H_=lm_.model.h;x=pref_
+                    for i in range(NL):
+                        b=jax.tree.map(lambda a:a[i] if eqx.is_array(a) else a,H_.suffix_blocks)
+                        x=eqx.filter_checkpoint(lambda b_,x_,s_,c_:Block.__call__(b_,x_,s_,c_,is_prefix=False)[0])(b,x,st_layer(st,i),c)
+                    hs=jax.vmap(lm_.model.ln_f)(x);lg=hs@lm_.model.wte.weight.T.astype(hs.dtype) if cfg.tie_word_embeddings else lm_.lm_head(hs)
+                    return cross_entropy_loss_and_accuracy(lg,c.target_tokens,c.loss_masks)[0]
+                g=eqx.filter_grad(loss_fn)(inner)
+            else:g=eqx.filter_grad(lambda ip:MetaModel.lm_loss(eqx.combine(ip,outer_),c,st,prefix_outputs=pref_)[0])(inner)
         finally:S3SUF.clear()
         p=g.language_model.model.h.suffix_blocks.feed_forward_prime;return p.w1.weight,p.w3.weight,p.w2.weight,optax.global_norm(jax.tree_util.tree_leaves(g))
     @eqx.filter_jit
@@ -158,7 +167,7 @@ def pref_native32(rt,rt32,seq32,ids):
 def stream_ids(L,w):return np.asarray(L.T.P[w=='B'].ids)[:NCH*CH]
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('mode',choices=['compare','swap']);ap.add_argument('--seed',type=int,default=101);ap.add_argument('--worlds',default='AB');ap.add_argument('--world',default='A')
-    ap.add_argument('--chunks',default='all');ap.add_argument('--scales',default='1,2,4,8');ap.add_argument('--save-dir',default=None);ap.add_argument('--verify-step',action='store_true');ap.add_argument('--smoke',type=int,default=None);ap.add_argument('--no-first-order',action='store_true');ap.add_argument('--prefcheck',action='store_true')
+    ap.add_argument('--chunks',default='all');ap.add_argument('--scales',default='1,2,4,8');ap.add_argument('--save-dir',default=None);ap.add_argument('--verify-step',action='store_true');ap.add_argument('--smoke',type=int,default=None);ap.add_argument('--no-first-order',action='store_true');ap.add_argument('--prefcheck',action='store_true');ap.add_argument('--peak-only',action='store_true')
     ap.add_argument('--dump',default=str(DUMP));ap.add_argument('--nboot',type=int,default=4000);a=ap.parse_args()
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     lazy=a.mode=='swap' and os.environ.get('E29_LAZY_READOUT','0')=='1'   # memory mitigation (default off, numerics unchanged): the packed fp32 readout scorers are built only after the write loop; the write loop itself needs the fp32 model (factors are fp32)
@@ -179,8 +188,8 @@ def main():
                     y=jnp.asarray(z[nm]);r[nm]={'rel_total':float(jnp.linalg.norm(x-y)/jnp.linalg.norm(y)),'rel_layer_max':float(jnp.max(jnp.linalg.norm((x-y).reshape(x.shape[0],-1),axis=1)/jnp.linalg.norm(y.reshape(y.shape[0],-1),axis=1)))}
                 err,gn,gn3=recon_err(O,m32,c,st,pref,keepM,xin,xmid,d1,d3,d2);r['recon_err_w1_w3_w2']=err;r['gnorm_ref_vs_3matrix']=[gn,gn3];r['hidden_maxdiff']=hd;res[k]=r
                 print(k,json.dumps(r),flush=True)
-        worst=max(max(v[n]['rel_total'] for n in ('x_in','x_mid','d1','d3','d2')) for v in res.values());man['worst_rel_total']=worst;man['gate_1e-3']=worst<=1e-3
-        json.dump({'manifest':man,'chunks':res},open(OUT/f'e29_compare_s{a.seed}_{a.world}.json','w'),indent=1);print('worst rel',worst,'gate 1e-3:',worst<=1e-3);sys.exit(0 if worst<=1e-3 else 5)   # exit 5 stops job 63 before prefcheck / swap
+        worst=max(max(v[n]['rel_total'] for n in ('x_in','x_mid','d1','d3','d2')) for v in res.values());man['worst_rel_total']=worst;man['worst_recon_err']=max(max(v['recon_err_w1_w3_w2']) for v in res.values());man['gate_1e-3']=worst<=1e-3 and man['worst_recon_err']<=1e-3
+        json.dump({'manifest':man,'chunks':res},open(OUT/f'e29_compare_s{a.seed}_{a.world}.json','w'),indent=1);print('worst rel',worst,'worst recon err',man['worst_recon_err'],'gate 1e-3:',man['gate_1e-3']);sys.exit(0 if man['gate_1e-3'] else 5)   # exit 5 stops job 63 before prefcheck / swap
     # ---- swap ----
     scales=[float(x) for x in a.scales.split(',')];st_all=clone_state(rt.state_all);eta0=None
     inner0=rt.base.inner_parameters();get3=lambda t:(t.language_model.model.h.suffix_blocks.feed_forward_prime.w1.weight,t.language_model.model.h.suffix_blocks.feed_forward_prime.w3.weight,t.language_model.model.h.suffix_blocks.feed_forward_prime.w2.weight)
@@ -197,6 +206,7 @@ def main():
             for p in MG['xpairs']:
                 u=get3(MG['grad']('XP',p));gx=u if gx is None else tuple(x+y for x,y in zip(gx,u));del u
             Gmean=tuple(x/len(MG['pairs'])-y/len(MG['xpairs']) for x,y in zip(gl,gx));del gl,gx
+    memstats('before the write loop (models, margin gradients resident)')
     for w in a.worlds:
         ids=stream_ids(L,w);mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True
         with rt32.mesh,jax.default_matmul_precision('highest'):
@@ -210,6 +220,7 @@ def main():
                 c=rt32.chunk(seq32,k);pref_c=pref_win32(rt32,ids,mask_np,k) if win else pref_nat[k*CH:(k+1)*CH]
                 if k in ks:
                     if k==ks[0]:memprof(f'before_first_factors_{w}')
+                    memstats('before first factors') if k==ks[0] else None
                     FA=factors(O,c,st,pref_c,keepA);pref_w=L.prefix_masked(m32,jnp.asarray(ids[k*CH:(k+1)*CH],dtype=jnp.int32),Kc0,Vc0,jnp.int32(k*CH),keepM);FM=factors(O,c,st,pref_w,keepM)
                     F={'A':FA,'M':FM};wk=nk[k]/N
                     if a.prefcheck:
@@ -217,7 +228,8 @@ def main():
                     for (P,Q) in cells:
                         acc[(P,Q)]=O['add'](acc[(P,Q)],O['outer'](F[P][0],F[P][1],F[Q][2],F[Q][3],F[Q][4]),wk)
                         if Gmean is not None:pro[(P,Q)]=pro[(P,Q)]+wk*O['prof'](Gmean,F[P][0],F[P][1],F[Q][2],F[Q][3],F[Q][4])
-                    if a.verify_step or k==ks[0]:
+                    if k==ks[0]:memstats('after FA, FM')
+                    if (a.verify_step or k==ks[0]) and os.environ.get('E29_RECON','1')=='1' and not (a.prefcheck and os.environ.get('E29_RECON_PREFCHECK','0')!='1'):   # prefcheck skips the reference-gradient check (compare, in the same job, already validated the factorization); E29_RECON_PREFCHECK=1 re-enables
                         eA=recon_err(O,m32,c,st,pref_c,keepA,*FA[:5]);eM=recon_err(O,m32,c,st,pref_w,keepM,*FM[:5])
                         chk[k]={'A_err':eA[0],'A_gn_ref_vs_3matrix':[eA[1],eA[2]],'M_err':eM[0],'M_gn_ref_vs_3matrix':[eM[1],eM[2]],'hidden_maxdiff_A_M':[FA[5],FM[5]]}
                         if max(eA[0]+eM[0])>1e-3:json.dump({'manifest':man,'check':chk},open(OUT/f'e29_swap_s{a.seed}_FAILED.json','w'),indent=1);print('RECONSTRUCTION CHECK FAILED',chk[k],flush=True);sys.exit(4)
@@ -225,6 +237,9 @@ def main():
                         D_=Path(a.save_dir)/f's{a.seed}_{w}';D_.mkdir(parents=True,exist_ok=True)
                         for cd in ('A','M'):np.savez(D_/f'{cd}_k{k:02d}.npz',**dict(zip(('x_in','x_mid','d1','d3','d2'),[np.asarray(x) for x in F[cd][:5]])))
                     del F,FA,FM
+                    if k==ks[0]:
+                        memstats('after first chunk (recon check included unless skipped)');memprof(f'after_first_chunk_{w}')
+                        if a.peak_only:print('PEAK-ONLY run finished after the first chunk (no realisation, nothing saved)',flush=True);sys.exit(0)
                     if a.prefcheck:del FW
                     if k%8==0:print(f'  {a.seed} {w} chunk {k} {time.monotonic()-t0:.0f}s',flush=True)
                 st=L.read_state(m32,st,c,pref_c)
@@ -290,6 +305,14 @@ def main():
     if a.prefcheck:
         rels=[v for w_ in a.worlds for v in man.get(f'prefcheck_rel_win32_vs_bf16_{w_}',{}).values()];worst=max(max(r.values()) for r in rels);man['prefcheck_worst_factor_rel']=worst;man['prefcheck_factor_pass_1e-2']=bool(worst<=1e-2);man['prefcheck_choice']='bf16' if (worst<=1e-2 and all(v['pass_10pct'] for v in man.get('prefcheck_verdict',{}).values())) else 'win32';(OUT/f'e29_prefcheck_choice_s{a.seed}.txt').write_text(man['prefcheck_choice']+'\n');lines.append(f'factor relative error win32 vs bf16 prefix (worst over chunks/worlds/factors): {worst:.2e} ({"PASS" if worst<=1e-2 else "FAIL"} at 1e-2)')
     json.dump({'manifest':man,'result':res},open(OUT/f'e29_swap_s{a.seed}{sfx}.json','w'),indent=1);(OUT/f'e29_swap_s{a.seed}{sfx}.md').write_text('\n'.join(lines)+'\n');print('\n'.join(lines))
+def memstats(tag):
+    try:
+        st=jax.devices()[0].memory_stats();print(f'MEM {tag}: in use {st["bytes_in_use"]/2**30:.1f} GiB, peak {st["peak_bytes_in_use"]/2**30:.1f} GiB, limit {st["bytes_limit"]/2**30:.1f} GiB',flush=True)
+    except Exception as e:print('MEM',tag,'unavailable',repr(e)[:80],flush=True)
+    try:
+        arrs=[x for x in jax.live_arrays() if not x.is_deleted()];tot=sum(x.nbytes for x in arrs);top=sorted(arrs,key=lambda x:-x.nbytes)[:5]
+        print(f'MEM live arrays {tag}: {len(arrs)} arrays, {tot/2**30:.1f} GiB; top5 '+'; '.join(f'{tuple(x.shape)} {x.dtype} {x.nbytes/2**30:.2f}GiB' for x in top),flush=True)
+    except Exception as e:print('MEM live arrays unavailable',repr(e)[:80],flush=True)
 def memprof(tag):
     if os.environ.get('E29_MEMPROF','0')=='1':   # jax device memory profile (pprof format), default off
         try:jax.profiler.save_device_memory_profile(str(OUT/f'e29_mem_{tag}.prof'));print('memory profile saved',tag,flush=True)
