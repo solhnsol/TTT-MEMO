@@ -167,14 +167,15 @@ def pref_native32(rt,rt32,seq32,ids):
 def stream_ids(L,w):return np.asarray(L.T.P[w=='B'].ids)[:NCH*CH]
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('mode',choices=['compare','swap']);ap.add_argument('--seed',type=int,default=101);ap.add_argument('--worlds',default='AB');ap.add_argument('--world',default='A')
-    ap.add_argument('--chunks',default='all');ap.add_argument('--scales',default='1,2,4,8');ap.add_argument('--save-dir',default=None);ap.add_argument('--verify-step',action='store_true');ap.add_argument('--smoke',type=int,default=None);ap.add_argument('--no-first-order',action='store_true');ap.add_argument('--prefcheck',action='store_true');ap.add_argument('--peak-only',action='store_true')
+    ap.add_argument('--chunks',default='all');ap.add_argument('--scales',default='1,2,4,8');ap.add_argument('--save-dir',default=None);ap.add_argument('--verify-step',action='store_true');ap.add_argument('--smoke',type=int,default=None);ap.add_argument('--no-first-order',action='store_true');ap.add_argument('--prefcheck',action='store_true');ap.add_argument('--peak-only',action='store_true');ap.add_argument('--phase',choices=['both','write','eval'],default='both',help='write: factor extraction and accumulation only (bf16 + fp32 model, no readout), accumulators saved to disk; eval: realisation + readout from the saved accumulators (bf16 + fp32 readout model) in a separate process (job 63 run 4: the lazy readout inside one process ran out of memory while loading the second fp32 model)')
     ap.add_argument('--dump',default=str(DUMP));ap.add_argument('--nboot',type=int,default=4000);a=ap.parse_args()
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
-    lazy=a.mode=='swap' and os.environ.get('E29_LAZY_READOUT','0')=='1'   # memory mitigation (default off, numerics unchanged): the packed fp32 readout scorers are built only after the write loop; the write loop itself needs the fp32 model (factors are fp32)
-    rt=Runtime();L=Ladder3(rt,a.seed,readout=(a.mode=='swap' and not lazy));L.build3()
-    if a.mode=='compare' or lazy:L.rt32=runtime_fp32() if not hasattr(L,'rt32') else L.rt32
+    ph=a.phase if a.mode=='swap' else 'both'
+    lazy=a.mode=='swap' and ph=='both' and os.environ.get('E29_LAZY_READOUT','0')=='1'   # memory mitigation (default off, numerics unchanged): the packed fp32 readout scorers are built only after the write loop; the write loop itself needs the fp32 model (factors are fp32)
+    rt=Runtime();L=Ladder3(rt,a.seed,readout=(a.mode=='swap' and (ph=='eval' or (ph=='both' and not lazy))));L.build3()
+    if a.mode=='compare' or lazy or ph=='write':L.rt32=runtime_fp32() if not hasattr(L,'rt32') else L.rt32
     rt32=L.rt32;m32=rt32.base;O=build_ops(L,rt32);W=WIN
-    h0=reuse._hash_pytree(rt.base.inner_parameters())[0];man={'lazy_readout':lazy,'seed':a.seed,'mode':a.mode,'W0_inner_hash':h0,'kv_shape':KV_SHAPE,'code_sha':hashlib.sha256(open(__file__,'rb').read()).hexdigest()}
+    h0=reuse._hash_pytree(rt.base.inner_parameters())[0];man={'phase':ph,'lazy_readout':lazy,'seed':a.seed,'mode':a.mode,'W0_inner_hash':h0,'kv_shape':KV_SHAPE,'code_sha':hashlib.sha256(open(__file__,'rb').read()).hexdigest()}
     Kc0=jnp.zeros(KV_SHAPE,jnp.float32);Vc0=jnp.zeros(KV_SHAPE,jnp.float32);keepM=jnp.asarray(np.r_[np.zeros(W,bool),np.ones(CH,bool)]);keepA=jnp.asarray(np.ones(W+CH,bool))
     if a.mode=='compare':
         w=a.world;ks=[int(x) for x in a.chunks.split(',')] if a.chunks!='all' else [0,1,2];rows=SP.chunk_rows(L.T.w,w=='B',L.T.tok,rt.bos,rt.eos,'ntp')[0];byk={x[3]['k']:x for x in rows};res={}
@@ -201,13 +202,13 @@ def main():
     if not a.no_first_order:   # G_D = mean_p grad(L3 margin of pair p) - mean_p grad(XP margin of pair p) at W0 (R0 readout approximation), three matrices
         MG=build_margin(L,rt32);gl=None;gx=None
         with rt32.mesh,jax.default_matmul_precision('highest'):
-            for p in MG['pairs']:
+            for p in (MG['pairs'] if ph!='eval' else []):
                 u=get3(MG['grad']('L3',p));gl=u if gl is None else tuple(x+y for x,y in zip(gl,u));del u
-            for p in MG['xpairs']:
+            for p in (MG['xpairs'] if ph!='eval' else []):
                 u=get3(MG['grad']('XP',p));gx=u if gx is None else tuple(x+y for x,y in zip(gx,u));del u
-            Gmean=tuple(x/len(MG['pairs'])-y/len(MG['xpairs']) for x,y in zip(gl,gx));del gl,gx
+            Gmean=tuple(x/len(MG['pairs'])-y/len(MG['xpairs']) for x,y in zip(gl,gx)) if ph!='eval' else None;del gl,gx
     memstats('before the write loop (models, margin gradients resident)')
-    for w in a.worlds:
+    for w in (a.worlds if ph!='eval' else ''):
         ids=stream_ids(L,w);mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True
         with rt32.mesh,jax.default_matmul_precision('highest'):
             seq32=rt32.seq(ids,mask=mask);pref_nat,pd=pref_native32(rt,rt32,seq32,ids);man[f'pref_dtype_{w}']=pd
@@ -245,6 +246,16 @@ def main():
                 st=L.read_state(m32,st,c,pref_c)
         del pref_nat;G[w]={cc:tuple(np.asarray(x) for x in v) for cc,v in acc.items()};del acc;jax.clear_caches()   # accumulators to host, free the 64K prefix before the next world
         PRO[w]={f'x{P}_d{Q}':np.asarray(v).tolist() for (P,Q),v in pro.items()};man[f'check_{w}']=chk
+    gdir=OUT/f'e29_G_s{a.seed}{"_prefcheck" if a.prefcheck else ""}'
+    if ph=='write':
+        gdir.mkdir(parents=True,exist_ok=True)
+        for w in G:
+            for (P_,Q_),v in G[w].items():
+                for i_,x_ in enumerate(v):np.save(gdir/f'{w}_{P_}{Q_}_{i_}.npy',x_)
+        json.dump({'man':man,'PRO':PRO},open(gdir/'meta.json','w'),default=str);print('write phase done: accumulators saved to',gdir,flush=True);sys.exit(0)
+    if ph=='eval':
+        meta=json.load(open(gdir/'meta.json'));man.update({k_:v_ for k_,v_ in meta['man'].items() if k_ not in ('mode','lazy_readout','phase')});man['phase']='eval';PRO=meta['PRO']
+        G={w:{cc:tuple(np.load(gdir/f'{w}_{cc[0]}{cc[1]}_{i_}.npy') for i_ in range(3)) for cc in cells} for w in a.worlds};print('eval phase: accumulators loaded from',gdir,flush=True)
     if lazy:   # drop the write-loop fp32 model, then build the readout Ladder (loads its own fp32 model + packed scorers); margin-gradient inputs (arrays) are reused with the new model
         old=rt32;O=None;m32=None;L.rt32=None
         try:old.base=None
@@ -256,7 +267,7 @@ def main():
     def apply(Gs,s,coef):
         new=tuple((p-eta*coef*s*g.astype(p.dtype)).astype(p.dtype) for p,g in zip(w0p,Gs));return eqx.tree_at(get3,inner0,new)
     dots={}
-    if Gmean is not None:
+    if MG is not None:
         with rt32.mesh,jax.default_matmul_precision('highest'):
             for fam,pl in (('L3',MG['pairs']),('XP',MG['xpairs'])):
                 for p in pl:
