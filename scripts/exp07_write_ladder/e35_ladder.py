@@ -116,6 +116,19 @@ def f_table(w,swap,tok,Ps=(1,4,8,63,64)):
             oth+=any(u['pair']==s['pair'] and u['t']!=s['t'] and lo<=u['place'][0]<x for u in tab)
         out[P]={'n_sentences_with_prior':n,'f_same_triple':same/max(n,1),'f_other_triple_same_pair':oth/max(n,1),'n_sentences_with_prev_round':n3,'f_pair_prev_round_all':all3/max(n3,1),'f_pair_prev_round_mean_fraction':fr3/max(n3,1)}
     return out
+def row_ids_of(w,swap,tok,gw,n):
+    """R2-iso: per-token row index of the realized stream of world w (position j, BOS at 0 -> the first text's row). Rows = the world's texts (exposure sentences and background paragraphs), joined by '\n\n' in gw.realize;
+    a token belongs to the row in which its first character lies (separator characters count for the row before). Returns (seg [n] int32, encoded ids of the text without BOS). Positions past the encoded text get one row each."""
+    text,_,_=gw.realize(w,swap);parts=text.split('\n\n');assert len(parts)==len(w['texts']),('a text contains a blank line',len(parts),len(w['texts']))
+    starts=np.cumsum([0]+[len(x)+2 for x in parts[:-1]]);e=tok.encode(text,add_special_tokens=False);row=np.searchsorted(starts,[o[0] for o in e.offsets],side='right')-1
+    seg=np.concatenate([[row[0]],row]).astype(np.int64);seg=np.concatenate([seg,len(parts)+np.arange(max(0,n-len(seg)))])[:n]
+    return seg.astype(np.int32),list(e.ids)
+def iso_stats(seg,nch=NCH):
+    """per chunk: number of rows, share of next-token targets that cross a row boundary (they are not scored in R2-iso)."""
+    out=[]
+    for k in range(nch):
+        sg=seg[k*CH:(k+1)*CH];out.append((int(len(set(sg.tolist()))),float(np.mean(sg[:-1]!=sg[1:]))))
+    return out
 class L35(LD.Ladder):
     def fresh_streams(self,swap,passes):
         w0=self.T.w;enc=lambda t:stage2.enc(self.T.tok,t).ids;ws,meta=build_fresh_worlds(w0,passes);streams=[self.T.P[swap].ids];worlds=[w0];self._bgmeta=meta
@@ -177,6 +190,30 @@ class L35(LD.Ladder):
                 e={'epoch':ps,'reset_period':P,'sec_pass':time.monotonic()-tp,'sec_per_chunk':(time.monotonic()-tp)/NCH,'cum_update_norm':cum,'steps':steps,'bg':self._bgmeta[ps-1],'inner_hash':reuse._hash_pytree(m.inner_parameters())[0],'margins':self.evaluate(m)}
                 log.append(e);print(f'  L0reset P={P} {"B" if swap else "A"} pass {ps} cum {cum:.3f} {e["sec_pass"]:.0f}s ({e["sec_per_chunk"]:.2f}s/chunk, before evaluate)',flush=True)
         return log
+    def run_L0_iso(self,swap,passes,mode='rows',cross_loss=False):
+        """R2-iso (E35 5.18 follow-up): the R2 (L0reset P=1) schedule - each 1024-token chunk of the stream is one SGD step with a fresh suffix state and chunk-relative positions, same fresh-background streams, same order -
+        but the attention (prefix AND suffix layers) is block-diagonal over the rows (exposure sentences / background paragraphs), so no row sees a neighbour. Positions stay the chunk-relative ones of R2 (not row-local as in L1).
+        Loss: every target except the chunk's last; in mode 'rows' targets that cross a row boundary are NOT scored (as in L1 rows) unless cross_loss. mode 'none' = control: one segment per chunk (no isolation) through the same step path,
+        i.e. R2 computed with ladder.step (SGD, no optimizer state) instead of rt.update; the difference to R2 is then the path, the difference to 'rows' the isolation. Same logging as run_L0_reset (per-step grad_norm / clip_coef always)."""
+        rt=self.rt;W=int(rt.cfg.model.sliding_window_size);streams=self.fresh_streams(swap,passes);log=[];m=rt.base;st_all=clone_state(rt.state_all);cum=0.0;loc=np.arange(CH,dtype=np.int32)
+        with rt.mesh:
+            log.append({'epoch':0,'margins':self.evaluate(m)})
+            for ps,ids in enumerate(streams,1):
+                ids=np.asarray(list(ids[:NCH*CH]),np.int64);segs,eids=row_ids_of(self._fw[ps-1],swap,self.T.tok,LD.gw,NCH*CH);nn=min(len(eids),NCH*CH-1)
+                assert [int(x) for x in ids[1:1+nn]]==[int(x) for x in eids[:nn]],f'stream of pass {ps} is not BOS + the encoded realized text'
+                steps=[];tp=time.monotonic()
+                for k in range(NCH):
+                    sl=slice(k*CH,(k+1)*CH);ids_k=ids[sl].astype(np.int32);seg_k=segs[sl].astype(np.int32) if mode=='rows' else np.zeros(CH,np.int32)
+                    tg=np.concatenate([ids_k[1:],[rt.eos]]).astype(np.int32);mk=np.ones(CH,bool);mk[-1]=False
+                    if mode=='rows' and not cross_loss:mk[:-1]&=(seg_k[:-1]==seg_k[1:])
+                    pref=self.prefix_iso(rt.base,jnp.asarray(ids_k),jnp.asarray(loc),jnp.asarray(packing.prefix_mask(seg_k,W)))
+                    newp,gn,coef,ce=self.step(m,st_all,jnp.asarray(ids_k),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg_k),jnp.asarray(loc))
+                    old=m;m=self.set_inner(m,newp)
+                    d=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=d
+                    steps.append({'chunk':k,'grad_norm':float(gn),'clip_coef':float(coef),'ce':float(ce),'update_norm':d,'cum_update_norm':cum,'n_loss':int(mk.sum()),'n_rows':int(len(set(seg_k.tolist())))})
+                e={'epoch':ps,'reset_period':1,'iso':mode,'sec_pass':time.monotonic()-tp,'sec_per_chunk':(time.monotonic()-tp)/NCH,'cum_update_norm':cum,'steps':steps,'bg':self._bgmeta[ps-1],'inner_hash':reuse._hash_pytree(m.inner_parameters())[0],'margins':self.evaluate(m)}
+                log.append(e);print(f'  L0iso({mode}) {"B" if swap else "A"} pass {ps} cum {cum:.3f} {e["sec_pass"]:.0f}s',flush=True)
+        return log
 def cpu_checks(seed):
     import gen_world as G;w=G.build_world(seed);res={'seed':seed}
     worlds,meta=build_fresh_worlds(w,4);bgs={1:[t['text'] for t in w['texts'] if t['kind']=='bg']}
@@ -191,6 +228,18 @@ def cpu_checks(seed):
     md=[f'# E35 CPU checks (seed {seed})\n',f'U1 audit pass: {ok}; books: {meta}\n',f"pair overlap: {rep['pair_overlap']}\ncanary exact: {rep['canary_exact']}  canary 8-gram: {rep['canary_8gram']}\n",f"U3 expo identical: {res['U3_expo_identical']}, bg differs: {res['U3_bg_differs']}\n",'## U2 f(P) (same-triple earlier exposure inside the reset context)\n','| P (chunks) | n | f same triple | f other triple, same pair | n (round>=2) | f all previous-round pair sentences (L1-ctx scale) | mean fraction of them |','|---|---|---|---|---|---|---|']
     for P,v in res['U2_f_table']['A'].items():md.append(f"| {P} | {v['n_sentences_with_prior']} | {v['f_same_triple']:.3f} | {v['f_other_triple_same_pair']:.3f} | {v['n_sentences_with_prev_round']} | {v['f_pair_prev_round_all']:.3f} | {v['f_pair_prev_round_mean_fraction']:.3f} |")
     (OUT/f'e35_cpu_checks_s{seed}.md').write_text('\n'.join(md)+'\n');print('\n'.join(md))
+def iso_check(seed,passes=4):
+    """CPU (tokenizer only): the row segmentation used by R2-iso on the fresh-background streams (text level, BOS dummy): rows per chunk, share of next-token targets that cross a row boundary (not scored), every exposure sentence is exactly one row, rows are monotone."""
+    import gen_world as G;w=G.build_world(seed);worlds,meta=build_fresh_worlds(w,passes);ws=[worlds[0]]+[x[0] for x in worlds[1:]];res={'seed':seed,'passes':{}}
+    for ps,ww in enumerate(ws,1):
+        for swap in (False,True):
+            seg,eids=row_ids_of(ww,swap,G.TOK,G,NCH*CH);st=iso_stats(seg);text,_,spans=G.realize(ww,swap);offs=G.TOK.encode(text,add_special_tokens=False).offsets;bad=0
+            for sp in spans:
+                js=[1+j for j,o in enumerate(offs) if o[0]>=sp['start'] and o[1]<=sp['end'] and o[1]>o[0] and 1+j<len(seg)]
+                bad+=int(len(set(seg[js].tolist()))!=1)
+            res['passes'][f'{ps}{"B" if swap else "A"}']={'n_tokens_encoded':len(eids),'covers_stream':len(eids)+1>=NCH*CH,'rows_in_stream':len(set(seg.tolist())),'monotone_rows':bool((np.diff(seg.astype(np.int64))>=0).all()),'rows_per_chunk_mean':float(np.mean([a_ for a_,_ in st])),
+                'cross_row_target_share_mean':float(np.mean([b_ for _,b_ in st])),'cross_row_target_share_max':float(np.max([b_ for _,b_ in st])),'n_expo_sentences':len(spans),'expo_sentences_split_over_rows':bad}
+    res['all_ok']=all(v['monotone_rows'] and v['expo_sentences_split_over_rows']==0 and v['covers_stream'] for v in res['passes'].values());json.dump(res,open(OUT/f'e35_iso_check_s{seed}.json','w'),indent=1);print(json.dumps(res,indent=1));return res
 def u56(L,world_seed,ks=(1,5,20)):
     """U5: dtypes of the inner parameters after one update by the native path (rt.update, block = one chunk, as L0reset P=1) and by the L1/masked-fs path (L.step);
     U6: the same chunk written both ways from W0 (R2 = L0reset P=1 vs masked-fs block=1024 of ladder.run_L0_masked): update difference. Description, not pass/fail."""
@@ -215,10 +264,11 @@ def u56(L,world_seed,ks=(1,5,20)):
         'R2 resets once per block and carries the optimizer state, masked-fs has no optimizer state; masked-fs L0mwfs streams pass-wise fresh filler like R2. The numbers above are the one-step update difference from W0.')
     json.dump(res,open(OUT/f'e35_u56_s{world_seed}.json','w'),indent=1);print('wrote',OUT/f'e35_u56_s{world_seed}.json')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L1fillfresh','L1smallbatch','L0reset']);ap.add_argument('--reset-period',type=int,default=64);ap.add_argument('--passes',type=int,default=4);ap.add_argument('--epochs',type=int,default=4)
+    ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L1fillfresh','L1smallbatch','L0reset','L0iso']);ap.add_argument('--reset-period',type=int,default=64);ap.add_argument('--passes',type=int,default=4);ap.add_argument('--epochs',type=int,default=4)
     ap.add_argument('--worlds',default='AB');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='e35');ap.add_argument('--mode',choices=['full','save','eval'],default='full')
-    ap.add_argument('--keep',action='store_true');ap.add_argument('--log-clip',action='store_true');ap.add_argument('--cpu-checks',action='store_true');ap.add_argument('--u56',action='store_true');ap.add_argument('--compare-hash',default=None);a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
+    ap.add_argument('--keep',action='store_true');ap.add_argument('--log-clip',action='store_true');ap.add_argument('--cpu-checks',action='store_true');ap.add_argument('--u56',action='store_true');ap.add_argument('--compare-hash',default=None);ap.add_argument('--iso',choices=['rows','none'],default='rows',help='L0iso: rows = attention blocked between rows (R2-iso); none = control through the same step path without isolation');ap.add_argument('--iso-cross-loss',action='store_true',help='L0iso rows: also score the targets that cross a row boundary');ap.add_argument('--iso-check',action='store_true');a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
     if a.cpu_checks:cpu_checks(a.world_seed);return
+    if a.iso_check:sys.exit(0 if iso_check(a.world_seed,a.passes)['all_ok'] else 3)
     if a.u56:
         assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','');rt=Runtime();u56(L35(rt,a.world_seed,readout=False),a.world_seed);return
     assert a.level,'--level required';assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
@@ -243,6 +293,7 @@ def main():
             if fs.exists():print('exists',fs);continue
         t0=time.monotonic()
         if a.level=='L0reset':log=L.run_L0_reset(w=='B',a.passes,a.reset_period,a.log_clip)
+        elif a.level=='L0iso':log=L.run_L0_iso(w=='B',a.passes,a.iso,a.iso_cross_loss)
         else:log=L.run_L1_fresh(w=='B',a.epochs,a.seed,'fillfresh' if a.level=='L1fillfresh' else 'smallbatch',save_dir=SD/w)
         json.dump({'log':log,'sec':time.monotonic()-t0,'level':lev},open(fs if a.mode=='save' else f,'w'));print('saved',fs if a.mode=='save' else f,round(time.monotonic()-t0),'s',flush=True)
         if a.compare_hash:
