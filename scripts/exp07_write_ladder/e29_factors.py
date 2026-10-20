@@ -139,6 +139,8 @@ def recon_err(O,m,c,st,pref_,kmask,xin,xmid,d1,d3,d2):
     err=[float(jnp.linalg.norm(x-y)/jnp.maximum(jnp.linalg.norm(y),1e-30)) for x,y in zip(rec,(r1,r3,r2))]
     gn3=float(jnp.sqrt(sum(jnp.sum(x*x) for x in rec)));return err,float(gn),gn3
 def pref_native32(rt,rt32,seq32,ids):
+    if os.environ.get('E29_PREF','bf16')!='fp32':   # the fp32 64K prefix runs attention on the XLA path (cuDNN has no fp32): it asked for 992 GiB (job 60); default = bf16 cuDNN prefix cast to fp32
+        seq=rt.seq(ids,mask=np.asarray(seq32.loss_masks));return rt.prefix(rt.base,seq).astype(jnp.float32),'bf16->fp32'
     try:return rt32.prefix(rt32.base,seq32),'fp32'
     except Exception as e:   # e.g. OOM of the 64K fp32 prefix: fall back to the bf16 natural prefix cast to fp32 (stated in the manifest)
         print('fp32 natural prefix failed:',repr(e)[:200],'-> bf16 prefix cast to fp32',flush=True)
@@ -208,7 +210,8 @@ def main():
                     del F,FA,FM
                     if k%8==0:print(f'  {a.seed} {w} chunk {k} {time.monotonic()-t0:.0f}s',flush=True)
                 st=L.read_state(m32,st,c,pref_c)
-        G[w]=acc;PRO[w]={f'x{P}_d{Q}':np.asarray(v).tolist() for (P,Q),v in pro.items()};man[f'check_{w}']=chk
+        del pref_nat;G[w]={cc:tuple(np.asarray(x) for x in v) for cc,v in acc.items()};del acc;jax.clear_caches()   # accumulators to host, free the 64K prefix before the next world
+        PRO[w]={f'x{P}_d{Q}':np.asarray(v).tolist() for (P,Q),v in pro.items()};man[f'check_{w}']=chk
     # ---- realisation + readout ----
     def apply(Gs,s,coef):
         new=tuple((p-eta*coef*s*g.astype(p.dtype)).astype(p.dtype) for p,g in zip(w0p,Gs));return eqx.tree_at(get3,inner0,new)
@@ -230,7 +233,7 @@ def main():
         for s in scales:
             ev={};info={}
             for w in a.worlds:
-                Gs=G[w][(P,Q)];gn=float(jnp.sqrt(sum(jnp.sum(x*x) for x in Gs)));coef=min(1.0,clip/max(gn,1e-30));newp=apply(Gs,s,coef);mm=L.set_inner(rt.base,newp);ev[w]=L.evaluate(mm)
+                Gs=tuple(jnp.asarray(x) for x in G[w][(P,Q)]);gn=float(jnp.sqrt(sum(jnp.sum(x*x) for x in Gs)));coef=min(1.0,clip/max(gn,1e-30));newp=apply(Gs,s,coef);mm=L.set_inner(rt.base,newp);ev[w]=L.evaluate(mm)
                 info[w]={'gnorm':gn,'coef':coef,'canary_rise':max(ev[w]['_gen_nll']-ev0['_gen_nll'],ev[w]['_tail_nll']-ev0['_tail_nll'])}
             if len(a.worlds)==2:
                 D=Mf(ev['A'],ev['B'],'L3')-Mf(ev['A'],ev['B'],'XP');res['cells'][f'x{P}_d{Q}_s{s:g}']={'D_alt_pairs':D.tolist(),'D_alt_mean':float(D.mean()),'info':info}
