@@ -1,4 +1,5 @@
 #!/bin/bash
+# MEMORY PEAK CHECK without the full run (one short GPU run, nothing saved): E29_MEMPROF=1 $PY $S/e29_factors.py swap --seed 101 --worlds A --chunks c2 --peak-only   (prints MEM lines: in use / peak per stage, saves jax memory profiles to $OUT/e29_mem_*.prof)
 # SCALES env (default 1,2 = design recommendation; set SCALES=1,2,4,8 for the full grid). EXPECTED RUN TIME (Hans confirms before it runs; with scales 1,2 the readouts are halved): precision check about 20-30 min [estimate: 3 chunks x 2 worlds x 3 factor extractions + 3 cells x 4 scales x 2 worlds readouts];
 # main swap (c2, s101, worlds AB, scales 1,2,4,8, first-order on) as job 60 was planned, plus per-chunk window prefix if win32 is chosen (+9 prefix forwards per chunk, a few min). Total about the job-60 estimate + 30 min [estimate; job-60 time is the lab's number].
 # E29 swap rerun after the job-60 OOM (fp32 64K prefix asked for 992 GiB). PROPOSED, NOT QUEUED. Needs commit 8efe605 or later + the prefcheck/win32 commit.
@@ -8,7 +9,7 @@
 set -e
 export E29_REMAT=${E29_REMAT:-1} E29_LAZY_READOUT=${E29_LAZY_READOUT:-1}   # memory: per-block remat in the factor backward + readout scorers built after the write loop (job 63 first run OOM'd with a single 22.8 GiB request in O['deltas'])
 $PY $S/e29_factors.py compare --seed 101 --world A --chunks 0,1,2   # stage 1 gate: worst relative error vs the job-90 dump < 1e-3 (exit 5 stops the job)
-$PY $S/e29_factors.py swap --seed 101 --worlds AB --chunks 0,1,2 --scales ${SCALES:-1,2} --prefcheck
+$PY $S/e29_factors.py swap --seed 101 --worlds AB --chunks 0,1,2 --scales ${SCALES:-1,2} --prefcheck   # the reference-gradient check (recon_err) is skipped here (E29_RECON_PREFCHECK=1 re-enables); compare above and the main swap's first chunk do it
 PREF=$(cat $OUT/e29_prefcheck_choice_s101.txt)
 echo "prefix precision for the main swap: $PREF"
 E29_PREF=$PREF $PY $S/e29_factors.py swap --seed 101 --worlds AB --chunks c2 --scales ${SCALES:-1,2}
