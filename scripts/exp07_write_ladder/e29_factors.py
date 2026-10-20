@@ -131,7 +131,7 @@ def build_margin(L,rt32):
                 wg=np.zeros(CH,np.float32);wf=np.zeros(CH,np.float32)
                 for r_,(c_,a_,b_) in enumerate(where):(wg if r_%2==0 else wf)[a_:b_]=1.0
                 inp[(fam,p)]=(jnp.asarray(ids),jnp.asarray(tg),pref,jnp.asarray(seg),jnp.asarray(loc),jnp.asarray(wg),jnp.asarray(wf))
-    return dict(grad=lambda fam,p:margin_grad(rt32.base,*inp[(fam,p)]),pairs=pairs,xpairs=xpairs)
+    return dict(grad=lambda fam,p:margin_grad(rt32.base,*inp[(fam,p)]),mg=margin_grad,inp=inp,pairs=pairs,xpairs=xpairs)
 def factors(O,c,st,pref_,kmask):
     d1,d3,d2=O['deltas'](c,st,pref_,kmask);xin,xmid,hd,hmax=O['acts'](c,st,pref_,kmask);return xin,xmid,d1,d3,d2,float(hd),float(hmax)
 def recon_err(O,m,c,st,pref_,kmask,xin,xmid,d1,d3,d2):
@@ -159,10 +159,11 @@ def main():
     ap.add_argument('--chunks',default='all');ap.add_argument('--scales',default='1,2,4,8');ap.add_argument('--save-dir',default=None);ap.add_argument('--verify-step',action='store_true');ap.add_argument('--smoke',type=int,default=None);ap.add_argument('--no-first-order',action='store_true');ap.add_argument('--prefcheck',action='store_true')
     ap.add_argument('--dump',default=str(DUMP));ap.add_argument('--nboot',type=int,default=4000);a=ap.parse_args()
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
-    rt=Runtime();L=Ladder3(rt,a.seed,readout=(a.mode=='swap'));L.build3()
-    if a.mode=='compare':L.rt32=runtime_fp32() if not hasattr(L,'rt32') else L.rt32
+    lazy=a.mode=='swap' and os.environ.get('E29_LAZY_READOUT','0')=='1'   # memory mitigation (default off, numerics unchanged): the packed fp32 readout scorers are built only after the write loop; the write loop itself needs the fp32 model (factors are fp32)
+    rt=Runtime();L=Ladder3(rt,a.seed,readout=(a.mode=='swap' and not lazy));L.build3()
+    if a.mode=='compare' or lazy:L.rt32=runtime_fp32() if not hasattr(L,'rt32') else L.rt32
     rt32=L.rt32;m32=rt32.base;O=build_ops(L,rt32);W=WIN
-    h0=reuse._hash_pytree(rt.base.inner_parameters())[0];man={'seed':a.seed,'mode':a.mode,'W0_inner_hash':h0,'kv_shape':KV_SHAPE,'code_sha':hashlib.sha256(open(__file__,'rb').read()).hexdigest()}
+    h0=reuse._hash_pytree(rt.base.inner_parameters())[0];man={'lazy_readout':lazy,'seed':a.seed,'mode':a.mode,'W0_inner_hash':h0,'kv_shape':KV_SHAPE,'code_sha':hashlib.sha256(open(__file__,'rb').read()).hexdigest()}
     Kc0=jnp.zeros(KV_SHAPE,jnp.float32);Vc0=jnp.zeros(KV_SHAPE,jnp.float32);keepM=jnp.asarray(np.r_[np.zeros(W,bool),np.ones(CH,bool)]);keepA=jnp.asarray(np.ones(W+CH,bool))
     if a.mode=='compare':
         w=a.world;ks=[int(x) for x in a.chunks.split(',')] if a.chunks!='all' else [0,1,2];rows=SP.chunk_rows(L.T.w,w=='B',L.T.tok,rt.bos,rt.eos,'ntp')[0];byk={x[3]['k']:x for x in rows};res={}
@@ -226,6 +227,13 @@ def main():
                 st=L.read_state(m32,st,c,pref_c)
         del pref_nat;G[w]={cc:tuple(np.asarray(x) for x in v) for cc,v in acc.items()};del acc;jax.clear_caches()   # accumulators to host, free the 64K prefix before the next world
         PRO[w]={f'x{P}_d{Q}':np.asarray(v).tolist() for (P,Q),v in pro.items()};man[f'check_{w}']=chk
+    if lazy:   # drop the write-loop fp32 model, then build the readout Ladder (loads its own fp32 model + packed scorers); margin-gradient inputs (arrays) are reused with the new model
+        old=rt32;O=None;m32=None;L.rt32=None
+        try:old.base=None
+        except Exception as e:print('could not release old fp32 model reference:',repr(e)[:120],flush=True)
+        del old;import gc;gc.collect();jax.clear_caches()
+        L=Ladder3(rt,a.seed,readout=True);L.build3();rt32=L.rt32
+        if MG is not None:MG['grad']=lambda fam,p:MG['mg'](rt32.base,*MG['inp'][(fam,p)])
     # ---- realisation + readout ----
     def apply(Gs,s,coef):
         new=tuple((p-eta*coef*s*g.astype(p.dtype)).astype(p.dtype) for p,g in zip(w0p,Gs));return eqx.tree_at(get3,inner0,new)
