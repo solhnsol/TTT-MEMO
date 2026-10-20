@@ -47,7 +47,7 @@ def _fill(need_bins,pool,rng):
     return sorted(chosen),(hit/len(need_bins) if len(need_bins) else 1.0)
 class Sets:
     def __init__(self,table,seed,passno,frac=0.25):
-        self.t=table;self.seed=seed;self.passno=passno;self.frac=frac;self.fill_total=None;self.fill_attn_cands=False   # fill_attn_cands (E41/K6 follow-up): draw oraclefill's fill only from the attention cells' candidate set (not the first 4 stream positions, not the 128 tokens right before the chunk); fill_total: optional {chunk: total} (E41 U49: total masked count taken from another cell's file); frac: frac: only used by the E39 cells oraclefill / randfill
+        self.t=table;self.seed=seed;self.passno=passno;self.frac=frac;self.fill_total=None;self.fill_attn_cands=False;self.fill_no_o=False   # fill_attn_cands (E41/K6 follow-up): draw oraclefill's fill only from the attention cells' candidate set (not the first 4 stream positions, not the 128 tokens right before the chunk); fill_total: optional {chunk: total} (E41 U49: total masked count taken from another cell's file); frac: frac: only used by the E39 cells oraclefill / randfill
         self.place_tok=[(s['place'][0],i) for i,s in enumerate(self.t)]
         self.allent=sorted({p for s in self.t for p in s['names']+s['place']})
     def cur_sentences(self,k):
@@ -87,7 +87,7 @@ class Sets:
         non-O positions of the window (no distance-bin matching; match_frac is reported as 1.0).
         No O in the chunk -> nothing is masked (as every O-matched cell). frac = 0 -> S = O exactly."""
         frac=self.frac if frac is None else frac;O=self.oracle(k)
-        if not O:return [],1.0
+        if not O and not self.fill_no_o:return [],1.0   # fill_no_o (E41 U49 pairing with attn-sel): chunks without O are filled uniformly too, with fill_total[k] (else the frac target)
         k0=k*CH;lo=max(0,k0-W);Oset=set(O);nF=max(0,(self.fill_total[k] if self.fill_total and k in self.fill_total else self._target(k,frac))-len(O))
         if nF==0:return list(O),1.0
         cand=[p for p in range(lo,k0) if p not in Oset and not(self.fill_attn_cands and (p<4 or p>=k0-128))];n=min(nF,len(cand))   # E39 decision (before results): uniform draw over all non-O window positions, no distance matching, match_frac = 1.0

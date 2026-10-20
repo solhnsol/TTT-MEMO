@@ -126,7 +126,7 @@ class Ladder3(LD.Ladder):
                 if cell!='native0':
                     t0=time.monotonic();Kh,Vh,_=self.record(ids);print(f'  recorded natural K,V ({Kh.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s',flush=True)
                     sets=SETS.Sets(SETS.sentence_table(worlds[ps-1],swap,self.T.tok,gw,SP),seed,ps,getattr(self,'fill_frac',0.25))
-                    sets.fill_attn_cands=bool(getattr(self,'fill_attn_cands',False))
+                    sets.fill_attn_cands=bool(getattr(self,'fill_attn_cands',False));sets.fill_no_o=bool(getattr(self,'fill_no_o',False))
                     if getattr(self,'fill_size_from',None):
                         rf=json.load(open(OUT/f'S3_{self.fill_size_from}_s{seed}_{"B" if swap else "A"}.saved.json'))['log'][ps]['chunks'];sets.fill_total={x['k']:int(x['n_masked']) for x in rf}
                 for k in range(nch):
@@ -196,7 +196,7 @@ def unit_diag(L,world_seed):
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['native0','native3','oracle','othent','randdist','recency','prefixall','oraclesub','othentsub','oraclefill','randfill','k6','k6p'],default='oracle');ap.add_argument('--world-seed',type=int,default=101)
     ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],default='save');ap.add_argument('--tag',default='');ap.add_argument('--passes',type=int,default=4);ap.add_argument('--keep',action='store_true')
-    ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true');ap.add_argument('--unit-diag',action='store_true');ap.add_argument('--fill-size-from',default=None,help='E41 U49: oraclefill total per chunk = n_masked of OUT/S3_<TAG>_s<seed>_<world>.saved.json (e.g. attnsel_p4), instead of fill-frac x window');ap.add_argument('--fill-attn-cands',action='store_true',help='oraclefill: draw the fill only from the attention cells candidate set (positions >= 4 and < chunk start - 128)');ap.add_argument('--fill-frac',type=float,default=0.25,help='E39: oraclefill/randfill target masked fraction of the write window');ap.add_argument('--lr-scale',type=float,default=1.0,help='E38: multiply the inner step size (after ilr multiplier, clip untouched); 1.0 = bit-identical to the old code')
+    ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true');ap.add_argument('--unit-diag',action='store_true');ap.add_argument('--fill-size-from',default=None,help='E41 U49: oraclefill total per chunk = n_masked of OUT/S3_<TAG>_s<seed>_<world>.saved.json (e.g. attnsel_p4), instead of fill-frac x window');ap.add_argument('--fill-no-o',action='store_true',help='oraclefill: chunks WITHOUT an oracle set are also filled uniformly (total = fill-size-from n_masked of that chunk, else fill-frac x window); needed to pair with attn-sel, which masks 40-50% in every chunk');ap.add_argument('--fill-attn-cands',action='store_true',help='oraclefill: draw the fill only from the attention cells candidate set (positions >= 4 and < chunk start - 128)');ap.add_argument('--fill-frac',type=float,default=0.25,help='E39: oraclefill/randfill target masked fraction of the write window');ap.add_argument('--lr-scale',type=float,default=1.0,help='E38: multiply the inner step size (after ilr multiplier, clip untouched); 1.0 = bit-identical to the old code')
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True);assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     rt=Runtime()
     if a.unit_diag:
@@ -204,7 +204,7 @@ def main():
     if a.unit:
         L=Ladder3(rt,a.world_seed,readout=False);L.lr_scale=a.lr_scale;L.build3();res=L.unit(a.world_seed);json.dump(res,open(OUT/f's3_unit_s{a.world_seed}.json','w'),indent=1);print('unit done');return
     tag=a.tag or f'{a.cell}_p{a.passes}';lev='S3';SD=OUT/'states'/f'{lev}_{tag}_s{a.world_seed}'
-    L=Ladder3(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD);L.lr_scale=a.lr_scale;L.fill_frac=a.fill_frac;L.fill_size_from=a.fill_size_from;L.fill_attn_cands=a.fill_attn_cands;L.build3();L.canary_only=a.canary_only
+    L=Ladder3(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD);L.lr_scale=a.lr_scale;L.fill_frac=a.fill_frac;L.fill_size_from=a.fill_size_from;L.fill_attn_cands=a.fill_attn_cands;L.fill_no_o=a.fill_no_o;L.build3();L.canary_only=a.canary_only
     if a.smoke_chunks:assert a.canary_only and 'smoke' in tag
     if not a.smoke_chunks:json.dump({'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'lr_scale':a.lr_scale,'fill_frac':a.fill_frac,'clip':L.clip,'cell':a.cell,'passes':a.passes,'xla_flags':os.environ.get('XLA_FLAGS')},open(OUT/f'meta_{lev}_{tag}_s{a.world_seed}.json','w'),indent=1)
     for w in a.worlds:
