@@ -12,8 +12,13 @@ $PY $S/nat_signal_analyze.py --selftest
 for SL in $STREAMS; do
   $PY $S/nat_signal.py --dry --nat $SL --nat-dir $NAT_DIR --require-real | tail -3
 done
+FILES=""
 for SL in $STREAMS; do
   ST=${SL%%:*}; LA=${SL##*:}
   $PY $S/nat_signal.py --nat $SL --nat-dir $NAT_DIR --worlds A --tag sig
-  $PY $S/nat_signal_analyze.py $OUT/nat_signal_sig_s${ST}_${LA}_A.json
+  F=$OUT/nat_signal_sig_s${ST}_${LA}_A.json
+  $PY $S/nat_signal_analyze.py $F
+  FILES="${FILES:+$FILES,}$F"
 done
+# main stream first; pooled table (all eligible chunks of both streams, CI only) when two streams ran
+case "$FILES" in *,*) $PY $S/nat_signal_analyze.py $FILES --out $OUT/nat_signal_sig_pooled.md;; esac
