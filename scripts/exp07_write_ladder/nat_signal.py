@@ -101,7 +101,7 @@ def selftest():
     print('nat_signal SELFTEST OK',{kk:int(v.sum()) for kk,v in U.items()})
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--nat',default='9103:clustered');ap.add_argument('--nat-dir',default=os.environ.get('NAT_DIR','data/natural-text/worlds'));ap.add_argument('--worlds',default='A')
-    ap.add_argument('--ks',default=','.join(map(str,GRID)));ap.add_argument('--max-chunk',type=int,default=None);ap.add_argument('--dry',action='store_true');ap.add_argument('--selftest',action='store_true');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--tag',default='sig');ap.add_argument('--require-real',action='store_true')
+    ap.add_argument('--ks',default=','.join(map(str,GRID)));ap.add_argument('--max-chunk',type=int,default=None);ap.add_argument('--dry',action='store_true');ap.add_argument('--selftest',action='store_true');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--tag',default='sig');ap.add_argument('--require-real',action='store_true');ap.add_argument('--save-topk',type=int,default=0,help='also save the per-target top-K candidate indices of every chunk (uint16 [CH,K] per chunk, K <= 256) = the raw W0 scores in a form that reproduces the union for any k <= K offline')
     a=ap.parse_args()
     if a.selftest:selftest();return
     stream,layout=a.nat.split(':');stream=int(stream)
@@ -127,16 +127,17 @@ def run_gpu(a,stream,layout):
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     ks=[int(x) for x in a.ks.split(',')];NL.install(a.nat_dir,stream,layout);OUT.mkdir(parents=True,exist_ok=True)
     class NatStage1(ST.Stage1):
-        def signal(self,swap,ks,seed=0,max_chunk=None):
+        def signal(self,swap,ks,seed=0,max_chunk=None,save_topk=0,topk_path=None):
             rt=self.rt;m=rt.base;P=self.T.P[swap];ids=np.asarray(P.ids)[:NCH*CH];mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True;seq=rt.seq(ids,mask=mask)
             text=NW.realize(self.T.w,swap)[0];e=stage2.enc(self.T.tok,text);offs=list(e.offsets);table,owner=build_table(self.T.w,swap,offs);assert [i for i in ids[1:6]]==list(e.ids[:5]),'stream ids differ from the table encoding'
-            sets=NatSets(table,seed);res={'swap':bool(swap),'stream':stream,'layout':layout,'ks':ks,'chunks':{}};W=WIN
+            sets=NatSets(table,seed);res={'swap':bool(swap),'stream':stream,'layout':layout,'ks':ks,'chunks':{}};W=WIN;topk={}
             seg0=np.zeros(CH,np.int32);loc0=np.arange(CH,dtype=np.int32);pm0=jnp.asarray(ST.packing.prefix_mask(seg0,W))
             with rt.mesh:
                 pref_nat=rt.prefix(m,seq);Kh,Vh,_=self.record(ids);st=clone_state(rt.state_suffix);t0=time.monotonic()
                 for k in range(NCH if max_chunk is None else max_chunk):
                     k0=k*CH;c=rt.chunk(seq,k);pref_c=pref_nat[k*CH:(k+1)*CH];candm=cand_mask(k)
                     A,Bl,M=self.capture(m,st,c,pref_c);Mw=np.asarray(M)[:,:W].copy();Mw[:,~candm]=0.0;order=np.argsort(-Mw,axis=1,kind='stable');U=union_sets(order,candm,ks)
+                    if save_topk:topk[k]=order[:,:save_topk].astype(np.uint16)
                     O=sets.oracle(k);Oset=set(O);Oc=set(p for p in O if k0-W<=p<k0 and candm[p-(k0-W)]);cur=sets.cur_sentences(k);cur_t={s['t'] for s in cur};ans=sets.answers(k)
                     rec={'k':k,'n_cand':int(candm.sum()),'n_O':len(O),'n_Oc':len(Oc),'n_fact_units':len(cur),'n_ans':len(ans),'per_k':{}}
                     rows=jnp.asarray([j-1-k0 for j,_ in ans],dtype=jnp.int32) if ans else None;ys=np.asarray([ids[j] for j,_ in ans]) if ans else None
@@ -159,10 +160,11 @@ def run_gpu(a,stream,layout):
                     res['chunks'][k]=rec
                     if k%8==0:print(f'  signal {"B" if swap else "A"} chunk {k} {time.monotonic()-t0:.0f}s answers {len(ans)}',flush=True)
                     st=self.read_state(m,st,c,pref_c)
+            if save_topk:np.savez_compressed(topk_path,**{f'k{k_:02d}':v for k_,v in topk.items()})
             return res
     rt=Runtime();L=NatStage1(rt,stream,readout=False);L.build3();L.build1()
     for wd in a.worlds:
         f=OUT/f'nat_signal_{a.tag}_s{stream}_{layout}_{wd}.json'
         if f.exists():print('exists',f);continue
-        res=L.signal(wd=='B',ks,max_chunk=a.max_chunk);json.dump(res,open(f,'w'));print('saved',f,flush=True)
+        res=L.signal(wd=='B',ks,max_chunk=a.max_chunk,save_topk=a.save_topk,topk_path=OUT/f'nat_signal_{a.tag}_s{stream}_{layout}_{wd}_topk.npz');json.dump(res,open(f,'w'));print('saved',f,flush=True)
 if __name__=='__main__':main()
