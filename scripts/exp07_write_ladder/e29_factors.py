@@ -34,6 +34,7 @@ class TapMLP(eqx.Module):
     def __call__(self,x):
         z1=self.w1(x)+self.e1;z3=self.w3(x)+self.e3;z2=self.w2(jax.nn.silu(z1)*z3)+self.e2
         return self.dropout(z2)
+REMAT=os.environ.get('E29_REMAT','1')=='1'
 def build_ops(L,rt32):
     m0=rt32.base;lm=m0.language_model;H=lm.model.h;NL=jax.tree_util.tree_leaves(H.suffix_blocks)[0].shape[0];cfg=lm.config
     dff=int(H.suffix_blocks.feed_forward_prime.w1.weight.shape[-1]);dm=int(H.suffix_blocks.feed_forward_prime.w1.weight.shape[-2])
@@ -48,7 +49,8 @@ def build_ops(L,rt32):
         for i in range(NL):
             b=layer(i);f=b.feed_forward_prime
             b=eqx.tree_at(lambda q:q.feed_forward_prime,b,TapMLP(f.w1,f.w2,f.w3,f.dropout,*taps[i]))
-            x,_=Block.__call__(b,x,st_layer(st,i),c,is_prefix=False)
+            if REMAT:x=eqx.filter_checkpoint(lambda b_,x_,s_,c_:Block.__call__(b_,x_,s_,c_,is_prefix=False)[0])(b,x,st_layer(st,i),c)   # recompute each block in the backward pass: same values, activations of one block instead of eight (job 63 OOM: one 22.8 GiB request in O['deltas'])
+            else:x,_=Block.__call__(b,x,st_layer(st,i),c,is_prefix=False)
         loss,_=cross_entropy_loss_and_accuracy(head(x),c.target_tokens,c.loss_masks);return loss
     def _block_capture(b,x,st_i,seq,xin,xmid):
         cfg_b=b.config;rmsf=lambda n,u:n(u)
@@ -131,7 +133,7 @@ def build_margin(L,rt32):
                 wg=np.zeros(CH,np.float32);wf=np.zeros(CH,np.float32)
                 for r_,(c_,a_,b_) in enumerate(where):(wg if r_%2==0 else wf)[a_:b_]=1.0
                 inp[(fam,p)]=(jnp.asarray(ids),jnp.asarray(tg),pref,jnp.asarray(seg),jnp.asarray(loc),jnp.asarray(wg),jnp.asarray(wf))
-    return dict(grad=lambda fam,p:margin_grad(rt32.base,*inp[(fam,p)]),pairs=pairs,xpairs=xpairs)
+    return dict(grad=lambda fam,p:margin_grad(rt32.base,*inp[(fam,p)]),mg=margin_grad,inp=inp,pairs=pairs,xpairs=xpairs)
 def factors(O,c,st,pref_,kmask):
     d1,d3,d2=O['deltas'](c,st,pref_,kmask);xin,xmid,hd,hmax=O['acts'](c,st,pref_,kmask);return xin,xmid,d1,d3,d2,float(hd),float(hmax)
 def recon_err(O,m,c,st,pref_,kmask,xin,xmid,d1,d3,d2):
@@ -159,10 +161,11 @@ def main():
     ap.add_argument('--chunks',default='all');ap.add_argument('--scales',default='1,2,4,8');ap.add_argument('--save-dir',default=None);ap.add_argument('--verify-step',action='store_true');ap.add_argument('--smoke',type=int,default=None);ap.add_argument('--no-first-order',action='store_true');ap.add_argument('--prefcheck',action='store_true')
     ap.add_argument('--dump',default=str(DUMP));ap.add_argument('--nboot',type=int,default=4000);a=ap.parse_args()
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
-    rt=Runtime();L=Ladder3(rt,a.seed,readout=(a.mode=='swap'));L.build3()
-    if a.mode=='compare':L.rt32=runtime_fp32() if not hasattr(L,'rt32') else L.rt32
+    lazy=a.mode=='swap' and os.environ.get('E29_LAZY_READOUT','0')=='1'   # memory mitigation (default off, numerics unchanged): the packed fp32 readout scorers are built only after the write loop; the write loop itself needs the fp32 model (factors are fp32)
+    rt=Runtime();L=Ladder3(rt,a.seed,readout=(a.mode=='swap' and not lazy));L.build3()
+    if a.mode=='compare' or lazy:L.rt32=runtime_fp32() if not hasattr(L,'rt32') else L.rt32
     rt32=L.rt32;m32=rt32.base;O=build_ops(L,rt32);W=WIN
-    h0=reuse._hash_pytree(rt.base.inner_parameters())[0];man={'seed':a.seed,'mode':a.mode,'W0_inner_hash':h0,'kv_shape':KV_SHAPE,'code_sha':hashlib.sha256(open(__file__,'rb').read()).hexdigest()}
+    h0=reuse._hash_pytree(rt.base.inner_parameters())[0];man={'lazy_readout':lazy,'seed':a.seed,'mode':a.mode,'W0_inner_hash':h0,'kv_shape':KV_SHAPE,'code_sha':hashlib.sha256(open(__file__,'rb').read()).hexdigest()}
     Kc0=jnp.zeros(KV_SHAPE,jnp.float32);Vc0=jnp.zeros(KV_SHAPE,jnp.float32);keepM=jnp.asarray(np.r_[np.zeros(W,bool),np.ones(CH,bool)]);keepA=jnp.asarray(np.ones(W+CH,bool))
     if a.mode=='compare':
         w=a.world;ks=[int(x) for x in a.chunks.split(',')] if a.chunks!='all' else [0,1,2];rows=SP.chunk_rows(L.T.w,w=='B',L.T.tok,rt.bos,rt.eos,'ntp')[0];byk={x[3]['k']:x for x in rows};res={}
@@ -177,7 +180,7 @@ def main():
                 err,gn,gn3=recon_err(O,m32,c,st,pref,keepM,xin,xmid,d1,d3,d2);r['recon_err_w1_w3_w2']=err;r['gnorm_ref_vs_3matrix']=[gn,gn3];r['hidden_maxdiff']=hd;res[k]=r
                 print(k,json.dumps(r),flush=True)
         worst=max(max(v[n]['rel_total'] for n in ('x_in','x_mid','d1','d3','d2')) for v in res.values());man['worst_rel_total']=worst;man['gate_1e-3']=worst<=1e-3
-        json.dump({'manifest':man,'chunks':res},open(OUT/f'e29_compare_s{a.seed}_{a.world}.json','w'),indent=1);print('worst rel',worst,'gate 1e-3:',worst<=1e-3);return
+        json.dump({'manifest':man,'chunks':res},open(OUT/f'e29_compare_s{a.seed}_{a.world}.json','w'),indent=1);print('worst rel',worst,'gate 1e-3:',worst<=1e-3);sys.exit(0 if worst<=1e-3 else 5)   # exit 5 stops job 63 before prefcheck / swap
     # ---- swap ----
     scales=[float(x) for x in a.scales.split(',')];st_all=clone_state(rt.state_all);eta0=None
     inner0=rt.base.inner_parameters();get3=lambda t:(t.language_model.model.h.suffix_blocks.feed_forward_prime.w1.weight,t.language_model.model.h.suffix_blocks.feed_forward_prime.w3.weight,t.language_model.model.h.suffix_blocks.feed_forward_prime.w2.weight)
@@ -206,6 +209,7 @@ def main():
             for k in range(max(ks)+1):
                 c=rt32.chunk(seq32,k);pref_c=pref_win32(rt32,ids,mask_np,k) if win else pref_nat[k*CH:(k+1)*CH]
                 if k in ks:
+                    if k==ks[0]:memprof(f'before_first_factors_{w}')
                     FA=factors(O,c,st,pref_c,keepA);pref_w=L.prefix_masked(m32,jnp.asarray(ids[k*CH:(k+1)*CH],dtype=jnp.int32),Kc0,Vc0,jnp.int32(k*CH),keepM);FM=factors(O,c,st,pref_w,keepM)
                     F={'A':FA,'M':FM};wk=nk[k]/N
                     if a.prefcheck:
@@ -226,6 +230,13 @@ def main():
                 st=L.read_state(m32,st,c,pref_c)
         del pref_nat;G[w]={cc:tuple(np.asarray(x) for x in v) for cc,v in acc.items()};del acc;jax.clear_caches()   # accumulators to host, free the 64K prefix before the next world
         PRO[w]={f'x{P}_d{Q}':np.asarray(v).tolist() for (P,Q),v in pro.items()};man[f'check_{w}']=chk
+    if lazy:   # drop the write-loop fp32 model, then build the readout Ladder (loads its own fp32 model + packed scorers); margin-gradient inputs (arrays) are reused with the new model
+        old=rt32;O=None;m32=None;L.rt32=None
+        try:old.base=None
+        except Exception as e:print('could not release old fp32 model reference:',repr(e)[:120],flush=True)
+        del old;import gc;gc.collect();jax.clear_caches()
+        L=Ladder3(rt,a.seed,readout=True);L.build3();rt32=L.rt32
+        if MG is not None:MG['grad']=lambda fam,p:MG['mg'](rt32.base,*MG['inp'][(fam,p)])
     # ---- realisation + readout ----
     def apply(Gs,s,coef):
         new=tuple((p-eta*coef*s*g.astype(p.dtype)).astype(p.dtype) for p,g in zip(w0p,Gs));return eqx.tree_at(get3,inner0,new)
@@ -279,4 +290,11 @@ def main():
     if a.prefcheck:
         rels=[v for w_ in a.worlds for v in man.get(f'prefcheck_rel_win32_vs_bf16_{w_}',{}).values()];worst=max(max(r.values()) for r in rels);man['prefcheck_worst_factor_rel']=worst;man['prefcheck_factor_pass_1e-2']=bool(worst<=1e-2);man['prefcheck_choice']='bf16' if (worst<=1e-2 and all(v['pass_10pct'] for v in man.get('prefcheck_verdict',{}).values())) else 'win32';(OUT/f'e29_prefcheck_choice_s{a.seed}.txt').write_text(man['prefcheck_choice']+'\n');lines.append(f'factor relative error win32 vs bf16 prefix (worst over chunks/worlds/factors): {worst:.2e} ({"PASS" if worst<=1e-2 else "FAIL"} at 1e-2)')
     json.dump({'manifest':man,'result':res},open(OUT/f'e29_swap_s{a.seed}{sfx}.json','w'),indent=1);(OUT/f'e29_swap_s{a.seed}{sfx}.md').write_text('\n'.join(lines)+'\n');print('\n'.join(lines))
-if __name__=='__main__':main()
+def memprof(tag):
+    if os.environ.get('E29_MEMPROF','0')=='1':   # jax device memory profile (pprof format), default off
+        try:jax.profiler.save_device_memory_profile(str(OUT/f'e29_mem_{tag}.prof'));print('memory profile saved',tag,flush=True)
+        except Exception as e:print('memory profile failed',repr(e)[:120],flush=True)
+if __name__=='__main__':
+    try:main()
+    except Exception:
+        memprof('oom_or_error');raise

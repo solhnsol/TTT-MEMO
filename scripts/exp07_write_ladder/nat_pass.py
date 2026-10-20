@@ -93,31 +93,38 @@ def build_pass_stream_matched(w0,pool,swap,encode,decode,bos,target,slack=8,min_
         prev_bg[i]=last
         if t['kind']=='bg':last=i
     def cut(i):
-        ji=join_ids[i];m=min(n[i],len(ji))
-        while m>min_tok:
+        """cut the slot's joined pool text so that the text, RE-TOKENIZED on its own, has exactly n[i] tokens: slicing ids and decoding does not round-trip (boundary merges, strip of a trailing whitespace token), which let exposure positions drift (job 60: up to 7 tokens). Closed loop on the re-encoded length."""
+        ji=join_ids[i];t=n[i];m=min(t,len(ji));best=None
+        for _ in range(12):
             tx=decode(ji[:m])
-            if '\ufffd' not in tx:return tx.strip()
-            m-=1
-        raise AssertionError(f'cannot cut the pool text of slot {i} cleanly')
-    def assemble():
-        w=copy.deepcopy(w0)
-        for i in slots:w['texts'][i]={'kind':'bg','text':cut(i)}
-        ids,ends=encode(NW.realize(w,swap)[0]);return w,[bos]+list(ids),ends
-    rounds=0;resid=None
-    while True:
-        w,ids,ends=assemble();sp=tok_spans(NW.realize(w,swap)[2],ends)
-        assert {(s['t'],s['round'],s['text']) for s in sp}==set(base),'exposure units changed'
-        d=[s['tok_start']-base[(s['t'],s['round'],s['text'])] for s in sp];resid=max(abs(x) for x in d)
-        if resid==0 or rounds>=max_rounds:break
-        rounds+=1;prev=0;idx_of={(s['t'],s['round'],s['text']):None for s in sp}
-        # sp is in stream order = order of expo units in texts; map each to its text index
-        eidx=[i for i,t in enumerate(texts) if t['kind']=='expo'];assert len(eidx)==len(sp)
-        for ti,dj in zip(eidx,d):
-            e=dj-prev;prev=dj
-            if e!=0:
-                s_=prev_bg[ti]
-                if s_ is not None:n[s_]=max(min_tok,min(n[s_]-e,len(join_ids[s_])))
-    assert resid<=max_drift,f'exposure positions drift by up to {resid} tokens after {rounds} rounds (allowed {max_drift})'
+            if '\ufffd' in tx:
+                if m<=min_tok:break
+                m-=1;continue
+            tx=tx.strip();got=len(encode(tx)[0])
+            if best is None or abs(got-t)<best[0]:best=(abs(got-t),tx)
+            if got==t:break
+            m=max(min_tok,min(len(ji),m+(t-got)))
+        if best is None:raise AssertionError(f'cannot cut the pool text of slot {i} cleanly')
+        return best[1]
+    eidx=[i for i,t in enumerate(texts) if t['kind']=='expo']
+    w=copy.deepcopy(w0)
+    for i in slots:w['texts'][i]={'kind':'bg','text':cut(i)}
+    def measure():
+        ids_,ends_=encode(NW.realize(w,swap)[0]);sp_=tok_spans(NW.realize(w,swap)[2],ends_)
+        assert {(s['t'],s['round'],s['text']) for s in sp_}==set(base),'exposure units changed'
+        assert len(sp_)==len(eidx);return ids_,sp_,[s_['tok_start']-base[(s_['t'],s_['round'],s_['text'])] for s_ in sp_]
+    # sequential absorption (expo units in stream order): re-tokenize the assembled stream, shift the CUT of the background slot just before the unit by the measured drift, repeat until the unit starts at its pass-1 token;
+    # units before it are unaffected (tokenization is left to right with '\n\n' joints), later units are handled in their turn
+    rounds=0
+    for u,ti in enumerate(eidx):
+        s_=prev_bg[ti]
+        if s_ is None:continue
+        for _ in range(10):
+            ids_,sp_,d=measure()
+            if d[u]==0:break
+            rounds+=1;n[s_]=max(min_tok,min(n[s_]-d[u],len(join_ids[s_])));w['texts'][s_]={'kind':'bg','text':cut(s_)}
+    ids_,sp,d=measure();ids=[bos]+list(ids_);resid=max(abs(x) for x in d)
+    assert resid<=max_drift,f'exposure positions drift by up to {resid} tokens after {rounds} adjustments (allowed {max_drift}); per-unit drift {d}'
     late=[s for s in sp if s['tok_end']>=target]
     assert not late,f'{len(late)} exposure units fall beyond token {target}'
     used=[x for i in slots for x in w['texts'][i]['text'].split('\n\n') if x]   # paragraphs actually used (the last one of a slot is the cut piece)
