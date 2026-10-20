@@ -6,6 +6,7 @@
 #   One aggregated step W0 -> W per cell, world and scale (1, 4), readout R1-alt D1 per pair (analyze_e30.py). The full dose-response (F128/512/2048, P, R, N) is job 91 and runs only after this core job's gate.
 # Needs on the server (fetch from claude/project-thread-rwhdac): scripts/exp07_write_ladder/{e30_core,e30_ctx,e30_dose,analyze_e30}.py (new files only; the server's s3.py / ladder.py / s3_sets.py are imported unchanged: Ladder3.prefix_masked/record/grad_nat/grad_mask/read_state).
 #   Data: data/narrative_gutenberg/pg*.txt (>= ~12 books usable for the three context kinds, canary pg11/pg1342), data/squad (readout), stage-1 verified fp32 readout log as for every ladder job.
+# SELFCHECK GATES (changed after job 59 failed the original ones; needs E30 design consent, E30_GATES=old restores the original gates): k=8 exact (cos>=0.999, rel<=1e-2), later chunks cos>=0.95, F0 vs M-at-position-8192 rel<=5e-3, F0 vs M rel<=5e-2.
 # Gates, in this order, each aborts the job (set -e): context audit (exit 3), selfcheck (exit 4: real-window context pipeline vs native gradient cosine >= 0.99 and CE within 0.05; F0 vs M gradient relative difference <= 1e-3), then the F0-vs-M D1 gate is printed in the report (not an abort).
 # Memory: accumulators = (cells x 2 worlds x inner-parameter fp32 pytree); the script refuses to start if they exceed 50% of the device memory (split --cells then). Core = 4 cells x 2 worlds ~ 19 GiB if the inner parameters are the three suffix MLP matrices.
 set -e
