@@ -138,8 +138,16 @@ def recon_err(O,m,c,st,pref_,kmask,xin,xmid,d1,d3,d2):
     r1,r3,r2,gn=O['ref_grad'](m,c,st,pref_,kmask);rec=O['outer'](xin,xmid,d1,d3,d2)
     err=[float(jnp.linalg.norm(x-y)/jnp.maximum(jnp.linalg.norm(y),1e-30)) for x,y in zip(rec,(r1,r3,r2))]
     gn3=float(jnp.sqrt(sum(jnp.sum(x*x) for x in rec)));return err,float(gn),gn3
+def pref_win32(rt32,ids,mask,k):
+    """fp32 prefix of chunk k from a window-local stream: the chunk plus up to WIN//CH preceding chunks (<= 9216 tokens; chunks 0..8 start at 0, so for k <= WIN//CH the window is the whole stream so far and only the precision differs
+    from the bf16 64K prefix; for later k the window start truncates the receptive field of the 24 prefix layers, which the 64K prefix does not). Every chunk token still attends to exactly the native SWA keys (the window holds the WIN keys before it);
+    RoPE positions are window-local (relative positions identical). Returns the chunk's rows [CH, d] in fp32."""
+    s0=max(0,k-WIN//CH);sl=slice(s0*CH,(k+1)*CH);seq=rt32.seq(np.asarray(ids)[sl],mask=np.asarray(mask)[sl])
+    return rt32.prefix(rt32.base,seq)[(k-s0)*CH:(k-s0+1)*CH]
 def pref_native32(rt,rt32,seq32,ids):
-    if os.environ.get('E29_PREF','bf16')!='fp32':   # the fp32 64K prefix runs attention on the XLA path (cuDNN has no fp32): it asked for 992 GiB (job 60); default = bf16 cuDNN prefix cast to fp32
+    mode=os.environ.get('E29_PREF','bf16')
+    if mode=='win32':return None,'win32'   # per-chunk window fp32 prefix (pref_win32), no 64K prefix is built
+    if mode!='fp32':   # the fp32 64K prefix runs attention on the XLA path (cuDNN has no fp32): it asked for 992 GiB (job 60); default = bf16 cuDNN prefix cast to fp32
         seq=rt.seq(ids,mask=np.asarray(seq32.loss_masks));return rt.prefix(rt.base,seq).astype(jnp.float32),'bf16->fp32'
     try:return rt32.prefix(rt32.base,seq32),'fp32'
     except Exception as e:   # e.g. OOM of the 64K fp32 prefix: fall back to the bf16 natural prefix cast to fp32 (stated in the manifest)
@@ -148,7 +156,7 @@ def pref_native32(rt,rt32,seq32,ids):
 def stream_ids(L,w):return np.asarray(L.T.P[w=='B'].ids)[:NCH*CH]
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('mode',choices=['compare','swap']);ap.add_argument('--seed',type=int,default=101);ap.add_argument('--worlds',default='AB');ap.add_argument('--world',default='A')
-    ap.add_argument('--chunks',default='all');ap.add_argument('--scales',default='1,2,4,8');ap.add_argument('--save-dir',default=None);ap.add_argument('--verify-step',action='store_true');ap.add_argument('--smoke',type=int,default=None);ap.add_argument('--no-first-order',action='store_true')
+    ap.add_argument('--chunks',default='all');ap.add_argument('--scales',default='1,2,4,8');ap.add_argument('--save-dir',default=None);ap.add_argument('--verify-step',action='store_true');ap.add_argument('--smoke',type=int,default=None);ap.add_argument('--no-first-order',action='store_true');ap.add_argument('--prefcheck',action='store_true')
     ap.add_argument('--dump',default=str(DUMP));ap.add_argument('--nboot',type=int,default=4000);a=ap.parse_args()
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     rt=Runtime();L=Ladder3(rt,a.seed,readout=(a.mode=='swap'));L.build3()
@@ -175,6 +183,8 @@ def main():
     inner0=rt.base.inner_parameters();get3=lambda t:(t.language_model.model.h.suffix_blocks.feed_forward_prime.w1.weight,t.language_model.model.h.suffix_blocks.feed_forward_prime.w3.weight,t.language_model.model.h.suffix_blocks.feed_forward_prime.w2.weight)
     w0p=get3(inner0);eta=L.lr*float(rt.base.get_ilr_multiplier(st_all.get(rt.base.step_index)));clip=L.clip;man.update({'eta':eta,'clip':clip,'scales':scales})
     cells=[('A','A'),('M','M'),('M','A'),('A','M')]   # (x from, delta from)
+    if a.prefcheck:   # E29 precision check: 'W' = native factors with the win32 prefix; D(W,W) vs D(A,A) under the bf16 prefix, D(M,M) as the scale
+        assert a.chunks!='all' and not os.environ.get('E29_PREF','bf16')=='win32';cells=[('A','A'),('W','W'),('M','M')];a.no_first_order=True;man['prefcheck']=True
     G={};PRO={};Gmean=None;MG=None
     if not a.no_first_order:   # G_D = mean_p grad(L3 margin of pair p) - mean_p grad(XP margin of pair p) at W0 (R0 readout approximation), three matrices
         MG=build_margin(L,rt32);gl=None;gx=None
@@ -190,13 +200,16 @@ def main():
             seq32=rt32.seq(ids,mask=mask);pref_nat,pd=pref_native32(rt,rt32,seq32,ids);man[f'pref_dtype_{w}']=pd
             ks=list(range(NCH)) if a.chunks=='all' else (sorted({x[3]['k'] for x in SP.chunk_rows(L.T.w,w=='B',L.T.tok,rt.bos,rt.eos,'X')[0]}) if a.chunks=='c2' else [int(x) for x in a.chunks.split(',')])   # c2 = the 26 fact-intact chunks of the screen (NTP loss kept)
             if a.smoke:ks=ks[:a.smoke]
+            mask_np=np.asarray(seq32.loss_masks);win=(pd=='win32')
             nk={k:int(np.asarray(rt32.chunk(seq32,k).loss_masks).sum()) for k in ks};N=sum(nk.values());acc={cc:tuple(jnp.zeros(s,jnp.float32) for s in ((O['NL'],O['dm'],O['dff']),(O['NL'],O['dm'],O['dff']),(O['NL'],O['dff'],O['dm']))) for cc in cells}
             pro={cc:jnp.zeros(8,jnp.float32) for cc in cells};st=clone_state(rt32.state_suffix);t0=time.monotonic();chk={}
             for k in range(max(ks)+1):
-                c=rt32.chunk(seq32,k);pref_c=pref_nat[k*CH:(k+1)*CH]
+                c=rt32.chunk(seq32,k);pref_c=pref_win32(rt32,ids,mask_np,k) if win else pref_nat[k*CH:(k+1)*CH]
                 if k in ks:
                     FA=factors(O,c,st,pref_c,keepA);pref_w=L.prefix_masked(m32,jnp.asarray(ids[k*CH:(k+1)*CH],dtype=jnp.int32),Kc0,Vc0,jnp.int32(k*CH),keepM);FM=factors(O,c,st,pref_w,keepM)
                     F={'A':FA,'M':FM};wk=nk[k]/N
+                    if a.prefcheck:
+                        FW=factors(O,c,st,pref_win32(rt32,ids,mask_np,k),keepA);F['W']=FW;rel={nm:float(jnp.linalg.norm(x-y)/jnp.linalg.norm(y)) for nm,x,y in zip(('x_in','x_mid','d1','d3','d2'),FW[:5],FA[:5])};man.setdefault(f'prefcheck_rel_win32_vs_bf16_{w}',{})[str(k)]=rel;print(f'  prefcheck {w} chunk {k} rel(win32 vs bf16) {json.dumps(rel)}',flush=True)
                     for (P,Q) in cells:
                         acc[(P,Q)]=O['add'](acc[(P,Q)],O['outer'](F[P][0],F[P][1],F[Q][2],F[Q][3],F[Q][4]),wk)
                         if Gmean is not None:pro[(P,Q)]=pro[(P,Q)]+wk*O['prof'](Gmean,F[P][0],F[P][1],F[Q][2],F[Q][3],F[Q][4])
@@ -208,6 +221,7 @@ def main():
                         D_=Path(a.save_dir)/f's{a.seed}_{w}';D_.mkdir(parents=True,exist_ok=True)
                         for cd in ('A','M'):np.savez(D_/f'{cd}_k{k:02d}.npz',**dict(zip(('x_in','x_mid','d1','d3','d2'),[np.asarray(x) for x in F[cd][:5]])))
                     del F,FA,FM
+                    if a.prefcheck:del FW
                     if k%8==0:print(f'  {a.seed} {w} chunk {k} {time.monotonic()-t0:.0f}s',flush=True)
                 st=L.read_state(m32,st,c,pref_c)
         del pref_nat;G[w]={cc:tuple(np.asarray(x) for x in v) for cc,v in acc.items()};del acc;jax.clear_caches()   # accumulators to host, free the 64K prefix before the next world
@@ -250,6 +264,9 @@ def main():
             for P,Q in cells:
                 r=res['cells'][f'x{P}_d{Q}_s{s:g}'];t=ci(r['D_alt_pairs']);lines.append(f"| {s:g} | x<-{P} d<-{Q} | {t[0]:+.3f} [{t[1]:+.3f},{t[2]:+.3f}] | {max(i['canary_rise'] for i in r['info'].values()):+.3f} | {('%+.3f'%r['D_first_order_mean']) if 'D_first_order_mean' in r else '-'} |")
             D=lambda P,Q:np.asarray(res['cells'][f'x{P}_d{Q}_s{s:g}']['D_alt_pairs']);tot=D('M','M')-D('A','A');n=len(tot);bs=[]
+            if a.prefcheck:   # E29 criterion: |D(W,W)-D(A,A)| <= 10% of |D(M,M)-D(A,A)|, and factor rel. error <= 1e-2
+                dd=float(D('W','W').mean()-D('A','A').mean());tt=float(tot.mean());ok=abs(dd)<=0.1*abs(tt);man.setdefault('prefcheck_verdict',{})[f'{s:g}']={'D_win32_minus_bf16':dd,'Delta_tot_MM_minus_AA':tt,'ratio':abs(dd)/max(abs(tt),1e-12),'pass_10pct':bool(ok)}
+                lines.append(f'\nscale {s:g}: D(win32,win32)-D(bf16,bf16) = {dd:+.4f}, D(M,M)-D(A,A) = {tt:+.4f}, ratio {abs(dd)/max(abs(tt),1e-12):.3f} -> {"PASS (<=0.10)" if ok else "FAIL (>0.10): run the main swap with E29_PREF=win32"}\n');continue
             for _ in range(a.nboot):
                 i=rng.integers(0,n,n);T=tot[i].mean();bs.append([(D('M','A')[i].mean()-D('A','A')[i].mean())/T,(D('A','M')[i].mean()-D('A','A')[i].mean())/T] if abs(T)>1e-9 else [np.nan,np.nan])
             T=tot.mean();sx=(D('M','A').mean()-D('A','A').mean())/T;sd=(D('A','M').mean()-D('A','A').mean())/T;bs=np.asarray(bs)
@@ -258,5 +275,8 @@ def main():
         lines+=['\n## Position profile: binding profile (world A - world B)/2 of sum_t d_t^T G_D x_t per 128-position bin (raw, unscaled; first-order D = -(eta coef s) x this)\n','| cell | '+' | '.join(f'{i*128}-{i*128+127}' for i in range(8))+' | head(0-255)/tail(768-1023) |','|---|'+'---|'*9]
         for P,Q in cells:
             pa=np.asarray(PRO['A'][f'x{P}_d{Q}']);pb=np.asarray(PRO['B'][f'x{P}_d{Q}']);bp=(pa-pb)/2;lines.append(f'| x<-{P} d<-{Q} | '+' | '.join(f'{v:+.2e}' for v in bp)+f' | {bp[:2].sum()/bp[6:].sum() if abs(bp[6:].sum())>1e-30 else float("nan"):.2f} |')
-    json.dump({'manifest':man,'result':res},open(OUT/f'e29_swap_s{a.seed}.json','w'),indent=1);(OUT/f'e29_swap_s{a.seed}.md').write_text('\n'.join(lines)+'\n');print('\n'.join(lines))
+    sfx='_prefcheck' if a.prefcheck else ''
+    if a.prefcheck:
+        rels=[v for w_ in a.worlds for v in man.get(f'prefcheck_rel_win32_vs_bf16_{w_}',{}).values()];worst=max(max(r.values()) for r in rels);man['prefcheck_worst_factor_rel']=worst;man['prefcheck_factor_pass_1e-2']=bool(worst<=1e-2);man['prefcheck_choice']='bf16' if (worst<=1e-2 and all(v['pass_10pct'] for v in man.get('prefcheck_verdict',{}).values())) else 'win32';(OUT/f'e29_prefcheck_choice_s{a.seed}.txt').write_text(man['prefcheck_choice']+'\n');lines.append(f'factor relative error win32 vs bf16 prefix (worst over chunks/worlds/factors): {worst:.2e} ({"PASS" if worst<=1e-2 else "FAIL"} at 1e-2)')
+    json.dump({'manifest':man,'result':res},open(OUT/f'e29_swap_s{a.seed}{sfx}.json','w'),indent=1);(OUT/f'e29_swap_s{a.seed}{sfx}.md').write_text('\n'.join(lines)+'\n');print('\n'.join(lines))
 if __name__=='__main__':main()
