@@ -180,7 +180,7 @@ def main():
                 err,gn,gn3=recon_err(O,m32,c,st,pref,keepM,xin,xmid,d1,d3,d2);r['recon_err_w1_w3_w2']=err;r['gnorm_ref_vs_3matrix']=[gn,gn3];r['hidden_maxdiff']=hd;res[k]=r
                 print(k,json.dumps(r),flush=True)
         worst=max(max(v[n]['rel_total'] for n in ('x_in','x_mid','d1','d3','d2')) for v in res.values());man['worst_rel_total']=worst;man['gate_1e-3']=worst<=1e-3
-        json.dump({'manifest':man,'chunks':res},open(OUT/f'e29_compare_s{a.seed}_{a.world}.json','w'),indent=1);print('worst rel',worst,'gate 1e-3:',worst<=1e-3);return
+        json.dump({'manifest':man,'chunks':res},open(OUT/f'e29_compare_s{a.seed}_{a.world}.json','w'),indent=1);print('worst rel',worst,'gate 1e-3:',worst<=1e-3);sys.exit(0 if worst<=1e-3 else 5)   # exit 5 stops job 63 before prefcheck / swap
     # ---- swap ----
     scales=[float(x) for x in a.scales.split(',')];st_all=clone_state(rt.state_all);eta0=None
     inner0=rt.base.inner_parameters();get3=lambda t:(t.language_model.model.h.suffix_blocks.feed_forward_prime.w1.weight,t.language_model.model.h.suffix_blocks.feed_forward_prime.w3.weight,t.language_model.model.h.suffix_blocks.feed_forward_prime.w2.weight)
@@ -209,6 +209,7 @@ def main():
             for k in range(max(ks)+1):
                 c=rt32.chunk(seq32,k);pref_c=pref_win32(rt32,ids,mask_np,k) if win else pref_nat[k*CH:(k+1)*CH]
                 if k in ks:
+                    if k==ks[0]:memprof(f'before_first_factors_{w}')
                     FA=factors(O,c,st,pref_c,keepA);pref_w=L.prefix_masked(m32,jnp.asarray(ids[k*CH:(k+1)*CH],dtype=jnp.int32),Kc0,Vc0,jnp.int32(k*CH),keepM);FM=factors(O,c,st,pref_w,keepM)
                     F={'A':FA,'M':FM};wk=nk[k]/N
                     if a.prefcheck:
@@ -289,4 +290,11 @@ def main():
     if a.prefcheck:
         rels=[v for w_ in a.worlds for v in man.get(f'prefcheck_rel_win32_vs_bf16_{w_}',{}).values()];worst=max(max(r.values()) for r in rels);man['prefcheck_worst_factor_rel']=worst;man['prefcheck_factor_pass_1e-2']=bool(worst<=1e-2);man['prefcheck_choice']='bf16' if (worst<=1e-2 and all(v['pass_10pct'] for v in man.get('prefcheck_verdict',{}).values())) else 'win32';(OUT/f'e29_prefcheck_choice_s{a.seed}.txt').write_text(man['prefcheck_choice']+'\n');lines.append(f'factor relative error win32 vs bf16 prefix (worst over chunks/worlds/factors): {worst:.2e} ({"PASS" if worst<=1e-2 else "FAIL"} at 1e-2)')
     json.dump({'manifest':man,'result':res},open(OUT/f'e29_swap_s{a.seed}{sfx}.json','w'),indent=1);(OUT/f'e29_swap_s{a.seed}{sfx}.md').write_text('\n'.join(lines)+'\n');print('\n'.join(lines))
-if __name__=='__main__':main()
+def memprof(tag):
+    if os.environ.get('E29_MEMPROF','0')=='1':   # jax device memory profile (pprof format), default off
+        try:jax.profiler.save_device_memory_profile(str(OUT/f'e29_mem_{tag}.prof'));print('memory profile saved',tag,flush=True)
+        except Exception as e:print('memory profile failed',repr(e)[:120],flush=True)
+if __name__=='__main__':
+    try:main()
+    except Exception:
+        memprof('oom_or_error');raise
