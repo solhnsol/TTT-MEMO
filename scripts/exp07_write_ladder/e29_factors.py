@@ -309,6 +309,10 @@ def memstats(tag):
     try:
         st=jax.devices()[0].memory_stats();print(f'MEM {tag}: in use {st["bytes_in_use"]/2**30:.1f} GiB, peak {st["peak_bytes_in_use"]/2**30:.1f} GiB, limit {st["bytes_limit"]/2**30:.1f} GiB',flush=True)
     except Exception as e:print('MEM',tag,'unavailable',repr(e)[:80],flush=True)
+    try:
+        arrs=[x for x in jax.live_arrays() if not x.is_deleted()];tot=sum(x.nbytes for x in arrs);top=sorted(arrs,key=lambda x:-x.nbytes)[:5]
+        print(f'MEM live arrays {tag}: {len(arrs)} arrays, {tot/2**30:.1f} GiB; top5 '+'; '.join(f'{tuple(x.shape)} {x.dtype} {x.nbytes/2**30:.2f}GiB' for x in top),flush=True)
+    except Exception as e:print('MEM live arrays unavailable',repr(e)[:80],flush=True)
 def memprof(tag):
     if os.environ.get('E29_MEMPROF','0')=='1':   # jax device memory profile (pprof format), default off
         try:jax.profiler.save_device_memory_profile(str(OUT/f'e29_mem_{tag}.prof'));print('memory profile saved',tag,flush=True)
