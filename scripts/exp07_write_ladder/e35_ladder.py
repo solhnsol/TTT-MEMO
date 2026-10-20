@@ -237,9 +237,12 @@ def iso_check(seed,passes=4):
             for sp in spans:
                 js=[1+j for j,o in enumerate(offs) if o[0]>=sp['start'] and o[1]<=sp['end'] and o[1]>o[0] and 1+j<len(seg)]
                 bad+=int(len(set(seg[js].tolist()))!=1)
-            res['passes'][f'{ps}{"B" if swap else "A"}']={'n_tokens_encoded':len(eids),'covers_stream':len(eids)+1>=NCH*CH,'rows_in_stream':len(set(seg.tolist())),'monotone_rows':bool((np.diff(seg.astype(np.int64))>=0).all()),'rows_per_chunk_mean':float(np.mean([a_ for a_,_ in st])),
+            cross=0
+            for k in range(NCH):
+                sg=seg[k*CH:(k+1)*CH];mm=packing.prefix_mask(sg,8192);cross+=int((mm&(sg[:,None]!=sg[None,:])).sum());assert mm.diagonal().all()   # the mask the prefix layers get: no key of another row in the same chunk, every token sees itself
+            res['passes'][f'{ps}{"B" if swap else "A"}']={'mask_cross_row_keys':cross,'n_tokens_encoded':len(eids),'covers_stream':len(eids)+1>=NCH*CH,'rows_in_stream':len(set(seg.tolist())),'monotone_rows':bool((np.diff(seg.astype(np.int64))>=0).all()),'rows_per_chunk_mean':float(np.mean([a_ for a_,_ in st])),
                 'cross_row_target_share_mean':float(np.mean([b_ for _,b_ in st])),'cross_row_target_share_max':float(np.max([b_ for _,b_ in st])),'n_expo_sentences':len(spans),'expo_sentences_split_over_rows':bad}
-    res['all_ok']=all(v['monotone_rows'] and v['expo_sentences_split_over_rows']==0 and v['covers_stream'] for v in res['passes'].values());json.dump(res,open(OUT/f'e35_iso_check_s{seed}.json','w'),indent=1);print(json.dumps(res,indent=1));return res
+    res['all_ok']=all(v['monotone_rows'] and v['mask_cross_row_keys']==0 and v['expo_sentences_split_over_rows']==0 and v['covers_stream'] for v in res['passes'].values());json.dump(res,open(OUT/f'e35_iso_check_s{seed}.json','w'),indent=1);print(json.dumps(res,indent=1));return res
 def u56(L,world_seed,ks=(1,5,20)):
     """U5: dtypes of the inner parameters after one update by the native path (rt.update, block = one chunk, as L0reset P=1) and by the L1/masked-fs path (L.step);
     U6: the same chunk written both ways from W0 (R2 = L0reset P=1 vs masked-fs block=1024 of ladder.run_L0_masked): update difference. Description, not pass/fail."""
