@@ -20,6 +20,7 @@ import ladder as LD
 from ladder import *
 from ttt.model.data import Batch
 NAT={}
+NAT_HOOKS={'cls':None,'post':None,'cells':{}}   # nat_attn.py installs extra cells / a ladder class here; empty = the R runner as before
 
 def install(nat_dir,stream,layout='spread'):
     """loader switch: call BEFORE constructing the Ladder."""
@@ -164,6 +165,7 @@ class NatLadder(LD.Ladder):
 
 def run_cell(L,cell,w,a):
     swap=w=='B'
+    if cell in NAT_HOOKS['cells']:return NAT_HOOKS['cells'][cell](L,swap,a)
     if cell=='L1':return L.run_L1(swap,a.epochs,a.seed,eval_epochs=tuple(int(x) for x in a.l1_eval_epochs.split(',')),variant=a.l1_variant)
     if cell=='L0fs':return L.run_L0_fillerswap(swap,a.passes,None)
     if cell=='L0mwfs':return L.run_L0_masked(swap,a.passes,a.block,a.scale,streams=L.fs_streams(swap,a.passes))
@@ -181,13 +183,17 @@ def main():
     base=[l for l in open(vp) if l.startswith('base ')];b=ast.literal_eval(base[0][5:]) if base else {}
     assert b and max(b['S_maxdiff_R1'],b['S_maxdiff_R0'],b['L_maxdiff_R1'])<=1e-3,'packed fp32 readout not verified - refusing to run'
     stream,layout=a.nat.split(':');stream=int(stream);install(a.nat_dir,stream,layout)
-    rt=Runtime();L=NatLadder(rt,stream,readout=(a.mode!='save'),save_dir=None);L.log_clip=a.log_clip
+    rt=Runtime();L=(NAT_HOOKS['cls']() if NAT_HOOKS['cls'] else NatLadder)(rt,stream,readout=(a.mode!='save'),save_dir=None);L.log_clip=a.log_clip
+    if NAT_HOOKS['post']:NAT_HOOKS['post'](L,a)
     mf=OUT/f'meta_nat_{a.tag}_s{stream}.json'
     meta={'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'clip':L.clip,'cells':a.cells,'passes':a.passes,'epochs':a.epochs,'l1_variant':a.l1_variant,'l1_eval_epochs':a.l1_eval_epochs,
           'stream':stream,'layout':layout,'xla_flags':os.environ.get('XLA_FLAGS'),'tail_report':L.T.tail_report,'tail_sha':L.T.tail_sha,'n_stream_tokens':{ 'A':L.T.P[False].n_total,'B':L.T.P[True].n_total}}
     sp=Path(a.strata) if a.strata else Path(a.nat_dir).parent/'strata.json'
     if sp.exists():meta['strata_diff_pass1']=NP.strata_diff(L.T.P[False].strata,json.load(open(sp)),stream,layout)
-    json.dump(meta,open(mf,'w'),indent=1,default=str)
+    if mf.exists() and NAT_HOOKS['cells']:   # attention-cell job on top of an existing R run: the item order must be identical (reuse of the R cells), the R meta is not overwritten
+        old_items=json.load(open(mf))['items'];assert old_items==json.loads(json.dumps(L.items,default=str)),'item order differs from the existing meta (R run): the R cells cannot be reused'
+        print('meta exists, items identical to the R run',flush=True)
+    else:json.dump(meta,open(mf,'w'),indent=1,default=str)
     cache={}
     for cell in a.cells.split(','):
         SD=OUT/'states'/f'{cell}_{a.tag}_s{stream}'
