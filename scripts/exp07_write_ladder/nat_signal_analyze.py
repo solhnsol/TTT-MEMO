@@ -30,7 +30,7 @@ def analyze(res):
             d=pk(cs[i]);rows.append({'nat':cs[i]['nat'],'alone':cs[i]['alone'],**({'pol':d['pol'],'rand':d['rand'],'rec':d['rec']} if 'pol' in d else {})})
         n=sum(pk(c)['n'] for c in cs);nc=sum(c['n_cand'] for c in cs);co=[c for c in cs if c['n_Oc']>0];nO=sum(c['n_Oc'] for c in co);tp=sum(pk(c)['tp'] for c in co);nm_o=sum(pk(c)['n'] for c in co);nc_o=sum(c['n_cand'] for c in co)
         frac_o=nm_o/max(nc_o,1);prec=tp/max(nm_o,1)
-        d={'mask_frac_all':n/max(nc,1),'mask_frac_Ochunks':frac_o,'O_recall':tp/max(nO,1),'O_precision':prec,'enrichment':prec/frac_o if frac_o>0 else float('nan'),'bg_share':sum(pk(c)['bg'] for c in cs)/max(n,1),'same_person_share':sum(pk(c)['same'] for c in cs)/max(n,1),'other_expo_share':sum(pk(c)['other'] for c in cs)/max(n,1),'n_chunks_O':len(co),'n_O_selectable':nO,'n_eligible_chunks':len(el),'n_answer_tokens':out['n_answer_tokens']}
+        d={'mask_frac_all':n/max(nc,1),'mask_frac_Ochunks':frac_o,'O_recall':tp/max(nO,1),'O_precision':prec,'enrichment':(prec/(nO/max(nc_o,1))) if nO>0 else float('nan'),'precision_base_rate':nO/max(nc_o,1),'bg_share':sum(pk(c)['bg'] for c in cs)/max(n,1),'same_person_share':sum(pk(c)['same'] for c in cs)/max(n,1),'other_expo_share':sum(pk(c)['other'] for c in cs)/max(n,1),'n_chunks_O':len(co),'n_O_selectable':nO,'n_eligible_chunks':len(el),'n_answer_tokens':out['n_answer_tokens']}
         ok=[r for r in rows if 'pol' in r];idx=list(range(len(ok)))
         if ok:
             pt={m:eps(ok,m,idx) for m in ('pol','rand','rec')};bs=[]
@@ -74,11 +74,11 @@ def selftest():
             if e:d['pol']=[0.2+0.8*min(1,kk/64)+rng.normal(0,.01),0.3+0.8*min(1,kk/64)];d['rand']=[0.25,0.35];d['rec']=[0.22,0.32]
             c['per_k'][kk]=d
         chunks[k]=c
-    res={'ks':ks,'chunks':chunks,'stream':1,'layout':'x','swap':False};out=analyze(res);md=report(res,out);assert out['ks'][64]['eps_attn']>0.9 and out['ks'][4]['eps_attn']<out['ks'][64]['eps_attn'];print(md[-600:]);print('nat_signal_analyze SELFTEST OK')
+    res={'ks':ks,'chunks':chunks,'stream':1,'layout':'x','swap':False};out=analyze(res);md=report(res,out);assert abs(out['ks'][64]['enrichment']-out['ks'][64]['O_recall']/out['ks'][64]['mask_frac_Ochunks'])<1e-9;assert out['ks'][64]['eps_attn']>0.9 and out['ks'][4]['eps_attn']<out['ks'][64]['eps_attn'];print(md[-600:]);print('nat_signal_analyze SELFTEST OK')
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('file',nargs='?');ap.add_argument('--out',default=None);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();sys.exit(0)
-    files=a.file.split(',');rs=[json.load(open(f)) for f in files];res=rs[0];out=analyze(res);txt=report(res,out)
+    files=a.file.split(',');rs=[json.load(open(f)) for f in files];assert all('chunks' in r for r in rs),'not a raw nat_signal result (no chunks key; an analysis json?)';res=rs[0];out=analyze(res);txt=report(res,out)
     if len(rs)>1:
         pres=merge(rs);pout=analyze(pres);txt+='\n## pooled over '+', '.join(files)+' (eligible chunks of all streams, each chunk a cluster; for a CI only, K* is judged on the main stream)\n\n'+report(pres,pout)
-    p=Path(a.out or Path(files[0]).with_suffix('.md'));p.write_text(txt);json.dump(out,open(p.with_suffix('.json'),'w'),indent=1,default=str);print(txt)
+    p=Path(a.out or Path(files[0]).with_suffix('.md'));p.write_text(txt);json.dump(out,open(p.with_name(p.stem+'_analysis.json'),'w'),indent=1,default=str);print(txt)
