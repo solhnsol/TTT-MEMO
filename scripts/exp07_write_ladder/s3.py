@@ -139,6 +139,7 @@ class Ladder3(LD.Ladder):
                         newp,gn,coef,ce=self.write_step(m,st_all,st_suf,c,pref_w,jnp.asarray(keep));st_suf=self.read_state(m,st_suf,c,pref_c)
                         ex={'n_masked':int(len(S)),'match_frac':float(fr)}
                         if cell in ('k6','k6p'):nO=len(sets.oracle(k));ex.update(n_O=nO,has_O=bool(nO))
+                        if cell in ('k3','k3b','k3f'):nO=len(sets.oracle(k));ex.update(n_O=nO,has_O=bool(nO),n_sent=int(getattr(sets,'last_nsent',0)))
                         if cell in ('oraclefill','randfill'):nO=len(sets.oracle(k));ex.update(n_O=nO,n_F=int(len(S)-nO) if cell=='oraclefill' else int(len(S)))
                     m=self.set_inner(m,newp)
                     un=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=un;cum_pass+=un
@@ -194,7 +195,7 @@ def unit_diag(L,world_seed):
             res['chunks'].append(row);print(json.dumps(row),flush=True)
     return res
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['native0','native3','oracle','othent','randdist','recency','prefixall','oraclesub','othentsub','oraclefill','randfill','k6','k6p'],default='oracle');ap.add_argument('--world-seed',type=int,default=101)
+    ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['native0','native3','oracle','othent','randdist','recency','prefixall','oraclesub','othentsub','oraclefill','randfill','k6','k6p','k3','k3b','k3f'],default='oracle');ap.add_argument('--world-seed',type=int,default=101)
     ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],default='save');ap.add_argument('--tag',default='');ap.add_argument('--passes',type=int,default=4);ap.add_argument('--keep',action='store_true')
     ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true');ap.add_argument('--unit-diag',action='store_true');ap.add_argument('--fill-size-from',default=None,help='E41 U49: oraclefill total per chunk = n_masked of OUT/S3_<TAG>_s<seed>_<world>.saved.json (e.g. attnsel_p4), instead of fill-frac x window');ap.add_argument('--fill-no-o',action='store_true',help='oraclefill: chunks WITHOUT an oracle set are also filled uniformly (total = fill-size-from n_masked of that chunk, else fill-frac x window); needed to pair with attn-sel, which masks 40-50% in every chunk');ap.add_argument('--fill-attn-cands',action='store_true',help='oraclefill: draw the fill only from the attention cells candidate set (positions >= 4 and < chunk start - 128)');ap.add_argument('--fill-frac',type=float,default=0.25,help='E39: oraclefill/randfill target masked fraction of the write window');ap.add_argument('--lr-scale',type=float,default=1.0,help='E38: multiply the inner step size (after ilr multiplier, clip untouched); 1.0 = bit-identical to the old code')
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True);assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
