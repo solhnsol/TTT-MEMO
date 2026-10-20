@@ -101,6 +101,8 @@ class NatLadder(LD.Ladder):
     def fs_streams(self,swap,passes):
         """pass 1 = the original stream; pass p >= 2 = same exposure units at the SAME token positions, background = pass pool cut to each slot's token length (nat_pass.build_pass_stream_matched).
         Per pass: the filler audit is re-run on the texts actually used (after the cuts), s_cross / s_same / n_out must equal pass 1 for every person. Saves self.pass_info[swap]."""
+        if passes==1:   # no filler pool needed (nat_filler.select requires >= 1 further pass); pass 1 is the original stream, as in the R run
+            Pw=self.T.P[swap];streams,pi=NP.pass1_only(Pw.ids,Pw.n_total,Pw.strata,Pw.spans);self._fs_worlds={swap:[self.T.w]};self.pass_info=getattr(self,'pass_info',{});self.pass_info[swap]=pi;return streams
         pools,info,rep=self._pools(passes);Pw=self.T.P[swap];w0=self.T.w;tok=self.T.tok;bos=self.rt.bos
         def encode(text):
             e=stage2.enc(tok,text);return e.ids,[b for a,b in e.offsets]

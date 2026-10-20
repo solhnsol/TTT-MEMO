@@ -138,6 +138,9 @@ def tail_check(w,tail_text):
     assert not bad,f'target person names inside the readout tail: {bad}'
     return {'hits':hit,'n_forbid':len(fs)}
 
+def pass1_only(Pw_ids,n_total,strata,spans):
+    """passes == 1: no filler pool is needed (nat_filler.select asserts >= 1 further pass); returns (streams, pass_info) with the pass-1 stream object untouched (bit-identical to the R run's pass 1)."""
+    return [Pw_ids],[{'pass':1,'n_tokens_total':n_total,'strata':strata,'expo_start':[s['tok_start'] for s in spans],'build':None}]
 def selftest():
     # fake tokenizer: one token per word, ends = char end of each word
     def encode(text):
@@ -204,6 +207,7 @@ def selftest():
     wl,idl,spl,infol,usedl=build_pass_stream_matched(w_long,pool2,False,encode3,decode3,0,6600)
     assert infol['max_abs_drift']<=2 and len(wl['texts'][0]['text'].split())>=690,infol
     print('matched builder OK',infom)
+    ids_=[1,2,3];st_,pi_=pass1_only(ids_,3,{0:{}},[{'tok_start':5}]);assert st_[0] is ids_ and pi_[0]['expo_start']==[5] and pi_[0]['build'] is None and len(st_)==1   # the passes == 1 path (nativerep)
     print('nat_pass SELFTEST OK',d['sum_s_cross_real'],'s_cross,',used,'pool paragraphs used')
 if __name__=='__main__':
     if '--selftest' in sys.argv:selftest()
