@@ -33,7 +33,7 @@ def load_tok(path):
     print('tokenizer file:',path,flush=True);return Tokenizer.from_file(path)
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--nat-dir',default=os.environ.get('NAT_DIR','/mnt/project-files/data/natural-text/worlds'));ap.add_argument('--stream',type=int,default=9105);ap.add_argument('--passes',type=int,default=3);ap.add_argument('--layout',default='spread')
-    ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--worlds',default='AB');ap.add_argument('--require-real',action='store_true');a=ap.parse_args()
+    ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--worlds',default='AB');ap.add_argument('--require-real',action='store_true');ap.add_argument('--compare-pass-info',default=None,help='an R run L0fs/L0mwfs *.saved.json (use {w} for the world letter, e.g. OUT/L0fs_nat_s9105_{w}.saved.json): the pass-2/3 exposure-unit token starts and stream lengths must be identical (reuse of the R cells)');a=ap.parse_args()
     tk=None
     try:tk=load_tok(a.tokenizer_file)
     except Exception as e:print('real tokenizer not usable:',repr(e)[:150])
@@ -54,6 +54,11 @@ def main():
         for ps in range(2,a.passes+1):
             w,ids,sp,binfo,used=NP.build_pass_stream_matched(w0,pools[ps],swap,encode,decode,0,NCH*CH if tk is not None else len(ids0)-8)   # proxy streams are shorter than the real 63-chunk stream
             st=NP.strata_real(sp);assert all((st[t]['s_cross'],st[t]['s_same'],st[t]['n_out'])==(st1[t]['s_cross'],st1[t]['s_same'],st1[t]['n_out']) for t in st1),f'world {wd} pass {ps}: strata differ from pass 1'
+            e2=encode(NW.realize(w,swap)[0])[0];n2=min(len(e2),len(ids)-1);assert list(ids[1:1+n2])==list(e2[:n2]),f'world {wd} pass {ps}: the pass stream differs from the encoding of its realized world (exposure table would be wrong)'
+            if a.compare_pass_info:
+                ref=json.load(open(a.compare_pass_info.replace('{w}',wd)))['pass_info'][str(swap)][ps-1];assert ref['pass']==ps
+                assert ref['expo_start']==[s['tok_start'] for s in sp] and ref['n_tokens_total']==len(ids),f'world {wd} pass {ps}: differs from the R run ({a.compare_pass_info}): the R cells cannot be reused'
+                print(f'world {wd} pass {ps}: identical exposure-unit token starts and stream length as the R run',flush=True)
             used_all[ps]=used;dr=[s['tok_start']-s0['tok_start'] for s,s0 in zip(sp,sp0)];print(f'world {wd} pass {ps}: OK, units {len(sp)}, max |drift| {max(abs(x) for x in dr)}, mean |drift| {sum(abs(x) for x in dr)/len(dr):.2f}, build {binfo}',flush=True)
         flat=[x for v in used_all.values() for x in v];assert len(flat)==len(set(flat)),'a used pool text appears twice'
         rep2=NF.audit(used_all,NF.bg_texts(w0),canary or None);h2=NF.forbid_hits(used_all,w0);assert rep2['pass'] and all(v==0 for v in h2.values()),('audit on used texts failed',rep2,h2)
