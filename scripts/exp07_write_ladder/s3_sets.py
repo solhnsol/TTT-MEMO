@@ -24,6 +24,16 @@ def sentence_table(w,swap,tok,gw,SP):
         assert place and names,s['text']
         out.append(dict(idx=s['idx'],t=s['t'],pair=tri[s['t']]['pair'],round=s['round'],place=sorted(set(place)),names=sorted(set(names)),spans=spans,text=s['text']))
     return out
+def attn_fill(A,cand,O,base,nF):
+    """E41 attnfill: the nF highest-score window positions that are candidates and not in O (score A[i] for position base+i; ties -> lower index). Pure function (CPU testable)."""
+    A=np.asarray(A,np.float64);cand=np.asarray(cand,bool);Oset=set(O);ok=cand.copy()
+    for p in Oset:
+        j=p-base
+        if 0<=j<len(ok):ok[j]=False
+    idx=np.nonzero(ok)[0]
+    if nF<=0 or len(idx)==0:return np.zeros(0,int)
+    pick=idx[np.argsort(-A[idx],kind='stable')][:nF]
+    return np.sort(base+pick)
 def _dist_bins(pos,k0):
     return np.asarray([(k0-p)//BIN for p in pos],int)
 def _fill(need_bins,pool,rng):
@@ -36,8 +46,8 @@ def _fill(need_bins,pool,rng):
         nb=min(cand,key=lambda bb:(abs(bb-b),bb));chosen.append(pool[nb].pop())
     return sorted(chosen),(hit/len(need_bins) if len(need_bins) else 1.0)
 class Sets:
-    def __init__(self,table,seed,passno):
-        self.t=table;self.seed=seed;self.passno=passno
+    def __init__(self,table,seed,passno,frac=0.25):
+        self.t=table;self.seed=seed;self.passno=passno;self.frac=frac;self.fill_total=None   # fill_total: optional {chunk: total} (E41 U49: total masked count taken from another cell's file); frac: frac: only used by the E39 cells oraclefill / randfill
         self.place_tok=[(s['place'][0],i) for i,s in enumerate(self.t)]
         self.allent=sorted({p for s in self.t for p in s['names']+s['place']})
     def cur_sentences(self,k):
@@ -69,6 +79,25 @@ class Sets:
         need=_dist_bins([p for p in O if p<k0],k0);extra=len([p for p in O if p>=k0]);pool={}
         for p in cand:pool.setdefault((k0-p)//BIN,[]).append(p)
         ch,fr=_fill(list(need)+[0]*extra,pool,self._rng('randdist',k));return ch,fr
+    def _target(self,k,frac):
+        """E39: total masked tokens wanted in chunk k = round(frac x length of the write window before the chunk) (2048 for k >= 8 at 0.25)."""
+        return int(round(frac*len(self.window_before(k))))
+    def oraclefill(self,k,frac=None):
+        """E39: O (the oracle set, kept whole) plus a random fill F so that |S| = T = round(frac*window). F is drawn from window positions that are not O tokens, uniformly over all
+        non-O positions of the window (no distance-bin matching; match_frac is reported as 1.0).
+        No O in the chunk -> nothing is masked (as every O-matched cell). frac = 0 -> S = O exactly."""
+        frac=self.frac if frac is None else frac;O=self.oracle(k)
+        if not O:return [],1.0
+        k0=k*CH;lo=max(0,k0-W);Oset=set(O);nF=max(0,(self.fill_total[k] if self.fill_total and k in self.fill_total else self._target(k,frac))-len(O))
+        if nF==0:return list(O),1.0
+        cand=[p for p in range(lo,k0) if p not in Oset];n=min(nF,len(cand))   # E39 decision (before results): uniform draw over all non-O window positions, no distance matching, match_frac = 1.0
+        ch=self._rng('oraclefill',k).sample(cand,n);return sorted(Oset|set(ch)),1.0
+    def randfill(self,k,frac=None):
+        """E39 optional control: the same total T but WITHOUT O: T positions drawn uniformly from the window before the chunk (O tokens excluded from the draw, not masked). Chunks without O mask nothing."""
+        frac=self.frac if frac is None else frac;O=self.oracle(k)
+        if not O:return [],1.0
+        k0=k*CH;lo=max(0,k0-W);Oset=set(O);cand=[p for p in range(lo,k0) if p not in Oset];n=min(self._target(k,frac),len(cand))
+        return sorted(self._rng('randfill',k).sample(cand,n)),1.0
     def oracle_spans(self,k):
         """the O tokens grouped into whole name / place spans (a span is kept only if all its tokens are O tokens)."""
         lo=max(0,k*CH-W);out=[]
@@ -115,6 +144,8 @@ class Sets:
         if cell=='oracle':return self.oracle(k),1.0
         if cell=='othent':return self.othent(k)
         if cell=='randdist':return self.randdist(k)
+        if cell=='oraclefill':return self.oraclefill(k)
+        if cell=='randfill':return self.randfill(k)
         if cell=='oraclesub':return self.sub_sets(k)[0],1.0
         if cell=='othentsub':return self.sub_sets(k)[1],1.0
         if cell=='recency':return self.recency(k),1.0

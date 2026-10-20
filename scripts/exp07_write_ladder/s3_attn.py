@@ -61,6 +61,13 @@ class Ladder3A(ST.Stage1):
             if n==0 or A.sum()<=0:return np.zeros(0,int),1.0,[0]*(W//SETS.BIN)
             n=min(n,int((A>0).sum()));rng=np.random.default_rng([int(seed_),int(sets.passno),int(k)]);S=k0-W+np.sort(rng.choice(W,size=n,replace=False,p=A/A.sum()))
             bins=np.bincount((k0-S)//SETS.BIN,minlength=W//SETS.BIN).tolist();return S,1.0,bins
+        if cell=='attnfill':   # E41: O plus the highest head-max attention positions outside O until |S| = frac x window (chunks without O mask nothing, as oraclefill)
+            O=sets.oracle(k)
+            if not O:return np.zeros(0,int),1.0,[0]*(W//SETS.BIN)
+            u,A=self.capture_union64(m,st_suf,c,pref_c,self.cand_vec(k));A=np.asarray(A,np.float64);base=k0-W
+            nF=max(0,(sets.fill_total[k] if sets.fill_total and k in sets.fill_total else sets._target(k,sets.frac))-len(O))
+            S=np.asarray(sorted(set(O)|set(SETS.attn_fill(A,np.asarray(self.cand_vec(k)),O,base,nF).tolist())),int);Sb=S[S<k0]
+            bins=np.bincount((k0-Sb)//SETS.BIN,minlength=W//SETS.BIN).tolist() if len(Sb) else [0]*(W//SETS.BIN);return S,1.0,bins
         if cell=='attnsel':
             u=np.asarray(self.capture_union(m,st_suf,c,pref_c,self.cand_vec(k)));S=k0-W+np.nonzero(u)[0]
             bins=np.bincount((k0-S)//SETS.BIN,minlength=W//SETS.BIN).tolist() if len(S) else [0]*(W//SETS.BIN);return S,1.0,bins
@@ -85,7 +92,7 @@ class Ladder3A(ST.Stage1):
                 ids=np.asarray(streams[ps-1])[:NCH*CH];stats=[];t_pass=time.monotonic()
                 mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True;seq=rt.seq(ids,mask=mask);pref_nat=rt.prefix(rt.base,seq);st_suf=clone_state(rt.state_suffix)
                 t0=time.monotonic();Kh,Vh,_=self.record(ids);print(f'  recorded natural K,V in {time.monotonic()-t0:.0f}s',flush=True)
-                sets=SETS.Sets(SETS.sentence_table(worlds[ps-1],swap,self.T.tok,gw,SP),seed,ps)
+                sets=SETS.Sets(SETS.sentence_table(worlds[ps-1],swap,self.T.tok,gw,SP),seed,ps,getattr(self,'fill_frac',0.25))
                 for k in range(nch):
                     t0=time.monotonic();old=m;c=rt.chunk(seq,k);pref_c=pref_nat[k*CH:(k+1)*CH]
                     ref=refd[ps]['chunks'][k] if refd is not None else None
@@ -117,18 +124,18 @@ class Ladder3A(ST.Stage1):
                 st=self.read_state(m,st,c,pref_c)
         return rows
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['attnsel','randattn','recencyattn','attnk16','attnstoch','complement'],default='attnsel');ap.add_argument('--world-seed',type=int,default=101)
+    ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['attnsel','randattn','recencyattn','attnk16','attnstoch','complement','attnfill'],default='attnsel');ap.add_argument('--world-seed',type=int,default=101)
     ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],default='save');ap.add_argument('--tag',default='');ap.add_argument('--passes',type=int,default=4);ap.add_argument('--keep',action='store_true')
-    ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true')
+    ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true');ap.add_argument('--fill-frac',type=float,default=0.25,help='E41: attnfill target masked fraction of the write window')
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True);assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     rt=Runtime()
     if a.unit:
         L=Ladder3A(rt,a.world_seed,readout=False);L.build3();L.build1();L.build_attn();rows=L.unit_attn(a.world_seed);json.dump(rows,open(OUT/f's3_attn_unit_s{a.world_seed}.json','w'),indent=1)
         import numpy as _np;print('mean attn-sel size',_np.mean([r['n_attn'] for r in rows]),'chunks',len(rows));return
     tag=a.tag or f'{a.cell}_p{a.passes}';lev='S3';SD=OUT/'states'/f'{lev}_{tag}_s{a.world_seed}'
-    L=Ladder3A(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD);L.build3();L.build1();L.build_attn();L.canary_only=a.canary_only
+    L=Ladder3A(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD);L.build3();L.build1();L.build_attn();L.canary_only=a.canary_only;L.fill_frac=a.fill_frac
     if a.smoke_chunks:assert a.canary_only and 'smoke' in tag
-    if not a.smoke_chunks:json.dump({'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'clip':L.clip,'cell':a.cell,'passes':a.passes,'xla_flags':os.environ.get('XLA_FLAGS')},open(OUT/f'meta_{lev}_{tag}_s{a.world_seed}.json','w'),indent=1)
+    if not a.smoke_chunks:json.dump({'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'clip':L.clip,'cell':a.cell,'fill_frac':a.fill_frac,'passes':a.passes,'xla_flags':os.environ.get('XLA_FLAGS')},open(OUT/f'meta_{lev}_{tag}_s{a.world_seed}.json','w'),indent=1)
     for w in a.worlds:
         f=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.json';fs=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.saved.json'
         if f.exists():print('exists',f);continue

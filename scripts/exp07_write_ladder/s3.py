@@ -43,7 +43,7 @@ def _mask3(self,chunk_id):
 SWA.full_sw_attention=_full3;SWA.sw_causal_mask=_mask3
 class Ladder3(LD.Ladder):
     def build3(self):
-        rt=self.rt;lr,clip=self.lr,self.clip;Batch=self.Batch
+        rt=self.rt;lr,clip=self.lr,self.clip;Batch=self.Batch;lr_scale=float(getattr(self,'lr_scale',1.0))   # E38: python constant in the closure; 1.0 adds no op, so the compiled x1 graph is unchanged
         @eqx.filter_jit
         def layer_rec(blk,h,ids_):
             S3['mode']='rec'
@@ -73,6 +73,7 @@ class Ladder3(LD.Ladder):
             finally:S3SUF.clear()
             g=grads.inner_parameters();gn=optax.global_norm(g);coef=jnp.where(gn<clip,1.0,clip/jnp.maximum(gn,1e-30))
             s=lr*m.get_ilr_multiplier(st_all.get(m.step_index))
+            if lr_scale!=1.0:s=s*lr_scale   # clip threshold and coef untouched
             newp=jax.tree.map(lambda p,x:(p+(-s*coef*x).astype(p.dtype)).astype(p.dtype),m.inner_parameters(),g)
             return newp,gn,coef,ce
         @eqx.filter_jit
@@ -82,6 +83,7 @@ class Ladder3(LD.Ladder):
         def native_step(m,st_all,st_suf,c,pref_):
             (_l,(ce,_n,new_st)),grads=eqx.filter_value_and_grad(MetaModel.lm_loss,has_aux=True)(m,c,st_suf,prefix_outputs=pref_)
             g=grads.inner_parameters();gn=optax.global_norm(g);coef=jnp.where(gn<clip,1.0,clip/jnp.maximum(gn,1e-30));s=lr*m.get_ilr_multiplier(st_all.get(m.step_index))
+            if lr_scale!=1.0:s=s*lr_scale
             newp=jax.tree.map(lambda p,x:(p+(-s*coef*x).astype(p.dtype)).astype(p.dtype),m.inner_parameters(),g)
             return newp,new_st,gn,coef,ce
         @eqx.filter_jit
@@ -119,11 +121,13 @@ class Ladder3(LD.Ladder):
         with rt.mesh:
             log.append({'epoch':0,'margins':self.ev(m)})
             for ps in range(1,passes+1):
-                ids=np.asarray(streams[ps-1])[:NCH*CH];stats=[];t_pass=time.monotonic()
+                ids=np.asarray(streams[ps-1])[:NCH*CH];stats=[];t_pass=time.monotonic();cum_pass=0.0
                 mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True;seq=rt.seq(ids,mask=mask);pref_nat=rt.prefix(rt.base,seq);st_suf=clone_state(rt.state_suffix)
                 if cell!='native0':
                     t0=time.monotonic();Kh,Vh,_=self.record(ids);print(f'  recorded natural K,V ({Kh.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s',flush=True)
-                    sets=SETS.Sets(SETS.sentence_table(worlds[ps-1],swap,self.T.tok,gw,SP),seed,ps)
+                    sets=SETS.Sets(SETS.sentence_table(worlds[ps-1],swap,self.T.tok,gw,SP),seed,ps,getattr(self,'fill_frac',0.25))
+                    if getattr(self,'fill_size_from',None):
+                        rf=json.load(open(OUT/f'S3_{self.fill_size_from}_s{seed}_{"B" if swap else "A"}.saved.json'))['log'][ps]['chunks'];sets.fill_total={x['k']:int(x['n_masked']) for x in rf}
                 for k in range(nch):
                     t0=time.monotonic();old=m;c=rt.chunk(seq,k);pref_c=pref_nat[k*CH:(k+1)*CH];ex={}
                     if cell=='native0':   # flag off: the original native step (state and gradient from one forward)
@@ -133,12 +137,13 @@ class Ladder3(LD.Ladder):
                         pref_w=self.prefix_masked(m,jnp.asarray(ids[k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep))
                         newp,gn,coef,ce=self.write_step(m,st_all,st_suf,c,pref_w,jnp.asarray(keep));st_suf=self.read_state(m,st_suf,c,pref_c)
                         ex={'n_masked':int(len(S)),'match_frac':float(fr)}
+                        if cell in ('oraclefill','randfill'):nO=len(sets.oracle(k));ex.update(n_O=nO,n_F=int(len(S)-nO) if cell=='oraclefill' else int(len(S)))
                     m=self.set_inner(m,newp)
-                    un=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=un
+                    un=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=un;cum_pass+=un
                     stats.append({'k':k,'gnorm':float(gn),'coef':float(coef),'update_norm':un,'ce':float(ce),'sec':time.monotonic()-t0,**ex})
                     if k%8==0:print(f'  {cell} {"B" if swap else "A"} pass {ps} chunk {k+1}/{nch} {stats[-1]["sec"]:.1f}s',flush=True)
                 cs=[s_['coef'] for s_ in stats]
-                log.append({'epoch':ps,'cum_update_norm':cum,'chunks':stats,'clip_bind_frac':sum(c_<1 for c_ in cs)/len(cs),'mean_coef':sum(cs)/len(cs),'n_masked_total':sum(s_.get('n_masked',0) for s_ in stats),
+                log.append({'epoch':ps,'lr_scale':float(getattr(self,'lr_scale',1.0)),'first_chunk_ce':stats[0]['ce'],'mean_update_norm':cum_pass/len(stats),'cum_update_norm':cum,'chunks':stats,'clip_bind_frac':sum(c_<1 for c_ in cs)/len(cs),'mean_coef':sum(cs)/len(cs),'n_masked_total':sum(s_.get('n_masked',0) for s_ in stats),
                             'stream_hash':hashlib.sha256(np.asarray(ids,np.int64).tobytes()).hexdigest(),'inner_hash':reuse._hash_pytree(m.inner_parameters())[0],'sec_pass':time.monotonic()-t_pass,'margins':self.ev(m)})
                 print(f'  {cell} {"B" if swap else "A"} pass {ps}: cum upd {cum:.3f}, clip binds {log[-1]["clip_bind_frac"]:.3f}, masked tokens {log[-1]["n_masked_total"]}, {log[-1]["sec_pass"]:.0f}s',flush=True)
                 if 'Kh' in dir():del Kh,Vh
@@ -187,19 +192,19 @@ def unit_diag(L,world_seed):
             res['chunks'].append(row);print(json.dumps(row),flush=True)
     return res
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['native0','native3','oracle','othent','randdist','recency','prefixall','oraclesub','othentsub'],default='oracle');ap.add_argument('--world-seed',type=int,default=101)
+    ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['native0','native3','oracle','othent','randdist','recency','prefixall','oraclesub','othentsub','oraclefill','randfill'],default='oracle');ap.add_argument('--world-seed',type=int,default=101)
     ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],default='save');ap.add_argument('--tag',default='');ap.add_argument('--passes',type=int,default=4);ap.add_argument('--keep',action='store_true')
-    ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true');ap.add_argument('--unit-diag',action='store_true')
+    ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true');ap.add_argument('--unit-diag',action='store_true');ap.add_argument('--fill-size-from',default=None,help='E41 U49: oraclefill total per chunk = n_masked of OUT/S3_<TAG>_s<seed>_<world>.saved.json (e.g. attnsel_p4), instead of fill-frac x window');ap.add_argument('--fill-frac',type=float,default=0.25,help='E39: oraclefill/randfill target masked fraction of the write window');ap.add_argument('--lr-scale',type=float,default=1.0,help='E38: multiply the inner step size (after ilr multiplier, clip untouched); 1.0 = bit-identical to the old code')
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True);assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     rt=Runtime()
     if a.unit_diag:
-        L=Ladder3(rt,a.world_seed,readout=False);L.build3();res=unit_diag(L,a.world_seed);json.dump(res,open(OUT/f's3_unit_diag_s{a.world_seed}.json','w'),indent=1);print('unit diag done');return
+        L=Ladder3(rt,a.world_seed,readout=False);L.lr_scale=a.lr_scale;L.build3();res=unit_diag(L,a.world_seed);json.dump(res,open(OUT/f's3_unit_diag_s{a.world_seed}.json','w'),indent=1);print('unit diag done');return
     if a.unit:
-        L=Ladder3(rt,a.world_seed,readout=False);L.build3();res=L.unit(a.world_seed);json.dump(res,open(OUT/f's3_unit_s{a.world_seed}.json','w'),indent=1);print('unit done');return
+        L=Ladder3(rt,a.world_seed,readout=False);L.lr_scale=a.lr_scale;L.build3();res=L.unit(a.world_seed);json.dump(res,open(OUT/f's3_unit_s{a.world_seed}.json','w'),indent=1);print('unit done');return
     tag=a.tag or f'{a.cell}_p{a.passes}';lev='S3';SD=OUT/'states'/f'{lev}_{tag}_s{a.world_seed}'
-    L=Ladder3(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD);L.build3();L.canary_only=a.canary_only
+    L=Ladder3(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD);L.lr_scale=a.lr_scale;L.fill_frac=a.fill_frac;L.fill_size_from=a.fill_size_from;L.build3();L.canary_only=a.canary_only
     if a.smoke_chunks:assert a.canary_only and 'smoke' in tag
-    if not a.smoke_chunks:json.dump({'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'clip':L.clip,'cell':a.cell,'passes':a.passes,'xla_flags':os.environ.get('XLA_FLAGS')},open(OUT/f'meta_{lev}_{tag}_s{a.world_seed}.json','w'),indent=1)
+    if not a.smoke_chunks:json.dump({'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'lr_scale':a.lr_scale,'fill_frac':a.fill_frac,'clip':L.clip,'cell':a.cell,'passes':a.passes,'xla_flags':os.environ.get('XLA_FLAGS')},open(OUT/f'meta_{lev}_{tag}_s{a.world_seed}.json','w'),indent=1)
     for w in a.worlds:
         f=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.json';fs=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.saved.json'
         if f.exists():print('exists',f);continue
@@ -214,5 +219,5 @@ def main():
         L.save_dir=SD/w;L._nsave=0;(SD/w).mkdir(parents=True,exist_ok=True)
         if fs.exists():print('exists',fs);continue
         t0=time.monotonic();log=L.run_cell(w=='B',a.cell,a.passes,a.smoke_chunks,seed=a.world_seed)
-        json.dump({'log':log,'sec':time.monotonic()-t0,'cell':a.cell,'passes':a.passes},open(fs,'w'));print('saved',fs,round(time.monotonic()-t0),'s',flush=True)
+        json.dump({'log':log,'sec':time.monotonic()-t0,'cell':a.cell,'passes':a.passes,'lr_scale':a.lr_scale},open(fs,'w'));print('saved',fs,round(time.monotonic()-t0),'s',flush=True)
 if __name__=='__main__':main()
