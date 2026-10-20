@@ -62,7 +62,7 @@ def analyze(d,seed,tags):
             if 'F8192' in cells and 'A' in cells:
                 num=g('F0')-g('F8192');den=g('F0')-g('A');L.append(f'- X = [D1(F0) - D1(F8192)] / [D1(F0) - D1(A)]: {fmt(boot_ratio(num,den,rng))}')
             if 'M' in cells:
-                rel=abs(g('F0').mean()-g('M').mean())/max(abs(g('M').mean()),1e-12);out['gates'][f'F0_vs_M_rel_s{s}']=float(rel);L.append(f'- gate F0 vs M (chunk alone): D1 {g("F0").mean():+.4f} vs {g("M").mean():+.4f}, relative difference {rel:.2e} (<= 1e-3 required){"  **GATE FAILED**" if rel>1e-3 else ""}')
+                rel=abs(g('F0').mean()-g('M').mean())/max(abs(g('M').mean()),1e-12);out['gates'][f'F0_vs_M_rel_s{s}']=float(rel);L.append(f'- gate F0 vs M (chunk alone): D1 {g("F0").mean():+.4f} vs {g("M").mean():+.4f}, mean pair difference {abs(g("F0").mean()-g("M").mean()):.4f} (<= 0.01 required, E30 design), relative difference {rel:.2e} (reported only){"  **GATE FAILED**" if abs(g("F0").mean()-g("M").mean())>0.01 else ""}')
             for l in (512,8192):
                 c=f'P{l}'
                 if c in cells and f'F{l}' in cells:L.append(f'- P{l} - F{l}: {fmt(boot(g(c)-g(f"F{l}"),rng))}')

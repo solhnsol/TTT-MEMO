@@ -109,11 +109,14 @@ def selftest():
     print('SELFTEST OK',info['dropped'])
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--nat-dir',default=os.environ.get('NAT_DIR','/mnt/project-files/data/natural-text/worlds'));ap.add_argument('--stream',type=int,default=9105);ap.add_argument('--passes',type=int,default=3);ap.add_argument('--layout',default='spread')
-    ap.add_argument('--out-dir',default=os.environ.get('EXP07_OUT','/tmp/e33'));ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap.add_argument('--out-dir',default=os.environ.get('EXP07_OUT','/tmp/e33'));ap.add_argument('--selftest',action='store_true');ap.add_argument('--budget-only',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     w=NW.load_world(world_path(a.nat_dir,a.stream,a.layout));canary=canary_grams()
     if not canary:print('WARNING: pg11 / pg1342 not found under data/narrative_gutenberg: canary check skipped',flush=True)
-    pools,info=select(a.nat_dir,a.stream,a.passes,a.layout,canary=canary or None);rep=audit(pools,bg_texts(w),canary or None);hits=forbid_hits(pools,w);rep['pass']&=all(v==0 for v in hits.values())
+    pools,info=select(a.nat_dir,a.stream,a.passes,a.layout,canary=canary or None)
+    own_c=sum(len(t) for t in bg_texts(w));bud={p:sum(len(t) for t in v)/own_c for p,v in pools.items()};print('pool budget (pool characters / pass-1 background characters; character proxy for tokens):',{p:round(r,2) for p,r in bud.items()},flush=True)
+    if a.budget_only:sys.exit(0 if all(r>=1.2 for r in bud.values()) else 3)
+    rep=audit(pools,bg_texts(w),canary or None);hits=forbid_hits(pools,w);rep['pass']&=all(v==0 for v in hits.values())
     od=Path(a.out_dir);od.mkdir(parents=True,exist_ok=True);md=md_of(a.stream,info,rep,hits);(od/f'nat_filler_audit_{a.stream}.md').write_text(md)
     json.dump({'info':info,'audit':rep,'forbid_hits':hits,'sha_pool':{p:hashlib.sha1('|'.join(v).encode()).hexdigest()[:12] for p,v in pools.items()}},open(od/f'nat_filler_audit_{a.stream}.json','w'),indent=1,default=str);print(md)
     sys.exit(0 if rep['pass'] else 3)

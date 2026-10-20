@@ -65,7 +65,7 @@ def realized_units(w,swap):
     out=[NW.PH.sub(lambda m:nm[int(m.group(2))][k[m.group(1)]],t['text']) for t in w['texts']]
     assert '\n\n'.join(out)==NW.realize(w,swap)[0];return out
 
-def build_pass_stream_matched(w0,pool,swap,encode,decode,bos,target,slack=8,min_tok=8,max_rounds=12,max_drift=2):
+def build_pass_stream_matched(w0,pool,swap,encode,decode,bos,target,slack=8,min_tok=8,max_rounds=12,max_drift=2,pool_factor=1.2):
     """pass p >= 2 stream with the SAME exposure-unit token positions as the stream w0 itself (pass 1): every background slot gets a pool paragraph cut at a token boundary to the slot's token
     length (best fit: the shortest unused paragraph with >= slot length + slack tokens, longest slots first, no pool paragraph used twice), then the joint tokenization is compared with pass 1 and
     each slot just before a drifting exposure unit is lengthened / shortened by the drift (tokenization at the '\\n\\n' joints is not exactly additive) until every exposure unit starts at the pass-1 token.
@@ -74,24 +74,31 @@ def build_pass_stream_matched(w0,pool,swap,encode,decode,bos,target,slack=8,min_
     base={(s['t'],s['round'],s['text']):s['tok_start'] for s in sp0};assert len(base)==len(sp0)
     texts=w0['texts'];slots=[i for i,t in enumerate(texts) if t['kind']=='bg']
     n={i:len(encode(texts[i]['text'])[0]) for i in slots}
-    pids=[encode(p)[0] for p in pool];order=sorted(range(len(pool)),key=lambda j:len(pids[j]));lens=[len(pids[j]) for j in order]
-    assign={};avail=list(range(len(order)))
-    for i in sorted(slots,key=lambda i:-n[i]):
-        need=n[i]+slack;pos=bisect.bisect_left([lens[a] for a in avail],need)
-        assert pos<len(avail),f'no pool paragraph with >= {need} tokens left for a slot of {n[i]} tokens'
-        assign[i]=order[avail.pop(pos)]
+    pids=[encode(p)[0] for p in pool];plen=[len(x) for x in pids];need_tok=sum(n.values());pool_tok=sum(plen)
+    assert pool_tok>=pool_factor*need_tok,f'pool too small: {pool_tok} tokens < {pool_factor} x {need_tok} (slots total); {len(pool)} paragraphs'
+    # slots in stream order take consecutive pool paragraphs (shuffled pool order, each paragraph used once, joined by blank lines) until n + slack tokens are covered; the last paragraph is cut at a token boundary
+    assign={};join_ids={};cursor=0
+    for i in slots:
+        got=[];acc=0
+        while True:
+            assert cursor<len(pool),f'pool exhausted at slot {i} ({n[i]} tokens) after {cursor} paragraphs'
+            got.append(cursor);acc+=plen[cursor]+1;cursor+=1
+            if acc>=n[i]+slack:
+                jids=encode('\n\n'.join(pool[x] for x in got))[0]
+                if len(jids)>=n[i]+slack:break
+        assign[i]=got;join_ids[i]=jids
     prev_bg={}
     last=None
     for i,t in enumerate(texts):
         prev_bg[i]=last
         if t['kind']=='bg':last=i
     def cut(i):
-        j=assign[i];m=min(n[i],len(pids[j]))
+        ji=join_ids[i];m=min(n[i],len(ji))
         while m>min_tok:
-            tx=decode(pids[j][:m])
+            tx=decode(ji[:m])
             if '\ufffd' not in tx:return tx.strip()
             m-=1
-        raise AssertionError(f'cannot cut pool paragraph {j} cleanly')
+        raise AssertionError(f'cannot cut the pool text of slot {i} cleanly')
     def assemble():
         w=copy.deepcopy(w0)
         for i in slots:w['texts'][i]={'kind':'bg','text':cut(i)}
@@ -109,13 +116,13 @@ def build_pass_stream_matched(w0,pool,swap,encode,decode,bos,target,slack=8,min_
             e=dj-prev;prev=dj
             if e!=0:
                 s_=prev_bg[ti]
-                if s_ is not None:n[s_]=max(min_tok,min(n[s_]-e,len(pids[assign[s_]])))
+                if s_ is not None:n[s_]=max(min_tok,min(n[s_]-e,len(join_ids[s_])))
     assert resid<=max_drift,f'exposure positions drift by up to {resid} tokens after {rounds} rounds (allowed {max_drift})'
     late=[s for s in sp if s['tok_end']>=target]
     assert not late,f'{len(late)} exposure units fall beyond token {target}'
-    used=[w['texts'][i]['text'] for i in slots]
+    used=[x for i in slots for x in w['texts'][i]['text'].split('\n\n') if x]   # paragraphs actually used (the last one of a slot is the cut piece)
     if len(ids)<target:raise AssertionError(f'matched stream is {len(ids)} < {target} tokens')
-    return w,ids,sp,{'rounds':rounds,'max_abs_drift':int(resid),'slots':len(slots),'tokens_cut_mean':float(np.mean([len(pids[assign[i]])-n[i] for i in slots]))},used
+    return w,ids,sp,{'rounds':rounds,'max_abs_drift':int(resid),'slots':len(slots),'tokens_cut_mean':float(np.mean([len(join_ids[i])-n[i] for i in slots])),'pool_tokens':pool_tok,'need_tokens':need_tok,'pool_ratio':pool_tok/need_tok,'paragraphs_consumed':cursor,'paragraphs_unused':len(pool)-cursor},used
 
 def tail_check(w,tail_text):
     """returns {'hits': strings found, 'target_person_hits': [...]}; target persons (fake full names) must be absent."""
@@ -183,6 +190,12 @@ def selftest():
     assert infom['max_abs_drift']<=2,infom
     assert len(set(usedm))==len(usedm) and not (set(usedm)&{t['text'] for t in w['texts'] if t['kind']=='bg'})
     assert [s['text'] for s in spm]==[s['text'] for s in NW.realize(w,False)[2]]
+    assert infom['paragraphs_consumed']+infom['paragraphs_unused']==60 and infom['pool_ratio']>=1.2
+    try:build_pass_stream_matched(w,pool2[:20],False,encode3,decode3,0,6200);raise SystemExit('small pool not detected')
+    except AssertionError as e:assert 'pool too small' in str(e) or 'exhausted' in str(e),e
+    w_long=copy.deepcopy(w);w_long['texts'][0]['text']=mk(700,'lg')   # a slot longer than any single pool paragraph (the job-58 failure) is filled from several paragraphs
+    wl,idl,spl,infol,usedl=build_pass_stream_matched(w_long,pool2,False,encode3,decode3,0,6600)
+    assert infol['max_abs_drift']<=2 and len(wl['texts'][0]['text'].split())>=690,infol
     print('matched builder OK',infom)
     print('nat_pass SELFTEST OK',d['sum_s_cross_real'],'s_cross,',used,'pool paragraphs used')
 if __name__=='__main__':
