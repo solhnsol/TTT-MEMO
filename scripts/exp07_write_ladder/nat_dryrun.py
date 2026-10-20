@@ -21,12 +21,16 @@ class Proxy:
         return ids,ends
     def decode(s,ids):return ''.join(s.inv[i] for i in ids)
 def load_tok(path):
-    if path is None:
+    """real tokenizer: --tokenizer-file, else $TOKENIZER_JSON, else <repo>/data/tokenizer/llama3/tokenizer.json (server layout), else baseline_config.TOKENIZER_PATH; None only when none exists"""
+    cands=[path,os.environ.get('TOKENIZER_JSON'),str(HERE.parents[1]/'data/tokenizer/llama3/tokenizer.json')]
+    for c in cands:
+        if c and Path(c).exists():path=c;break
+    else:
         try:
             sys.path.insert(0,str(HERE.parents[0]/'exp01_gold_evidence_qa'));from baseline_config import TOKENIZER_PATH;path=str(TOKENIZER_PATH)
         except Exception:return None
     from tokenizers import Tokenizer
-    return Tokenizer.from_file(path)
+    print('tokenizer file:',path,flush=True);return Tokenizer.from_file(path)
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--nat-dir',default=os.environ.get('NAT_DIR','/mnt/project-files/data/natural-text/worlds'));ap.add_argument('--stream',type=int,default=9105);ap.add_argument('--passes',type=int,default=3);ap.add_argument('--layout',default='spread')
     ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--worlds',default='AB');ap.add_argument('--require-real',action='store_true');a=ap.parse_args()
