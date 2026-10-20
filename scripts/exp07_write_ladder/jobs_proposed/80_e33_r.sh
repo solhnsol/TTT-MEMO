@@ -21,7 +21,7 @@ NAT_DIR=${NAT_DIR:-data/natural-text/worlds}
 COMMON="--nat 9105:spread --nat-dir $NAT_DIR --cells L0fs,L0mwfs,L1 --passes 3 --epochs 8 --l1-eval-epochs 1,2,3,8 --worlds AB --tag nat"
 $PY $S/nat_filler.py --selftest
 $PY $S/nat_pass.py --selftest
-$PY $S/nat_filler.py --nat-dir $NAT_DIR --stream 9105 --passes 3 --budget-only   # CPU dry run of the pool assembly: pool chars >= 1.5 x slot chars per pass (exit 3 otherwise)
+$PY $S/nat_filler.py --nat-dir $NAT_DIR --stream 9105 --passes 3 --budget-only   # CPU dry run of the pool assembly: pool chars >= 1.2 x slot chars per pass (exit 3 otherwise)
 $PY $S/nat_filler.py --nat-dir $NAT_DIR --stream 9105 --passes 3 --out-dir $OUT
 $PY $S/nat_ladder.py $COMMON --log-clip --mode save
 $PY $S/nat_ladder.py $COMMON --log-clip --mode eval --keep

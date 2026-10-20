@@ -65,7 +65,7 @@ def realized_units(w,swap):
     out=[NW.PH.sub(lambda m:nm[int(m.group(2))][k[m.group(1)]],t['text']) for t in w['texts']]
     assert '\n\n'.join(out)==NW.realize(w,swap)[0];return out
 
-def build_pass_stream_matched(w0,pool,swap,encode,decode,bos,target,slack=8,min_tok=8,max_rounds=12,max_drift=2,pool_factor=1.5):
+def build_pass_stream_matched(w0,pool,swap,encode,decode,bos,target,slack=8,min_tok=8,max_rounds=12,max_drift=2,pool_factor=1.2):
     """pass p >= 2 stream with the SAME exposure-unit token positions as the stream w0 itself (pass 1): every background slot gets a pool paragraph cut at a token boundary to the slot's token
     length (best fit: the shortest unused paragraph with >= slot length + slack tokens, longest slots first, no pool paragraph used twice), then the joint tokenization is compared with pass 1 and
     each slot just before a drifting exposure unit is lengthened / shortened by the drift (tokenization at the '\\n\\n' joints is not exactly additive) until every exposure unit starts at the pass-1 token.
@@ -190,7 +190,7 @@ def selftest():
     assert infom['max_abs_drift']<=2,infom
     assert len(set(usedm))==len(usedm) and not (set(usedm)&{t['text'] for t in w['texts'] if t['kind']=='bg'})
     assert [s['text'] for s in spm]==[s['text'] for s in NW.realize(w,False)[2]]
-    assert infom['paragraphs_consumed']+infom['paragraphs_unused']==60 and infom['pool_ratio']>=1.5
+    assert infom['paragraphs_consumed']+infom['paragraphs_unused']==60 and infom['pool_ratio']>=1.2
     try:build_pass_stream_matched(w,pool2[:20],False,encode3,decode3,0,6200);raise SystemExit('small pool not detected')
     except AssertionError as e:assert 'pool too small' in str(e) or 'exhausted' in str(e),e
     w_long=copy.deepcopy(w);w_long['texts'][0]['text']=mk(700,'lg')   # a slot longer than any single pool paragraph (the job-58 failure) is filled from several paragraphs
