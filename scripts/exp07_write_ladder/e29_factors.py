@@ -34,6 +34,7 @@ class TapMLP(eqx.Module):
     def __call__(self,x):
         z1=self.w1(x)+self.e1;z3=self.w3(x)+self.e3;z2=self.w2(jax.nn.silu(z1)*z3)+self.e2
         return self.dropout(z2)
+REMAT=os.environ.get('E29_REMAT','1')=='1'
 def build_ops(L,rt32):
     m0=rt32.base;lm=m0.language_model;H=lm.model.h;NL=jax.tree_util.tree_leaves(H.suffix_blocks)[0].shape[0];cfg=lm.config
     dff=int(H.suffix_blocks.feed_forward_prime.w1.weight.shape[-1]);dm=int(H.suffix_blocks.feed_forward_prime.w1.weight.shape[-2])
@@ -48,7 +49,8 @@ def build_ops(L,rt32):
         for i in range(NL):
             b=layer(i);f=b.feed_forward_prime
             b=eqx.tree_at(lambda q:q.feed_forward_prime,b,TapMLP(f.w1,f.w2,f.w3,f.dropout,*taps[i]))
-            x,_=Block.__call__(b,x,st_layer(st,i),c,is_prefix=False)
+            if REMAT:x=eqx.filter_checkpoint(lambda b_,x_,s_,c_:Block.__call__(b_,x_,s_,c_,is_prefix=False)[0])(b,x,st_layer(st,i),c)   # recompute each block in the backward pass: same values, activations of one block instead of eight (job 63 OOM: one 22.8 GiB request in O['deltas'])
+            else:x,_=Block.__call__(b,x,st_layer(st,i),c,is_prefix=False)
         loss,_=cross_entropy_loss_and_accuracy(head(x),c.target_tokens,c.loss_masks);return loss
     def _block_capture(b,x,st_i,seq,xin,xmid):
         cfg_b=b.config;rmsf=lambda n,u:n(u)
