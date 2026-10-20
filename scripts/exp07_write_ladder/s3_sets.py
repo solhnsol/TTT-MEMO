@@ -47,7 +47,7 @@ def _fill(need_bins,pool,rng):
     return sorted(chosen),(hit/len(need_bins) if len(need_bins) else 1.0)
 class Sets:
     def __init__(self,table,seed,passno,frac=0.25):
-        self.t=table;self.seed=seed;self.passno=passno;self.frac=frac;self.fill_total=None   # fill_total: optional {chunk: total} (E41 U49: total masked count taken from another cell's file); frac: frac: only used by the E39 cells oraclefill / randfill
+        self.t=table;self.seed=seed;self.passno=passno;self.frac=frac;self.fill_total=None;self.fill_attn_cands=False;self.fill_no_o=False   # fill_attn_cands (E41/K6 follow-up): draw oraclefill's fill only from the attention cells' candidate set (not the first 4 stream positions, not the 128 tokens right before the chunk); fill_total: optional {chunk: total} (E41 U49: total masked count taken from another cell's file); frac: frac: only used by the E39 cells oraclefill / randfill
         self.place_tok=[(s['place'][0],i) for i,s in enumerate(self.t)]
         self.allent=sorted({p for s in self.t for p in s['names']+s['place']})
     def cur_sentences(self,k):
@@ -87,10 +87,10 @@ class Sets:
         non-O positions of the window (no distance-bin matching; match_frac is reported as 1.0).
         No O in the chunk -> nothing is masked (as every O-matched cell). frac = 0 -> S = O exactly."""
         frac=self.frac if frac is None else frac;O=self.oracle(k)
-        if not O:return [],1.0
+        if not O and not self.fill_no_o:return [],1.0   # fill_no_o (E41 U49 pairing with attn-sel): chunks without O are filled uniformly too, with fill_total[k] (else the frac target)
         k0=k*CH;lo=max(0,k0-W);Oset=set(O);nF=max(0,(self.fill_total[k] if self.fill_total and k in self.fill_total else self._target(k,frac))-len(O))
         if nF==0:return list(O),1.0
-        cand=[p for p in range(lo,k0) if p not in Oset];n=min(nF,len(cand))   # E39 decision (before results): uniform draw over all non-O window positions, no distance matching, match_frac = 1.0
+        cand=[p for p in range(lo,k0) if p not in Oset and not(self.fill_attn_cands and (p<4 or p>=k0-128))];n=min(nF,len(cand))   # E39 decision (before results): uniform draw over all non-O window positions, no distance matching, match_frac = 1.0
         ch=self._rng('oraclefill',k).sample(cand,n);return sorted(Oset|set(ch)),1.0
     def randfill(self,k,frac=None):
         """E39 optional control: the same total T but WITHOUT O: T positions drawn uniformly from the window before the chunk (O tokens excluded from the draw, not masked). Chunks without O mask nothing."""
@@ -129,6 +129,12 @@ class Sets:
             m=min(sum(len(sp) for sp in ob[b]),sum(len(sp) for sp in pb[b]))
             co,to=take(ob[b],m,ro);cp,tp=take(pb[b],m,rp);osel+=[p for sp in co for p in sp];psel+=[p for sp in cp for p in sp];msum+=m
         return sorted(osel),sorted(psel),msum,len(O)
+    def k6(self,k):
+        """K6: chunks with an oracle set -> the oracle set O; all other chunks -> full masking of the window before the chunk (prefix-all-pos, chunk alone)."""
+        O=self.oracle(k);return (O,1.0) if O else (self.prefixall(k),1.0)
+    def k6p(self,k):
+        """K6': chunks with an oracle set -> full masking (prefix-all-pos); all other chunks -> no masking (native update)."""
+        return (self.prefixall(k),1.0) if self.oracle(k) else ([],1.0)
     def recency(self,k):
         n=len(self.oracle(k));k0=k*CH;return list(range(max(0,k0-n),k0))
     def prefixall(self,k):
@@ -150,5 +156,7 @@ class Sets:
         if cell=='othentsub':return self.sub_sets(k)[1],1.0
         if cell=='recency':return self.recency(k),1.0
         if cell=='prefixall':return self.prefixall(k),1.0
+        if cell=='k6':return self.k6(k)
+        if cell=='k6p':return self.k6p(k)
         if cell=='native3':return [],1.0
         raise ValueError(cell)
