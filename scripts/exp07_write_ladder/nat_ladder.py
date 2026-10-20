@@ -113,6 +113,7 @@ class NatLadder(LD.Ladder):
             assert same,f'pass {ps}: s_cross / s_same / n_out differ from pass 1'
             streams.append(ids[:NCH*CH]);self._fs_worlds[swap].append(w);used_all[ps]=used
             pi.append({'pass':ps,'n_tokens_total':len(ids),'strata':st,'expo_start':[s['tok_start'] for s in sp],'build':binfo})
+        flat=[x for v in used_all.values() for x in v];assert len(flat)==len(set(flat)),'a pool paragraph is used more than once (inside a pass or across passes)'
         rep2=NF.audit(used_all,NF.bg_texts(w0),NF.canary_grams());hits=NF.forbid_hits(used_all,w0)
         assert rep2['pass'] and all(v==0 for v in hits.values()),('filler audit on the used (cut) texts failed',rep2,hits)
         self.pass_info=getattr(self,'pass_info',{});self.pass_info[swap]=pi;self.used_audit=rep2
