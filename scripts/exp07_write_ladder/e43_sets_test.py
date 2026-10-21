@@ -51,6 +51,7 @@ def main():
         sets.sentencecover(k);rows.append((k,len(O),len(K3),len(K3b),sets.last_nsent))
     assert nO>0
     sel=SETS.select_by_ctx([-0.9,-0.9,-0.2,-0.65,-0.66,0.1],-0.65);assert sel==[False,True,False,False,True,False],sel   # chunk 0 never, strict inequality at tau
+    d_=[0.0]+[-0.1*(k%7)-0.001*k for k in range(1,63)];q=SETS.select_by_ctx_quantile(d_,0.30);assert sum(q)==19 and not q[0] and all(d_[k]<=max(d_[j] for j in range(63) if q[j]) for k in range(63) if q[k]) and min(d_[k] for k in range(1,63) if not q[k])>=max(d_[k] for k in range(1,63) if q[k]),q   # 19 = round(0.30 x 62), the lowest ones
     k_=next(k for k in range(8,63) if sets.oracle(k));assert sets.prefixall(k_)==sets.chunk_set('k6p',k_)[0]   # a selected k6ctx chunk is masked exactly like a K6' chunk
     print('E43 sets test OK; synthetic table, chunks with O',nO,'(chunk, |O|, |K3|, |K3b|, covered sentences):',rows[:6],'...')
     print('old-cell hash',old_hash(sets))

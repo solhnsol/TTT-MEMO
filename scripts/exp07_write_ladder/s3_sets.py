@@ -28,6 +28,9 @@ def sentence_table(w,swap,tok,gw,SP):
 def select_by_ctx(delta,tau):
     """E (label-free K6'): chunk k is masked whole when its window context gain delta[k] < tau (strict); chunk 0 (no context) is never selected. Pure function."""
     return [bool(k>0 and d<tau) for k,d in enumerate(delta)]
+def select_by_ctx_quantile(delta,frac):
+    """label-free K6' (quantile version): the n = round(frac x (number of chunks 1..N-1)) chunks with the lowest delta are masked whole; chunk 0 never; ties -> lower chunk index. Pure function."""
+    n=int(round(frac*(len(delta)-1)));order=sorted(range(1,len(delta)),key=lambda k:(delta[k],k));pick=set(order[:n]);return [k in pick for k in range(len(delta))]
 def attn_fill(A,cand,O,base,nF):
     """E41 attnfill: the nF highest-score window positions that are candidates and not in O (score A[i] for position base+i; ties -> lower index). Pure function (CPU testable)."""
     A=np.asarray(A,np.float64);cand=np.asarray(cand,bool);Oset=set(O);ok=cand.copy()
