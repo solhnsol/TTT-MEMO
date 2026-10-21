@@ -7,7 +7,7 @@
 set -e
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
-COMMIT=17830f4581c2efc21e63b7e4d9793804f22672a8
+COMMIT=68d9a8c531df659f5bb1ef6286a778319f484b57
 FILES="$D/e49_stats.py $D/e49_candidates.py $D/e49_test.py $D/e48_world_test.py"
 E49_CELLS="${E49_CELLS:-k3all=S3_k3all sent=S3_sent native=L0fs_fskeep}"
 if [ -z "$NO_INSTALL" ]; then
@@ -21,7 +21,7 @@ if [ -z "$SKIP_VERIFY" ]; then
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH"; exit 5; }
   done <<'MANIFEST'
 794ae88a9baf e49_stats.py
-693ecd7410ae e49_candidates.py
+7181363d66bf e49_candidates.py
 7578ebd07e3d e49_test.py
 70a70838d527 e48_world_test.py
 
