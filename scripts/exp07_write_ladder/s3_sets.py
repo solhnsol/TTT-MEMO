@@ -16,6 +16,14 @@ CH=1024;W=8192;BIN=256
 def sentence_table(w,swap,tok,gw,SP):
     """per exposure sentence (stream order): triple id t, pair, round, place-token positions, name-token positions (positions = indices into ids, BOS at 0)."""
     text,_,spans=gw.realize(w,swap);e=tok.encode(text,add_special_tokens=False);offs=[(0,0)]+list(e.offsets);info=SP._sent_info(w,swap);tri={t['id']:t for t in w['triples']};out=[]
+    expo=[x for x in w.get('texts',[]) if x['kind']=='expo'];FR=getattr(gw,'FR',None);Af=getattr(gw,'A',None)
+    def frame_of(i):
+        """E47: index of the exposure frame (gen_world.FR template) of the i-th exposure sentence; -1 if it cannot be identified"""
+        if FR is None or Af is None or i>=len(expo):return -1
+        x=expo[i];t=tri[x['t']]
+        for j,f in enumerate(FR):
+            if f.format(X='@X%d@'%t['id'],P=t['P'],o=t['o'],a_o=Af(t['o']))==x['text']:return j
+        return -1
     for s in info:
         c0=s['start']+s['p0'];place=[j for j in SP._ptoks(offs,c0,c0+len(s['P'])) if j>0]
         names=[];spans=[sorted(set(place))]
@@ -24,7 +32,7 @@ def sentence_table(w,swap,tok,gw,SP):
         assert place and names,s['text']
         toks=sorted(set(j for j in SP._ptoks(offs,s['start'],s['start']+len(s['text'])) if j>0))   # E43: every token of the sentence (the sentence-cover cells k3 / k3b)
         nm=set(names)|set(place);occ=sorted(set(j for m in re.finditer(r'\b'+re.escape(tri[s['t']]['o'])+r'\b',s['text']) for j in SP._ptoks(offs,s['start']+m.start(),s['start']+m.end()) if j>0)-nm)   # E46: occupation ({o}) tokens of the sentence, without name / place tokens (the article of {a_o} is not part of it)
-        out.append(dict(idx=s['idx'],t=s['t'],pair=tri[s['t']]['pair'],round=s['round'],place=sorted(set(place)),names=sorted(set(names)),spans=spans,text=s['text'],toks=toks,occ=occ))
+        out.append(dict(idx=s['idx'],t=s['t'],pair=tri[s['t']]['pair'],round=s['round'],place=sorted(set(place)),names=sorted(set(names)),spans=spans,text=s['text'],toks=toks,occ=occ,frame=frame_of(s['idx'])))
     return out
 def select_by_ctx(delta,tau):
     """E (label-free K6'): chunk k is masked whole when its window context gain delta[k] < tau (strict); chunk 0 (no context) is never selected. Pure function."""
@@ -137,6 +145,36 @@ class Sets:
             for p in u.get('occ',[]):
                 if p in K3 and p not in Oset:occ.add(p)
         return sorted(Oset),sorted(occ),sorted(K3-Oset-occ)
+    def pxsplit(self,k):
+        """E47: (P, X) of chunk k as sorted lists, the E44 type_counts classification: tokens of the exposure sentences inside the window before the chunk whose triple is NOT a triple of a fact sentence of the chunk; P = the pair of one of the fact sentences (the swap partner's other-person sentences), X = any other pair. Chunks without O: two empty lists. P, X and K3 are disjoint (K3 consists of same-triple sentence tokens)."""
+        if not self.oracle(k):return [],[]
+        lo=max(0,k*CH-W);k0=k*CH;cur=self.cur_sentences(k);ts={s['t'] for s in cur};ps={s['pair'] for s in cur};P=[];X=[]
+        for u in self.t:
+            if u['t'] in ts:continue
+            tk=[p for p in u['toks'] if lo<=p<k0]
+            (P if u['pair'] in ps else X).extend(tk)
+        return sorted(set(P)),sorted(set(X))
+    def xframe_split(self,k):
+        """E47 (optional): X of chunk k split into (X_same, X_other): sentences whose frame id equals the frame id of one of the chunk's fact sentences / all other X sentences. Needs the 'frame' field (-1 = unknown, counted as other)."""
+        if not self.oracle(k):return [],[]
+        lo=max(0,k*CH-W);k0=k*CH;cur=self.cur_sentences(k);ts={s['t'] for s in cur};ps={s['pair'] for s in cur};fr={s.get('frame',-1) for s in cur}-{-1};A=[];B=[]
+        for u in self.t:
+            if u['t'] in ts or u['pair'] in ps:continue
+            tk=[p for p in u['toks'] if lo<=p<k0];(A if u.get('frame',-1) in fr else B).extend(tk)
+        return sorted(set(A)),sorted(set(B))
+    def _k3_plus(self,k,add,uni=False):
+        """K3 plus the set `add`, or (uni=True) plus len(add) uniformly drawn window positions outside K3 and outside `add` (seed 'kpx-<n>'); chunks without O: nothing."""
+        K3=self.sentencecover(k)
+        if not K3:return []
+        if not uni:return sorted(set(K3)|set(add))
+        k0=k*CH;lo=max(0,k0-W);ex=set(K3)|set(add);cand=[p for p in range(lo,k0) if p not in ex];n=min(len(add),len(cand))
+        return sorted(set(K3)|set(self._rng('kpxu%d'%len(add),k).sample(cand,n)))
+    def kpmask(self,k):return self._k3_plus(k,self.pxsplit(k)[0])
+    def kxmask(self,k):return self._k3_plus(k,self.pxsplit(k)[1])
+    def kpumask(self,k):return self._k3_plus(k,self.pxsplit(k)[0],True)
+    def kxumask(self,k):return self._k3_plus(k,self.pxsplit(k)[1],True)
+    def kxsmask(self,k):return self._k3_plus(k,self.xframe_split(k)[0])
+    def kxomask(self,k):return self._k3_plus(k,self.xframe_split(k)[1])
     def occmask(self,k):
         """E46 occ: O + OCC (occupation tokens of the earlier same-triple sentences); chunks without O mask nothing."""
         O,C,F=self.kindsplit(k);return sorted(set(O)|set(C))
@@ -251,6 +289,12 @@ class Sets:
         if cell=='sent':return self.sentmask(k),1.0
         if cell=='bg':return self.bgmask(k),1.0
         if cell=='noo':return self.noomask(k),1.0
+        if cell=='kp':return self.kpmask(k),1.0
+        if cell=='kx':return self.kxmask(k),1.0
+        if cell=='kp_u':return self.kpumask(k),1.0
+        if cell=='kx_u':return self.kxumask(k),1.0
+        if cell=='kx_s':return self.kxsmask(k),1.0
+        if cell=='kx_o':return self.kxomask(k),1.0
         if cell=='occ':return self.occmask(k),1.0
         if cell=='frm':return self.frmmask(k),1.0
         if cell=='unif_occ':return self.unifoccmask(k),1.0
