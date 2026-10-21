@@ -141,11 +141,12 @@ class Ladder:
         if not self.readout:return self.save_state(m)
         m32=self.to_fp32(m)
         with jax.default_matmul_precision('highest'):mg=self.P.r1(m32);ma=self.P_alt.r1(m32)
-        gn_=self.gen_nll(m);ma=ma[0::2]-ma[1::2];alt={};j=0
-        for f,its in self.fam.items():alt[f]=ma[j:j+len(its)].tolist();j+=len(its)
-        mg=mg[0::2]-mg[1::2];out={};i=0
-        for f,its in self.fam.items():out[f]=mg[i:i+len(its)].tolist();i+=len(its)
+        gn_=self.gen_nll(m);mag,maf=ma[0::2],ma[1::2];mgg,mgf=mg[0::2],mg[1::2];ma=mag-maf;alt={};altg={};altf={};j=0
+        for f,its in self.fam.items():alt[f]=ma[j:j+len(its)].tolist();altg[f]=mag[j:j+len(its)].tolist();altf[f]=maf[j:j+len(its)].tolist();j+=len(its)
+        mg=mgg-mgf;out={};outg={};outf={};i=0
+        for f,its in self.fam.items():out[f]=mg[i:i+len(its)].tolist();outg[f]=mgg[i:i+len(its)].tolist();outf[f]=mgf[i:i+len(its)].tolist();i+=len(its)
         out['_gen_nll']=gn_;out['_tail_nll']=self.tail_nll(m);out['_alt']=alt
+        out['_gold']=outg;out['_foil']=outf;out['_alt_gold']=altg;out['_alt_foil']=altf   # E47: the summed log-probs of the gold / foil span themselves (margin = gold - foil); additive fields, the margins above are unchanged
         return out
     def sentences(self,swap):
         """the exposure sentences of world A/B exactly as realized in the stream, tokenized alone ('\\n\\n' + sentence)."""
