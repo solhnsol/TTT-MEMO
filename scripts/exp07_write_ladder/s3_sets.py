@@ -182,6 +182,28 @@ class Sets:
             if not any(u['t']==s['t'] and u['round']<s['round'] and any(lo<=p<s['place'][0] for p in u['names']+u['place']) for u in self.t):continue
             out[s['t']]=sum(1 for p in P if self.t[own[p]]['pair']==s['pair'] and self.t[own[p]]['t']!=s['t'])
         return out
+    def half_person(self,pair):
+        """E47 k3h: the one triple (person) of the pair whose K3 share is masked; fixed per (world seed, pair) for the whole run and the same in worlds A and B (chosen by triple id): random.Random(f'{seed}|k3h|{pair}').choice(sorted triple ids of the pair in the table)."""
+        if getattr(self,'_hp',None) is None:self._hp={}
+        if pair not in self._hp:
+            ts=sorted({u['t'] for u in self.t if u['pair']==pair});self._hp[pair]=random.Random(f'{self.seed}|k3h|{pair}').choice(ts)
+        return self._hp[pair]
+    def k3hmask(self,k):
+        """E47 k3h: K3 restricted to the fact sentences of the masked person of each pair: for every fact sentence s of the chunk whose triple is half_person(its pair): the tokens of the earlier-round same-triple sentences inside [window start, s's place token) (this contains the O tokens of s). The partner's earlier exposures stay visible, a chunk that holds only the unmasked person's fact sentence of a pair masks nothing for that pair (single-person chunk, e.g. a pair split by the chunk border). Chunks without O mask nothing (also when only unmasked persons are present)."""
+        if not self.oracle(k):return []
+        lo=max(0,k*CH-W);S=set()
+        for s in self.cur_sentences(k):
+            if s['t']!=self.half_person(s['pair']):continue
+            lim=s['place'][0]
+            for u in self.t:
+                if u['t']==s['t'] and u['round']<s['round']:S|={p for p in u['toks'] if lo<=p<lim}
+        return sorted(S)
+    def k3r_chunks(self):
+        """E47 k3r: the chunks that get K3: round(n/2) of the n chunks with O, drawn without replacement (seeded by (seed, pass, 'k3r')); the other O chunks mask nothing."""
+        if getattr(self,'_k3r',None) is None:
+            oc=[k for k in range(63) if self.oracle(k)];n=int(round(len(oc)/2));self._k3r=set(random.Random(f'{self.seed}|{self.passno}|k3r').sample(oc,n))
+        return self._k3r
+    def k3rmask(self,k):return self.sentencecover(k) if k in self.k3r_chunks() else []
     def kxmask(self,k):return self._k3_plus(k,self.pxsplit(k)[1])
     def kpumask(self,k):return self._k3_plus(k,self.pxsplit(k)[0],True)
     def kxumask(self,k):return self._k3_plus(k,self.pxsplit(k)[1],True)
@@ -302,6 +324,8 @@ class Sets:
         if cell=='bg':return self.bgmask(k),1.0
         if cell=='noo':return self.noomask(k),1.0
         if cell=='op':return self.opmask(k),1.0
+        if cell=='k3h':return self.k3hmask(k),1.0
+        if cell=='k3r':return self.k3rmask(k),1.0
         if cell=='kp':return self.kpmask(k),1.0
         if cell=='kx':return self.kxmask(k),1.0
         if cell=='kp_u':return self.kpumask(k),1.0
