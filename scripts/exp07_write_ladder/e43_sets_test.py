@@ -50,6 +50,8 @@ def main():
         sets.fill_total=None;sets.fill_attn_cands=False
         sets.sentencecover(k);rows.append((k,len(O),len(K3),len(K3b),sets.last_nsent))
     assert nO>0
+    sel=SETS.select_by_ctx([-0.9,-0.9,-0.2,-0.65,-0.66,0.1],-0.65);assert sel==[False,True,False,False,True,False],sel   # chunk 0 never, strict inequality at tau
+    k_=next(k for k in range(8,63) if sets.oracle(k));assert sets.prefixall(k_)==sets.chunk_set('k6p',k_)[0]   # a selected k6ctx chunk is masked exactly like a K6' chunk
     print('E43 sets test OK; synthetic table, chunks with O',nO,'(chunk, |O|, |K3|, |K3b|, covered sentences):',rows[:6],'...')
     print('old-cell hash',old_hash(sets))
 if __name__=='__main__':main()

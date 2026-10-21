@@ -34,6 +34,10 @@ def summarize(delta,o_sizes):
 def o_sizes_of(w,swap,tok,seed):
     import gen_world as gw,suppress as SP,s3_sets as SETS
     sets=SETS.Sets(SETS.sentence_table(w,swap,tok,gw,SP),seed,1);return [len(sets.oracle(k)) for k in range(NCH)],sets
+def o_sizes_nat(w,swap,stream_tok,nat_world_mod,NS,stage2):
+    """natural-text stream: |O| per chunk and 'has fact sentence' per chunk from nat_signal.NatSets on the realized stream (BOS offset handled by nat_signal.build_table)"""
+    text=nat_world_mod.realize(w,swap)[0];e=stage2.enc(stream_tok,text);table,_=NS.build_table(w,swap,list(e.offsets));sets=NS.NatSets(table,0)
+    return [len(sets.oracle(k)) for k in range(NCH)],sets
 def selftest():
     rng=np.random.default_rng(0);osz=[0,0,3,0,0,5,0,2,0,0]+[0]*53
     ks,y=chunk_labels(osz);assert ks[0]==2 and y[:2]==[1,0] and sum(y)==3 and len(ks)==61,(ks[:4],y[:4])   # chunks 0,1 (before the first O chunk) are not used
@@ -43,6 +47,7 @@ def selftest():
     assert summarize(np.zeros(NCH),[0]*NCH)['auc'] is None
     print('ctx_gain SELFTEST OK',{k:(round(v,3) if isinstance(v,float) else v) for k,v in r.items() if k!='auc_ci95'})
 def dry(a):
+    if a.nat:return dry_nat(a)
     import nat_dryrun as D
     tk=D.load_tok(a.tokenizer_file);assert tk is not None,'real tokenizer file not found (--tokenizer-file / TOKENIZER_JSON)'   # a tokenizers.Tokenizer (real tokenizer file); gen_world needs the same package
     import gen_world as gw
@@ -52,16 +57,28 @@ def dry(a):
             osz,_=o_sizes_of(w,wd=='B',tk,s);ks,y=chunk_labels(osz);print(f'seed {s} world {wd}: chunks with O {sum(1 for n in osz if n)}, first O chunk {ks[0] if ks else None}, non-O after it {len(y)-sum(y)}, mean |O| {np.mean([n for n in osz if n] or [0]):.1f}')
             assert sum(y)>=3 and len(y)-sum(y)>=3,'too few O or non-O chunks for an AUC'
     print('DRY OK (label construction only; no model, no GPU)')
+def dry_nat(a):
+    import nat_dryrun as D,nat_world as NW,nat_signal as NS
+    tk=D.load_tok(a.tokenizer_file);assert tk is not None,'real tokenizer file not found';stream,layout=a.nat.split(':');w=NW.load_world(Path(a.nat_dir)/f'nat_{stream}_{layout}.json')
+    for wd in a.worlds:
+        e=tk.encode(NW.realize(w,wd=='B')[0],add_special_tokens=False);table,_=NS.build_table(w,wd=='B',list(e.offsets));sets=NS.NatSets(table,0);osz=[len(sets.oracle(k)) for k in range(NCH)];ks,y=chunk_labels(osz)
+        print(f'nat {a.nat} world {wd}: chunks with O {sum(1 for n in osz if n)}, first O chunk {ks[0] if ks else None}, non-O after it {len(y)-sum(y)}');assert sum(y)>=3 and len(y)-sum(y)>=3
+    print('DRY OK (natural-text labels only; no model, no GPU)')
 def gpu(a):
     import ladder as LD
     from ladder import clone_state,jnp,reuse
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
-    rt=LD.Runtime();orig=rt.base;seeds=[int(x) for x in a.seeds.split(',')];res={'seeds':seeds,'worlds':a.worlds,'runs':{}};t00=time.monotonic()
+    nat=None
+    if a.nat:   # E33 natural-text world: same reads, ladder = NatLadder with the natural loader installed
+        import nat_ladder as NL,nat_signal as NS,nat_world as NW
+        from ladder import stage2
+        stream,layout=a.nat.split(':');stream=int(stream);NL.install(a.nat_dir,stream,layout);nat=(NL,NS,NW,stage2)
+    rt=LD.Runtime();orig=rt.base;seeds=[int(x) for x in a.seeds.split(',')] if not nat else [stream];res={'seeds':seeds,'worlds':a.worlds,'runs':{},'nat':a.nat};t00=time.monotonic()
     for s in seeds:
-        L=LD.Ladder(rt,s,readout=False)
+        L=nat[0].NatLadder(rt,s,readout=False) if nat else LD.Ladder(rt,s,readout=False)
         for wd in a.worlds:
             swap=wd=='B';ids=np.asarray(L.T.P[swap].ids)[:NCH*CH];mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True
-            osz,_=o_sizes_of(L.T.w,swap,L.T.tok,s);states=[('W0',None)]+[(x.split('=',1)[0],x.split('=',1)[1]) for x in a.state]
+            osz,_=o_sizes_nat(L.T.w,swap,L.T.tok,nat[2],nat[1],nat[3]) if nat else o_sizes_of(L.T.w,swap,L.T.tok,s);states=[('W0',None)]+[(x.split('=',1)[0],x.split('=',1)[1]) for x in a.state]
             if a.state_template:states+=[(f'p{p}',a.state_template.format(seed=s,w=wd,p=int(p))) for p in a.state_passes.split(',')]
             with rt.mesh:
                 seq=rt.seq(ids,mask=mask);pref=rt.prefix(orig,seq);alone=[]
@@ -73,7 +90,7 @@ def gpu(a):
                         c=rt.chunk(seq,k);st,lp=rt.chunk_logp(m,st,c,pref[k*CH:(k+1)*CH]);ctx.append(float(-np.asarray(lp,np.float64)[:CH-1].mean()))
                         sq,pf=alone[k];_,lp2=rt.chunk_logp(m,clone_state(rt.state_suffix),rt.chunk(sq,0),pf[:CH]);noc.append(float(-np.asarray(lp2,np.float64)[:CH-1].mean()))
                     d=np.asarray(ctx)-np.asarray(noc);r={'nll_ctx':ctx,'nll_noctx':noc,'delta':d.tolist(),'n_O_tokens':osz,'summary':summarize(d,osz),'hash':hh,'path':p}
-                    res['runs'][f's{s}_{wd}_{lab}']=r;print(f's{s} {wd} {lab}: AUC {r["summary"]["auc"]} n_O {r["summary"]["n_O"]} mean delta O {r["summary"].get("mean_delta_O")} ({time.monotonic()-t00:.0f}s)',flush=True)
+                    res['runs'][f'{"n" if nat else "s"}{s}_{wd}_{lab}']=r;print(f's{s} {wd} {lab}: AUC {r["summary"]["auc"]} n_O {r["summary"]["n_O"]} mean delta O {r["summary"].get("mean_delta_O")} ({time.monotonic()-t00:.0f}s)',flush=True)
                     if p:del m
                     json.dump(res,open(LD.OUT/f'ctx_gain_{a.tag}.json','w'))
     L2=['| run | n_O | n_nonO | AUC (score = -delta) [95% CI] | mean delta O | mean delta non-O |','|---|---|---|---|---|---|']
@@ -82,7 +99,7 @@ def gpu(a):
     (LD.OUT/f'ctx_gain_{a.tag}.md').write_text('\n'.join(L2)+'\n');print('\n'.join(L2))
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--seeds',default='101,102,103');ap.add_argument('--worlds',default='A');ap.add_argument('--state',action='append',default=[]);ap.add_argument('--state-template',default=None)
-    ap.add_argument('--state-passes',default='1,2,3,4');ap.add_argument('--tag',default='ctx');ap.add_argument('--dry',action='store_true');ap.add_argument('--selftest',action='store_true');ap.add_argument('--tokenizer-file',default=None);a=ap.parse_args()
+    ap.add_argument('--state-passes',default='1,2,3,4');ap.add_argument('--tag',default='ctx');ap.add_argument('--dry',action='store_true');ap.add_argument('--selftest',action='store_true');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--nat',default=None,help='STREAM:LAYOUT, e.g. 9105:spread: natural-text world (GPU read; --dry then uses nat_signal.dry)');ap.add_argument('--nat-dir',default=os.environ.get('NAT_DIR','data/natural-text/worlds'));a=ap.parse_args()
     if a.selftest:selftest();return
     if a.dry:
         for p in ('../exp05_write_dynamics','../exp04_what_ttt_retains'):sys.path.insert(0,str(HERE/p))
