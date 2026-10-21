@@ -331,7 +331,7 @@ def main():
         else:   # default: both references, K3 and K3-all (k3h + k3hc is a partition of K3; K3-all = K3 + 0.4-1.8% masked tokens, so its sum differs slightly)
             md1,r1=mode_additivity(OUT,['k3','L0fs:main','k3h','k3hc'],seeds[0],eps);md2,r2=mode_additivity(OUT,['k3all','L0fs:main','k3h','k3hc'],seeds[0],eps)
             md='# Reference K3\n\n'+md1+'\n# Reference K3-all (k3h + k3hc is the partition of K3; K3-all is K3 + 0.4-1.8% more masked tokens, so the halves do not sum to it exactly)\n\n'+md2;res={'K3':r1,'K3all':r2}
-od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_triple_da_additivity.md').write_text(md);json.dump(res,open(od/'e47_triple_da_additivity.json','w'),indent=1);print(md);return
+        od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_triple_da_additivity.md').write_text(md);json.dump(res,open(od/'e47_triple_da_additivity.json','w'),indent=1);print(md);return
     if a.mode=='pairstruct':
         cells=(a.cells or DEF_CELLS).split(',');stream=run_stream(seeds[0],a.stream) if a.stream else None
         md,res=mode_pairstruct(OUT,cells,seeds[0],[int(x) for x in a.epochs.split(',')] if a.epochs!='1,2,3,4' else [4],stream);od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_triple_da_pairstruct.md').write_text(md);json.dump(res,open(od/'e47_triple_da_pairstruct.json','w'),indent=1);print(md);return
