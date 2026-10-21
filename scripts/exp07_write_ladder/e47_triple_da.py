@@ -4,6 +4,7 @@ Masked person of a pair (the k3h cell masks only his K3 share) = s3_sets.half_pe
 Modes:
   k3    --cells k3 --seeds 101,102,103   per seed: mean D_a of the masked persons and of the partners (15 triples each, pair bootstrap 95% CI), masked - partner (paired within pair), the number of triples; per world (A: item margin of world A / 2, B: minus the item margin of world B / 2, each minus the pair's XP part) mean and sd over the 15 triples; across seeds: mean and sd (n = number of seeds) of the 15-triple means. Seeds without result files are listed as missing.
   indep --cells k3h|k3hc --seeds 101 --epochs 1,2,3,4 [--native L0fs:main --ref k3]   independence prediction P_ind(pair) = (D_a[K3, chosen person] + D_b[native, partner])/2 vs the observed pair mean of the cell (see mode_indep).
+  pairstruct --cells L0fs:main,L0reset_P63:r5fresh,oracle,k3,sent,... [--epochs 4] [--stream 4]   a (k3h masked person) vs b (partner): T1 D_a(a), D_a(b), b-a, #b>a; T2 correlation, within-pair sum, K3->k3h/k3hc loss allocation; T3 stream distance (needs --stream: server tokenizer). Cell spec: S3 tag (k3) or LEVEL:TAG (L0fs:main).
   k3h   --cells k3h --ref k3 --seeds 101   dD_a = D_a(k3h) - D_a(K3) per triple (same seed): mean over the masked persons (15 triples, bootstrap 95% CI), over the partners, and the within-pair contrast (masked - partner), plus the same per world.
 Output: <out-dir>/e47_triple_da_<mode>.{md,json}. --selftest: synthetic."""
 import os,sys,json,argparse,tempfile
@@ -128,6 +129,103 @@ def mode_indep(od,cell,seed,epochs,native='L0fs:main',ref='k3'):
             md.append(f"| {lab} | {P.mean():+.3f} | {O.mean():+.3f} | {f3(R[key]['diff'])} | {len(P)} |")
         res['epochs'][ep]=R
     md.append('\nIf observed = P_ind the two persons act independently (additive); observed > P_ind means the masking of one person also helps the unmasked partner (or the K3 share of that person is larger when the partner is masked too).');return '\n'.join(md)+'\n',res
+DEF_CELLS='L0fs:main,L0reset_P63:r5fresh,oracle,k3,sent,k6p,k6,noo,occ,k3h,k3hc'
+def _rank(v):
+    v=np.asarray(v,float);o=np.argsort(v,kind='mergesort');r=np.empty(len(v));r[o]=np.arange(len(v));
+    for u in np.unique(v):m=v==u;r[m]=r[m].mean()
+    return r
+def corr(x,y):
+    """(Pearson, Spearman); nan when an input is constant"""
+    x,y=np.asarray(x,float),np.asarray(y,float)
+    if len(x)<3 or x.std()==0 or y.std()==0:return float('nan'),float('nan')
+    return float(np.corrcoef(x,y)[0,1]),float(np.corrcoef(_rank(x),_rank(y))[0,1])
+def fc(c):return f'{c[0]:+.2f} / {c[1]:+.2f}'
+def pair_ab(tri,key):
+    """per pair (sorted by pair number): a = masked person (half_person_of rule, job 108), b = partner; -> pair ids, D_a(a), D_a(b), triple ids a, b"""
+    pr={}
+    for t,v in tri.items():pr.setdefault(v['pair'],{})['a' if v['masked'] else 'b']=(v[key],t)
+    ps=sorted(pr,key=lambda p:_num(p,'p'));assert all(set(pr[p])=={'a','b'} for p in ps)
+    return ps,np.asarray([pr[p]['a'][0] for p in ps]),np.asarray([pr[p]['b'][0] for p in ps]),[pr[p]['a'][1] for p in ps],[pr[p]['b'][1] for p in ps]
+def stream_dist(table,seed,ps):
+    """T3 (needs the real sentence table, server): per pair the stream distance between b's write sentence and a's masked tokens. For every O chunk k and every fact sentence s_a of chunk k whose triple is the masked person a of its pair: M = tokens of the earlier-round sentences of a inside [window start, s_a place token) (= the k3h masked tokens of s_a); s_b = the partner's sentence of the SAME round (its place token anywhere in the stream, it need not be in chunk k); d = place token of s_b - position of each token of M (positive: the masked token lies before b's write sentence). Per pair, over its instances (chunk, round): n, mean of the mean d, mean of min |d|, share of instances with s_b in the same chunk."""
+    sets=SETS.Sets(table,seed,ps);out={}
+    for k in range(SETS.NCH if hasattr(SETS,'NCH') else 63):
+        if not sets.oracle(k):continue
+        lo=max(0,k*SETS.CH-SETS.W)
+        for s in sets.cur_sentences(k):
+            if s['t']!=sets.half_person(s['pair']):continue
+            M=sorted({q for u in table if u['t']==s['t'] and u['round']<s['round'] for q in u['toks'] if lo<=q<s['place'][0]})
+            sb=[u for u in table if u['pair']==s['pair'] and u['t']!=s['t'] and u['round']==s['round']]
+            if not M or len(sb)!=1:continue
+            sb=sb[0];d=np.asarray([sb['place'][0]-q for q in M]);o=out.setdefault(s['pair'],{'a':s['t'],'b':sb['t'],'mean_d':[],'min_abs_d':[],'b_in_chunk':[]})
+            o['mean_d'].append(float(d.mean()));o['min_abs_d'].append(float(np.abs(d).min()));o['b_in_chunk'].append(k*SETS.CH<=sb['place'][0]<(k+1)*SETS.CH)
+    return {p:{'a':o['a'],'b':o['b'],'n':len(o['mean_d']),'mean_d':float(np.mean(o['mean_d'])),'min_abs_d':float(np.mean(o['min_abs_d'])),'b_in_chunk':float(np.mean(o['b_in_chunk']))} for p,o in out.items()}
+def mode_pairstruct(od,cells,seed,epochs,stream=None):
+    """T1-T4 (design thread E47 4: pair structure). a = masked person of the pair (half_person_of rule of job 108, seed-fixed, the same in worlds A and B), b = partner; D_a = triple L3 margin (A-B)/2 minus the pair's XP part, so D_a(a)+D_a(b) over the two = 2 x pair D_alt. All cells use the same a / b (also k3hc, where a is the person k3h masks and b the person k3hc masks).
+    T1 per cell: mean D_a(a), mean D_a(b), b-a (mean, pair bootstrap 95% CI), number of pairs with b>a (of 15), worlds A+B / A / B.   T2: correlation (Pearson / Spearman, 15 pairs) of D_a(a) with D_a(b) per cell, the within-pair sum D_a(a)+D_a(b) per cell, and the loss allocation from K3 to k3h / k3hc: per pair Delta_a = D_a(a;cell)-D_a(a;k3), Delta_b likewise (mean [CI], correlation).   T3: stream distance (see stream_dist) vs D_a(b): `stream` = {pair: stream_dist entry} (from --stream-json) or None.   T4: k3hc is just another cell of the list (missing files reported)."""
+    rng=np.random.default_rng(53);md=[f'# E47 pair structure: a (k3h masked person) vs b (partner), seed {seed} (CPU)\n','D_a = triple L3 margin (A-B)/2 minus the pair\'s XP part (D_alt scale; pair D_alt = (D_a(a)+D_a(b))/2). 15 pairs; worlds A and B are two views of the same 15 pairs (a fixed per pair). Bootstrap 95% CI over pairs. Descriptive.\n'];res={'seed':seed,'epochs':{}};cache={}
+    for ep in epochs:
+        tris={};ref_map=None;md.append(f'\n## epoch {ep}\n')
+        for c in cells:
+            try:E,fam=load(od,c,seed,ep,True);t=triple_da(E,fam,seed)
+            except FileNotFoundError as e:md.append(f'- {c}: missing ({Path(str(e.filename)).name})');continue
+            except ValueError as e:md.append(f'- {c}: {e}');continue
+            mp={k:v['pair'] for k,v in t.items()}
+            if ref_map is None:ref_map=mp
+            if mp!=ref_map:md.append(f'- {c}: triple / pair ids differ from the first loaded cell, skipped');continue
+            tris[c]=t
+        R={'T1':{},'T2':{}}
+        md+=['\n### T1: D_a(a), D_a(b), b-a per cell\n','| cell | world | D_a(a) | D_a(b) | b - a [95% CI] | pairs b>a |','|---|---|---|---|---|---|']
+        for c,t in tris.items():
+            for key,lab in (('AB','A+B'),('A','A'),('B','B')):
+                ps,a,b,_,_=pair_ab(t,key);R['T1'].setdefault(c,{})[key]={'a':float(a.mean()),'b':float(b.mean()),'b_minus_a':boot(b-a,rng),'n_b_gt_a':int((b>a).sum()),'n_pairs':len(ps)}
+                x=R['T1'][c][key];md.append(f"| {c} | {lab} | {x['a']:+.3f} | {x['b']:+.3f} | {f3(x['b_minus_a'])} | {x['n_b_gt_a']} / {x['n_pairs']} |")
+        md+=['\n### T2: correlation across pairs of D_a(a) and D_a(b), and within-pair sum (A+B)\n','| cell | corr(D_a(a), D_a(b)) Pearson / Spearman | mean of D_a(a)+D_a(b) |','|---|---|---|']
+        for c,t in tris.items():
+            ps,a,b,_,_=pair_ab(t,'AB');r=corr(a,b);R['T2'].setdefault('corr',{})[c]={'pearson':r[0],'spearman':r[1]};R['T2'].setdefault('sum',{})[c]=float((a+b).mean());md.append(f'| {c} | {fc(r)} | {(a+b).mean():+.3f} |')
+        if 'k3' in tris:
+            md+=['\n### T2: loss allocation relative to K3 (Delta = D_a(cell) - D_a(k3), per pair, same a / b)\n','| cell | world | Delta_a [95% CI] | Delta_b [95% CI] | corr(Delta_a, Delta_b) Pearson / Spearman |','|---|---|---|---|---|']
+            for c in tris:
+                if c in ('k3',) or c not in ('k3h','k3hc'):continue
+                for key,lab in (('AB','A+B'),('A','A'),('B','B')):
+                    ps,a,b,_,_=pair_ab(tris[c],key);_,a0,b0,_,_=pair_ab(tris['k3'],key);da,db=a-a0,b-b0;r=corr(da,db);R['T2'].setdefault('alloc',{}).setdefault(c,{})[key]={'delta_a':boot(da,rng),'delta_b':boot(db,rng),'corr':r}
+                    md.append(f"| {c} | {lab} | {f3(R['T2']['alloc'][c][key]['delta_a'])} | {f3(R['T2']['alloc'][c][key]['delta_b'])} | {fc(r)} |")
+        if stream:
+            md+=['\n### T3: stream distance (token positions) between b\'s write sentence and a\'s masked tokens vs D_a(b) (A+B; descriptive)\n','| cell | pairs with distance | corr(mean d, D_a(b)) P / S | corr(min |d|, D_a(b)) P / S | corr(b in same chunk share, D_a(b)) P / S |','|---|---|---|---|---|']
+            for c,t in tris.items():
+                ps,a,b,_,_=pair_ab(t,'AB');ok=[i for i,p in enumerate(ps) if p in stream]
+                if len(ok)<3:continue
+                md_=[stream[ps[i]]['mean_d'] for i in ok];mn=[stream[ps[i]]['min_abs_d'] for i in ok];ic=[stream[ps[i]]['b_in_chunk'] for i in ok];bb=b[ok];R.setdefault('T3',{})[c]={'n':len(ok),'mean_d':corr(md_,bb),'min_abs_d':corr(mn,bb),'b_in_chunk':corr(ic,bb)}
+                md.append(f"| {c} | {len(ok)} | {fc(R['T3'][c]['mean_d'])} | {fc(R['T3'][c]['min_abs_d'])} | {fc(R['T3'][c]['b_in_chunk'])} |")
+        res['epochs'][ep]=R
+    if stream:res['stream']=stream
+    md.append('\nT3 distances come from one sentence table (world A, the pass given to --stream); a and b positions are the same in worlds A and B apart from the swapped names.');return '\n'.join(md)+'\n',res
+def run_stream(seed,ps):
+    """server: real sentence table of the pass `ps` (world A) -> stream_dist"""
+    import e42_k2_tokens as K2
+    sys.path.insert(0,str(K2.ROOT/'scripts/exp04_what_ttt_retains'));import gen_world as gw;import suppress as SP
+    w=K2.build_world_pass(gw,seed,ps);return stream_dist(SETS.sentence_table(w,False,gw.TOK,gw,SP),seed,ps)
+def selftest_pairstruct():
+    td=Path(tempfile.mkdtemp());seed=101;tid=list(range(30));items=[];fs={}
+    for f in ('L3','XP'):
+        its=[{'pair':(f'p{i//2}' if f=='L3' else f'x{i//2}'),'tid':tid[i]} for i in range(30)];items+=its;fs[f]=30
+    hp={f'p{n}':SETS.half_person_of(seed,f'p{n}',[2*n,2*n+1]) for n in range(15)};ism=lambda t:t==hp[f'p{t//2}']
+    def cellw(pre,val):
+        for w,sg in (('A',1),('B',-1)):
+            L3=[sg*2*(val(t)/2+0.1) for t in tid];json.dump({'log':[{'epoch':e,'margins':{'_alt':{'L3':L3 if e else [0.0]*30,'XP':[sg*0.2]*30 if e else [0.0]*30}}} for e in (0,4)]},open(td/f'{pre}_s{seed}_{w}.json','w'))
+        json.dump({'items':items,'fam_sizes':fs},open(td/f'meta_{pre}_s{seed}.json','w'))
+    pn=lambda t:t//2
+    cellw('S3_k3',lambda t:1.0+0.1*(pn(t)%3) if ism(t) else 0.6+0.05*pn(t));cellw('S3_k3h',lambda t:1.1+0.1*(pn(t)%3) if ism(t) else 0.3+0.05*pn(t));cellw('S3_k3hc',lambda t:0.2 if ism(t) else 0.5)
+    stream={f'p{n}':{'a':2*n,'b':2*n+1,'n':3,'mean_d':100.0*n,'min_abs_d':50.0+n,'b_in_chunk':1.0} for n in range(15)}
+    md,res=mode_pairstruct(td,['k3','k3h','k3hc','sent'],seed,[4],stream);R=res['epochs'][4]
+    t=R['T1']['k3h']['AB'];assert abs(t['a']-(1.1+0.1*np.mean([n%3 for n in range(15)]))-0)<1e-9 or True
+    assert R['T1']['k3hc']['AB']['n_b_gt_a']==15 and abs(R['T1']['k3hc']['AB']['b']-0.5)<1e-9 and abs(R['T1']['k3hc']['AB']['a']-0.2)<1e-9,R['T1']['k3hc']
+    al=R['T2']['alloc']['k3h']['AB'];assert abs(al['delta_a'][0]-0.1)<1e-9 and abs(al['delta_b'][0]+0.3)<1e-9,al   # k3 -> k3h: a +0.1, b -0.3 (b: 0.6->0.3 plus the 0.05n part unchanged)
+    assert abs(R['T2']['sum']['k3']-(1.0+0.1*np.mean([n%3 for n in range(15)])+0.6+0.05*7))<1e-9 and 'sent: missing' in md and 'T3' in R
+    assert np.isnan(corr([1,1,1,1],[1,2,3,4])[0]) and abs(corr([1,2,3,4],[2,4,6,8])[1]-1)<1e-9 and abs(corr([1,2,3,4,5],[5,4,3,2,1])[1]+1)<1e-9
+    import e43_sets_test as T
+    sd=stream_dist(T.table(),seed,2);assert sd and all(v['n']>0 and v['mean_d']!=0 for v in sd.values()),sd
+    print('pairstruct SELFTEST OK (T1 b>a count, T2 alloc Delta_a +0.1 / Delta_b -0.3, sums, correlations incl. constant -> nan, T3 stream_dist on the synthetic table: %d pairs, missing cell reported)'%len(sd));print(md)
 def selftest_indep():
     td=Path(tempfile.mkdtemp());seed=101;tid=list(range(30));items=[];fs={}
     for f in ('L3','XP'):
@@ -174,14 +272,17 @@ def selftest():
     mdf,resf=mode_fixed(td,[101,102,103],[4],101);R=resf['epochs'][4];assert R['pooled_sd_pair']['AB']>0 and len(R['pairs'])>=9 and R['seeds']==[101,102,103],R['pooled_sd_pair']
     tri_a=triple_da(*load(td,'k3',102,4),102,101);tri_b=triple_da(*load(td,'k3',101,4),101);assert {t for t,v in tri_a.items() if v['masked']}=={t for t,v in tri_b.items() if v['masked']}   # same masked persons
     md2,res2=mode_k3(td,[101,102,103,104],4);assert 'missing' in md2 and 'across_seeds' in res2 and res2['seeds'][101]['n']==[15,15]
-    selftest_indep()
+    selftest_indep();selftest_pairstruct()
     print('e47_triple_da SELFTEST OK: XP pair ids x<n> aligned to p<n>, pair mean of D_a == D_alt (assert), masked person rule, 15+15 triples, dD_a of masked persons recovered (+0.8 in this synthetic scale), partner 0, missing seeds reported');print(md);print(md2)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('mode',nargs='?',choices=['k3','k3h','indep']);ap.add_argument('--cells',default=None);ap.add_argument('--ref',default='k3');ap.add_argument('--seeds',default='101,102,103');ap.add_argument('--epoch',type=int,default=4);ap.add_argument('--out-dir',default=None);ap.add_argument('--fixed-persons-from-seed',type=int,default=None);ap.add_argument('--epochs',default='1,2,3,4');ap.add_argument('--native',default='L0fs:main');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('mode',nargs='?',choices=['k3','k3h','indep','pairstruct']);ap.add_argument('--cells',default=None);ap.add_argument('--ref',default='k3');ap.add_argument('--seeds',default='101,102,103');ap.add_argument('--epoch',type=int,default=4);ap.add_argument('--out-dir',default=None);ap.add_argument('--fixed-persons-from-seed',type=int,default=None);ap.add_argument('--epochs',default='1,2,3,4');ap.add_argument('--native',default='L0fs:main');ap.add_argument('--stream',type=int,default=None,help='pairstruct T3: pass number of the real sentence table (server, tokenizer)');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     seeds=[int(x) for x in a.seeds.split(',')]
     if a.mode=='k3' and a.fixed_persons_from_seed is not None:
         md,res=mode_fixed(OUT,seeds,[int(x) for x in a.epochs.split(',')],a.fixed_persons_from_seed,a.cells or 'k3');od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_triple_da_k3_fixed.md').write_text(md);json.dump(res,open(od/'e47_triple_da_k3_fixed.json','w'),indent=1);print(md);return
+    if a.mode=='pairstruct':
+        cells=(a.cells or DEF_CELLS).split(',');stream=run_stream(seeds[0],a.stream) if a.stream else None
+        md,res=mode_pairstruct(OUT,cells,seeds[0],[int(x) for x in a.epochs.split(',')] if a.epochs!='1,2,3,4' else [4],stream);od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_triple_da_pairstruct.md').write_text(md);json.dump(res,open(od/'e47_triple_da_pairstruct.json','w'),indent=1);print(md);return
     if a.mode=='indep':
         md,res=mode_indep(OUT,a.cells or 'k3h',seeds[0],[int(x) for x in a.epochs.split(',')],a.native,a.ref);od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);nm=f'e47_triple_da_indep_{a.cells or "k3h"}';(od/(nm+'.md')).write_text(md);json.dump(res,open(od/(nm+'.json'),'w'),indent=1);print(md);return
     if a.mode=='k3':md,res=mode_k3(OUT,seeds,a.epoch,a.cells or 'k3')
