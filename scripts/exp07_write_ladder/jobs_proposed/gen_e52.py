@@ -9,7 +9,7 @@ D='scripts/exp07_write_ladder'
 FILES=' '.join(f'{D}/{f}' for f in ('nat_world.py','nat_filler.py','nat_pass.py','nat_ladder.py','nat_analyze.py','nat_dryrun.py','nat_signal.py','e51_nat_table.py','e52_table.py','e52_analyze.py'))
 COMMON=f'''set -e
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
-NAT_DIR=${{NAT_DIR:-data/natural-text/worlds}}
+NAT_DIR=${{NAT_DIR:-data/natural-text/worlds/e52}}
 mkdir -p $OUT
 TOK=${{TOKENIZER_JSON:-data/tokenizer/llama3/tokenizer.json}}
 COMMIT={a.commit}
