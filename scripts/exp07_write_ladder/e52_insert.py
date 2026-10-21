@@ -102,16 +102,6 @@ def merge_even(own,extra):
         out.append(t)
         if i in pos:out.append(extra[pos[i]])
     used=set(pos.values());out+=[extra[j] for j in range(n) if j not in used];return out
-def pool_use(pool,slot_tok,enc_len,slack=8):
-    """replicates the consumption of nat_pass.build_pass_stream_matched: slots in stream order take consecutive pool paragraphs until n + slack tokens are covered (the last one is cut, the rest of it is lost); returns (paragraphs used or None when exhausted, token share used)"""
-    pl=[enc_len(t)+1 for t in pool];cur=0;used=0
-    for n in slot_tok:
-        acc=0
-        while True:
-            if cur>=len(pl):return None,None
-            acc+=pl[cur];used+=pl[cur];cur+=1
-            if acc>=n+slack:break
-    return cur,used/sum(pl)
 def verify(nw_a,nw_b,tk,cond_a,cond_b,plan):
     """token-level checks on the realized streams; returns (ok, report lines)"""
     ok=True;L=[];tabs={}
@@ -165,7 +155,7 @@ def run(base,pool_ws,tk,G,FB,D2,H,out_dir,stream_id,occ_dev2,seed,passes,nat_dir
             if len(fp)==2:
                 slot_tok=[enc_len(x['text']) for x in nw_a['texts'] if x['kind']=='bg']
                 for ps,v in fp['L2a'].items():
-                    k,sh=pool_use(v,slot_tok,enc_len);print(f'pass {ps} pool: {len(v)} paragraphs, matched builder consumption: '+(f'{k} paragraphs = {sh:.0%} of the pool' if k else 'EXHAUSTED (the dry run would fail)'));ok&=bool(k) and sh<=0.95
+                    k,sh=AU.pool_use(v,slot_tok,enc_len);print(f'pass {ps} pool: {len(v)} paragraphs, matched builder consumption: '+(f'{k} paragraphs = {sh:.0%} of the pool' if k else 'EXHAUSTED (the dry run would fail)'));ok&=bool(k) and sh<=0.95
                 assert fp['L2a']==fp['L2b'],'the pass pools of the two layouts differ'
                 for nw in (nw_a,nw_b):nw['filler_pools']=fp['L2a'];nw['insert']['filler_pools_note']='pass pools embedded (paragraph-level, non-sealed streams, 1.2x char rule); nat_filler.select returns them instead of selecting from nat-dir'
         finally:shutil.rmtree(tmp,ignore_errors=True)

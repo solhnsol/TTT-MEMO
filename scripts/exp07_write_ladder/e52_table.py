@@ -27,6 +27,11 @@ def table(wa,wb,enc_offs):
         nfail+=bool(res)
         rows.append(dict(person=t,pair=p,cond_L2a=ca[str(p)],cond_L2b=cb[str(p)],n_expo=len(a),gaps_L2a=ga,gaps_L2b=gb,prior_in_earlier_chunk_L2a=xa,prior_in_earlier_chunk_L2b=xb,last_L2a=a[-1],last_L2b=b[-1],last_diff=dl,strata_L2a=(sa[t]['s_cross'],sa[t]['s_same'],sa[t]['n_out']),strata_L2b=(sb[t]['s_cross'],sb[t]['s_same'],sb[t]['n_out']),status='PASS' if not res else 'FAIL: '+', '.join(res)))
     return rows,nfail,(na,nb)
+def first_chunk_sha(w,swap,enc_offs):
+    """sha256 (first 16 hex) of the text covered by the first 1024 tokens (BOS + 1023) of the realized stream, plus the item counts of the world's families"""
+    import hashlib
+    text=NW.realize(w,swap)[0];offs=enc_offs(text);cut=offs[min(len(offs),CH-1)-1][1];return hashlib.sha256(text[:cut].encode()).hexdigest()[:16]
+def family_counts(w):return {k:len(v) for k,v in NW.build_items(w).items() if v}
 def fmt(rows):
     h=['person','pair','L2a','L2b','n','gaps L2a','gaps L2b','earlier-chunk a/b','last a','last b','diff','strata a (cross,same,out)','strata b','status'];L=['\t'.join(h)]
     for r in rows:L.append('\t'.join(str(x) for x in (r['person'],r['pair'],r['cond_L2a'],r['cond_L2b'],r['n_expo'],r['gaps_L2a'],r['gaps_L2b'],f"{r['prior_in_earlier_chunk_L2a']}/{r['prior_in_earlier_chunk_L2b']}",r['last_L2a'],r['last_L2b'],r['last_diff'],r['strata_L2a'],r['strata_L2b'],r['status'])))
@@ -41,7 +46,10 @@ def main():
     if a.selftest:
         import e52_insert as E;E.selftest();return
     nd=T.find_nat_dir(a.nat_dir);wa=NW.load_world(NF.world_path(nd,a.stream,'L2a'));wb=NW.load_world(NF.world_path(nd,a.stream,'L2b'))
-    rows,nfail,(na,nb)=table(wa,wb,enc);out=fmt(rows);print(out);print(f'tokenizer: {"REAL" if tk is not None else "PROXY"}; stream tokens L2a {na}, L2b {nb}; persons {len(rows)}; conditions L2a: '+str({c:sum(r["cond_L2a"]==c for r in rows) for c in ("C0","C1","C2")})+f'; FAIL rows {nfail}')
+    rows,nfail,(na,nb)=table(wa,wb,enc);out=fmt(rows);print(out)
+    for lay,w in (('L2a',wa),('L2b',wb)):print(f'{lay}: first-1024-token text sha256[:16] world A {first_chunk_sha(w,False,enc)}, world B {first_chunk_sha(w,True,enc)}; item counts per family {family_counts(w)}')
+    fa,fb=family_counts(wa),family_counts(wb);nfail+=int(fa!=fb or any(fa.get(k)!=60 for k in ('L3','XP','PS','FN','FP','FN0','FP0','L3r')));print('item counts equal in both layouts and 60 per family:',fa==fb)
+    print(f'tokenizer: {"REAL" if tk is not None else "PROXY"}; stream tokens L2a {na}, L2b {nb}; persons {len(rows)}; conditions L2a: '+str({c:sum(r["cond_L2a"]==c for r in rows) for c in ("C0","C1","C2")})+f'; FAIL rows {nfail}')
     if a.out:Path(a.out).write_text(out+'\n')
     sys.exit(1 if nfail else 0)
 if __name__=='__main__':main()

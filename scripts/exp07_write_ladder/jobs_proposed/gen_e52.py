@@ -3,13 +3,13 @@
 Usage: gen_e52.py --commit <40-hex> --sha-l2a <sha256> --sha-l2b <sha256>   (CPU only)"""
 import argparse,os,re
 from pathlib import Path
-ap=argparse.ArgumentParser();ap.add_argument('--commit',required=True);ap.add_argument('--sha-l2a',required=True);ap.add_argument('--sha-l2b',required=True);a=ap.parse_args()
+ap=argparse.ArgumentParser();ap.add_argument('--commit',required=True);ap.add_argument('--sha-l2a',required=True);ap.add_argument('--sha-l2b',required=True);ap.add_argument('--nat-dir',default='data/natural-text/worlds/e52',help='folder holding nat_9201_L2a.json / nat_9201_L2b.json (default for $NAT_DIR in the jobs; the files are read from there, never from the repo)');a=ap.parse_args()
 assert re.fullmatch(r'[0-9a-f]{40}',a.commit) and all(re.fullmatch(r'[0-9a-f]{64}',x) for x in (a.sha_l2a,a.sha_l2b)),'full 40-hex commit and 64-hex sha256 values required'
 D='scripts/exp07_write_ladder'
 FILES=' '.join(f'{D}/{f}' for f in ('nat_world.py','nat_filler.py','nat_pass.py','nat_ladder.py','nat_analyze.py','nat_dryrun.py','nat_signal.py','e51_nat_table.py','e52_table.py','e52_analyze.py'))
 COMMON=f'''set -e
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
-NAT_DIR=${{NAT_DIR:-data/natural-text/worlds/e52}}
+NAT_DIR=${{NAT_DIR:-{a.nat_dir}}}
 mkdir -p $OUT
 TOK=${{TOKENIZER_JSON:-data/tokenizer/llama3/tokenizer.json}}
 COMMIT={a.commit}
