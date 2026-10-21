@@ -125,17 +125,18 @@ def main():
     except Exception as e:print('real tokenizer not usable:',repr(e)[:100]);tk=None
     assert tk is not None or not a.require_real,'--require-real: no real tokenizer'
     print('tokenizer:','REAL' if tk else 'PROXY (logic test only; gaps are NOT final)')
-    w=NW.load_world(a.base);run(w,tk,a.out_dir,a.layouts.split(','),a.max_ntok)
+    assert a.base and Path(a.base).exists(),f'--base file not found: {a.base}';w=NW.load_world(a.base);run(w,tk,a.out_dir,a.layouts.split(','),a.max_ntok)
 def run(w,tk,out_dir,layouts,max_ntok=14):
     enc_len=ntok_fn(tk);ends=lambda text:[b for a_,b in T.encode_offs(tk,text)]
     text,_,spans=NW.realize(w,False);sp=NP.tok_spans(spans,ends(text));ei=[i for i,x in enumerate(w['texts']) if x['kind']=='expo'];assert len(ei)==len(sp)
     base_start={i:s['tok_start'] for i,s in zip(ei,sp)};bgs=[x['text'] for x in w['texts'] if x['kind']=='bg'];res={}
     lens={i:enc_len(w['texts'][i]['text']) for i in ei};pl=plan(w,lens,persons_of(w),base_start,max_ntok);rx0=NF.forbid_regex(w);print('background paragraphs with a forbidden string in the BASE world (same pool, property of the base):',sum(1 for b in bgs if rx0.search(b)),'of',len(bgs))
+    _,sm0,_=T.table_of(w,T.encode_offs(tk,text));print(f"O mask size (BASE {w.get('layout')}, all persons): sum O tokens {sm0['sum_O']}, chunks with O {sm0['chunks_with_O']}, eligible chunks {sm0['eligible_chunks']}, answer tokens {sm0['answer_tokens']}, sum s_cross {sm0['sum_s_cross']}, sum s_same {sm0['sum_s_same']}, sum n_out {sm0['sum_n_out']}")
     for lay in layouts:
         nw=relayout(w,lay,enc_len,bgs,base_start,max_ntok,lens,pl);rows,ok=gap_table(nw,tk,ends)
         before=sorted((x['t'],x['label'],x['text']) for x in w['texts'] if x['kind']=='expo');after=sorted((x['t'],x['label'],x['text']) for x in nw['texts'] if x['kind']=='expo');assert before==after,'exposure units changed'
         rx=NF.forbid_regex(nw);bad=sum(1 for x in nw['texts'] if x['kind']=='bg' and rx.search(x['text']))
-        r=nw['relayout'];print(f"## {lay}: P1 {r['P1']} P2 {r['P2']} skipped (do not fit C2) {r['skipped']}; bg paragraphs reused beyond the base pool: {r['bg_reused']}; forbidden strings in background: {bad}; last exposure end token <= {EXPO_END}: {max(x[6] for x in rows)<=EXPO_END}");print(fmt(rows));print('ALL PASS' if ok else 'SOME FAIL');res[lay]=ok
+        r=nw['relayout'];print(f"## {lay}: P1 {r['P1']} P2 {r['P2']} skipped (do not fit C2) {r['skipped']}; bg paragraphs reused beyond the base pool: {r['bg_reused']}; forbidden strings in background: {bad}; last exposure end token <= {EXPO_END}: {max(x[6] for x in rows)<=EXPO_END}");print(fmt(rows));print('ALL PASS' if ok else 'SOME FAIL');res[lay]=ok;_,sm,_=T.table_of(nw,T.encode_offs(tk,NW.realize(nw,False)[0]));print(f"O mask size ({lay}, all persons): sum O tokens {sm['sum_O']}, chunks with O {sm['chunks_with_O']}, eligible chunks {sm['eligible_chunks']}, answer tokens {sm['answer_tokens']}, sum s_cross {sm['sum_s_cross']}, sum s_same {sm['sum_s_same']}, sum n_out {sm['sum_n_out']}")
         if out_dir:
             Path(out_dir).mkdir(parents=True,exist_ok=True);p=Path(out_dir)/f"nat_{w['seed']}_{lay}.json";p.write_text(json.dumps(nw,ensure_ascii=False));print('wrote',p)
     return res

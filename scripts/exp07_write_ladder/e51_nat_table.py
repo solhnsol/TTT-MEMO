@@ -36,6 +36,13 @@ def table_of(w,offs,ntok=None):
 def fmt_row(label,s):
     return f"| {label} | {s['persons']} | {s['one_time']} | {s['sum_s_cross']} | {s['sum_s_same']} | {s['sum_n_out']} | {s['name_only_units']} | {s['persons_with_name_only_in_win']} | {s['chunks_with_fact']} | {s['chunks_with_O']} | {s['eligible_chunks']} | {s['sum_O']} | {s['mean_O_per_chunk_with_O']:.0f} | {s['answer_tokens']} |"
 HDR="| stream:layout | persons | one-time persons | sum s_cross | sum s_same | sum n_out | name-only units | persons w/ name-only in 8K before a fact | chunks w/ fact | chunks w/ O | eligible | sum O tokens | O per chunk | answer tokens |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+def find_nat_dir(given=None):
+    """--nat-dir, else $NAT_DIR, else the first existing of: /mnt/project-files/data/natural-text/worlds, ~/workspace/TTT-MEMO/data/natural-text/worlds, <repo>/data/natural-text/worlds"""
+    if given and not Path(given).is_dir():sys.exit(f'e51_nat_table: --nat-dir {given} is not a directory')
+    c=[given,os.environ.get('NAT_DIR'),'/mnt/project-files/data/natural-text/worlds',str(Path.home()/'workspace/TTT-MEMO/data/natural-text/worlds'),str(HERE.parents[1]/'data/natural-text/worlds')]
+    for x in c:
+        if x and Path(x).is_dir():return x
+    sys.exit('e51_nat_table: no natural-text worlds directory found (tried '+', '.join(str(x) for x in c if x)+'); pass --nat-dir')
 def encode_offs(tk,text):
     if tk is not None:return list(tk.encode(text,add_special_tokens=False).offsets)
     import nat_dryrun as D
@@ -58,7 +65,7 @@ def selftest():
     assert r0['name_only_in_win']==1,r0
     print(HDR);print(fmt_row('selftest',s));print('e51_nat_table SELFTEST OK')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--nat',default='9103:clustered,9103:spread');ap.add_argument('--nat-dir',default=os.environ.get('NAT_DIR','/mnt/project-files/data/natural-text/worlds'));ap.add_argument('--tokenizer-file',default=None)
+    ap=argparse.ArgumentParser();ap.add_argument('--nat',default='9103:clustered,9103:spread');ap.add_argument('--nat-dir',default=None);ap.add_argument('--tokenizer-file',default=None)
     ap.add_argument('--require-real',action='store_true');ap.add_argument('--persons',action='store_true');ap.add_argument('--out-dir',default=None);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     import nat_dryrun as D
@@ -66,15 +73,17 @@ def main():
     except Exception as e:print('real tokenizer not usable:',repr(e)[:100]);tk=None
     assert tk is not None or not a.require_real,'--require-real: no real tokenizer'
     kind='REAL tokenizer' if tk is not None else 'PROXY tokenizer (geometry only, numbers are NOT final)';print('tokenizer:',kind);out=[];allrows={}
+    nat_dir=find_nat_dir(a.nat_dir);print('nat-dir:',nat_dir);missing=[]
     for item in a.nat.split(','):
         stream,layout=item.split(':')
         import nat_filler as NF
-        p=NF.world_path(a.nat_dir,int(stream),layout)
-        if not Path(p).exists():print('missing',p);continue
+        p=NF.world_path(nat_dir,int(stream),layout)
+        if not Path(p).exists():print('MISSING',p);missing.append(str(p));continue
         w=NW.load_world(p);offs=encode_offs(tk,NW.realize(w,False)[0]);rows,s,ch=table_of(w,offs);allrows[item]=dict(summary=s,persons=rows,chunks=ch);out.append(fmt_row(item,s))
         if a.persons:
             print(f'## {item} per person');print('| t | n_fact | s_cross | s_same | n_out | name-only units | name-only in 8K | one-time |\n|---|---|---|---|---|---|---|---|')
             for r in rows:print(f"| {r['t']} | {r['n_fact']} | {r['s_cross']} | {r['s_same']} | {r['n_out']} | {r['n_name_only']} | {r['name_only_in_win']} | {int(r['one_time'])} |")
+    if missing or not out:sys.exit(f'e51_nat_table: FAILED, missing world files {missing}; rows produced {len(out)}')
     print(HDR);print('\n'.join(out))
     if a.out_dir:
         Path(a.out_dir).mkdir(parents=True,exist_ok=True);(Path(a.out_dir)/'e51_nat_table.json').write_text(json.dumps(dict(tokenizer=kind,streams=allrows),indent=1));print('wrote',a.out_dir)
