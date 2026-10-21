@@ -6,7 +6,7 @@ Two layouts L2a / L2b (written as nat_<stream-id>_L2a.json / _L2b.json, readable
 Background: the base stream's own paragraphs (nothing reused) plus as many paragraphs of the other NON-SEALED pool streams as the target length needs (filters: forbidden strings of the new world, exact duplicates, canary 8-grams). Token bookkeeping uses the separator cost calibrated on the base world (nat_relayout.calibrate_sep).
 Built-in checks (exit 3 on failure): conditions per pair (gaps, chunk alignment, last-exposure equality), identical exposure multiset and background in both layouts, no duplicate paragraph, forbidden strings 0, NW.build_items works, then the filler audit of e51_relayout_audit (paragraph-level pools, passes --passes, default 2).
 No GPU. Usage: e52_insert.py --nat-dir DIR --out-dir OUT [--base-nat 9105:spread] [--pool-streams 9101,9103,9104] [--stream-id 9201] [--occ-dev2 a,b,c|FILE] [--tokenizer-file F] [--require-real] [--passes 2]   |   --selftest"""
-import os,sys,re,json,copy,random,argparse,tempfile,shutil
+import hashlib,os,sys,re,json,copy,random,argparse,tempfile,shutil
 from pathlib import Path
 import numpy as np
 HERE=Path(__file__).resolve().parent;GW=HERE.parents[0]/'exp04_what_ttt_retains';sys.path.insert(0,str(GW));sys.path.insert(0,str(HERE))
@@ -102,6 +102,16 @@ def merge_even(own,extra):
         out.append(t)
         if i in pos:out.append(extra[pos[i]])
     used=set(pos.values());out+=[extra[j] for j in range(n) if j not in used];return out
+def pool_use(pool,slot_tok,enc_len,slack=8):
+    """replicates the consumption of nat_pass.build_pass_stream_matched: slots in stream order take consecutive pool paragraphs until n + slack tokens are covered (the last one is cut, the rest of it is lost); returns (paragraphs used or None when exhausted, token share used)"""
+    pl=[enc_len(t)+1 for t in pool];cur=0;used=0
+    for n in slot_tok:
+        acc=0
+        while True:
+            if cur>=len(pl):return None,None
+            acc+=pl[cur];used+=pl[cur];cur+=1
+            if acc>=n+slack:break
+    return cur,used/sum(pl)
 def verify(nw_a,nw_b,tk,cond_a,cond_b,plan):
     """token-level checks on the realized streams; returns (ok, report lines)"""
     ok=True;L=[];tabs={}
@@ -141,33 +151,44 @@ def run(base,pool_ws,tk,G,FB,D2,H,out_dir,stream_id,occ_dev2,seed,passes,nat_dir
     for nw,cd in ((nw_a,cond_a),(nw_b,cond_b)):
         nw['insert']=dict(cond={str(p):c for p,c in cd.items()},last_exposure_T={str(p):int(plan[p]['T']) for p in plan},n_flip=n_flip,n_c0=n_c0,bank_seed='E52dev2',name_class_tokens=dict(person=Lp,place=Ll),occ_dev2=list(occ_dev2),separator_cost=SEP,bg_own=len(own),bg_extra=len(extras))
     ok,rep=verify(nw_a,nw_b,tk,cond_a,cond_b,plan);print('\n'.join(rep))
-    if out_dir:
-        Path(out_dir).mkdir(parents=True,exist_ok=True)
-        for nw in (nw_a,nw_b):p=Path(out_dir)/f"nat_{stream_id}_{nw['layout']}.json";p.write_text(json.dumps(nw,ensure_ascii=False));print('wrote',p)
     if audit_pool_streams is not None and nat_dir_for_audit:
         import e51_relayout_audit as AU
-        tmp=tempfile.mkdtemp()
+        tmp=tempfile.mkdtemp();fp={}
         try:
             for lay,nw in (('L2a',nw_a),('L2b',nw_b)):
                 (Path(tmp)/f'nat_{stream_id}_{lay}.json').write_text(json.dumps(nw,ensure_ascii=False))
                 for st in audit_pool_streams:os.symlink(NF.world_path(nat_dir_for_audit,st,'spread').resolve(),NF.world_path(tmp,st,lay))
             for lay in ('L2a','L2b'):
-                r=AU.audit_one(tmp,stream_id,lay,passes,mode='para');ok&=r['ok'];print(f"filler audit {lay} (passes {passes}): {'PASS' if r['ok'] else 'FAIL'} own_duplicates {r.get('own_duplicates')} char ratio per pass {r.get('char_ratio_per_pass')} {r.get('error','')}")
+                r=AU.audit_one(tmp,stream_id,lay,passes,mode='para');ok&=r['ok']
+                if r['ok']:pl,_=AU.select_para(tmp,stream_id,passes,lay,NF.canary_grams() or None);fp[lay]={str(k):v for k,v in pl.items()}
+                print(f"filler audit {lay} (passes {passes}): {'PASS' if r['ok'] else 'FAIL'} own_duplicates {r.get('own_duplicates')} char ratio per pass {r.get('char_ratio_per_pass')} {r.get('error','')}")
+            if len(fp)==2:
+                slot_tok=[enc_len(x['text']) for x in nw_a['texts'] if x['kind']=='bg']
+                for ps,v in fp['L2a'].items():
+                    k,sh=pool_use(v,slot_tok,enc_len);print(f'pass {ps} pool: {len(v)} paragraphs, matched builder consumption: '+(f'{k} paragraphs = {sh:.0%} of the pool' if k else 'EXHAUSTED (the dry run would fail)'));ok&=bool(k) and sh<=0.95
+                assert fp['L2a']==fp['L2b'],'the pass pools of the two layouts differ'
+                for nw in (nw_a,nw_b):nw['filler_pools']=fp['L2a'];nw['insert']['filler_pools_note']='pass pools embedded (paragraph-level, non-sealed streams, 1.2x char rule); nat_filler.select returns them instead of selecting from nat-dir'
         finally:shutil.rmtree(tmp,ignore_errors=True)
+    if out_dir:
+        Path(out_dir).mkdir(parents=True,exist_ok=True)
+        for nw in (nw_a,nw_b):p=Path(out_dir)/f"nat_{stream_id}_{nw['layout']}.json";p.write_text(json.dumps(nw,ensure_ascii=False));print('wrote',p,'sha256',hashlib.sha256(p.read_bytes()).hexdigest()[:16],'filler pools embedded:',bool(nw.get('filler_pools')))
     print('E52 INSERT',('ALL CHECKS PASS' if ok else 'CHECKS FAILED'));return ok,nw_a,nw_b
 def selftest():
     G=PA.import_gw(True);import frame_bank as FB,frame_pools_dev2 as D2,frame_pools_hold as H
-    rng=random.Random(0);V=[f'w{i}' for i in range(20000)];mk=lambda:' '.join(rng.choice(V) for _ in range(90))
+    rng=random.Random(0);V=[f'w{i}' for i in range(20000)];mk=lambda:' '.join(rng.choice(V) for _ in range(rng.randint(40,160)))   # variable paragraph lengths (the matched builder wastes the cut remainder of a paragraph)
     def stream(seed,n):
         tri=[{'id':i,'pair':f'p{i//2}','X':f'N{seed}{i} Z{seed}{i}','XF':f'N{seed}{i}','XS':f'Z{seed}{i}','P':f'T{seed}{i}','Q':None,'E':None} for i in range(2)]
         t=[{'kind':'bg','text':mk()} for _ in range(n)];t.insert(30,{'kind':'expo','t':0,'round':1,'label':'fact','text':f'@X0@ was born in T{seed}0.'});t.insert(200,{'kind':'expo','t':1,'round':1,'label':'fact','text':f'@X1@ was born in T{seed}1.'})
         return {'seed':seed,'layout':'spread','triples':tri,'texts':t,'ctrl_persons':[f'C{seed}'],'ctrl_places':[f'Cv{seed}'],'pseudo_persons':[f'P{seed}'],'pseudo_places':[f'Pv{seed}'],'pairs':1,'frames':{}}
-    base=stream(9105,430);pools=[stream(s,430) for s in (9101,9103,9104)];tmp=Path(tempfile.mkdtemp())
+    base=stream(9105,430);pools=[stream(s,430) for s in (9101,9103,9104)]+[stream(9107,430)];tmp=Path(tempfile.mkdtemp())
     for w in [base]+pools:json.dump(w,open(tmp/f"nat_{w['seed']}_spread.json",'w'))
     occ2=D2.DEV2_OCC_CANDS[:30]
-    ok,a,b=run(base,pools,None,G,FB,D2,H,None,9201,occ2,52,2,nat_dir_for_audit=tmp,audit_pool_streams=[9101,9103,9104,9105])
+    ok,a,b=run(base,pools,None,G,FB,D2,H,None,9201,occ2,52,2,nat_dir_for_audit=tmp,audit_pool_streams=[9101,9103,9104,9105,9107])
     assert ok
     ca=a['insert']['cond'];cb=b['insert']['cond'];assert sum(c=='C0' for c in ca.values())==6 and sum(1 for p in ca if ca[p]=='C1')==12 and all(cb[p]==({'C1':'C2','C2':'C1'}.get(ca[p],'C0')) for p in ca)
+    for nw in (a,b):json.dump(nw,open(tmp/f"nat_9201_{nw['layout']}.json",'w'),ensure_ascii=False)
+    pl,info=NF.select(tmp,9201,2,'L2a');assert pl[2]==a['filler_pools']['2'] and info['origin_streams'][2]==['embedded'],'embedded pools are not returned by nat_filler.select'
+    print('nat_filler.select returns the embedded pass pool:',len(pl[2]),'paragraphs; tmp world dir for the dry run test:',tmp)
     print('e52_insert SELFTEST OK (proxy tokenizer, fake gen_world tokenizer, synthetic base)')
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--nat-dir',default=None);ap.add_argument('--out-dir');ap.add_argument('--base-nat',default='9105:spread');ap.add_argument('--pool-streams',default='9101,9103,9104');ap.add_argument('--stream-id',type=int,default=9201)
