@@ -190,16 +190,22 @@ class Sets:
         if getattr(self,'_hp',None) is None:self._hp={}
         if pair not in self._hp:self._hp[pair]=half_person_of(self.seed,pair,{u['t'] for u in self.t if u['pair']==pair})
         return self._hp[pair]
-    def k3hmask(self,k):
-        """E47 k3h: K3 restricted to the fact sentences of the masked person of each pair: for every fact sentence s of the chunk whose triple is half_person(its pair): the tokens of the earlier-round same-triple sentences inside [window start, s's place token) (this contains the O tokens of s). The partner's earlier exposures stay visible, a chunk that holds only the unmasked person's fact sentence of a pair masks nothing for that pair (single-person chunk, e.g. a pair split by the chunk border). Chunks without O mask nothing (also when only unmasked persons are present)."""
+    def _k3half(self,k,comp):
+        """K3 share of one person per pair: comp=False -> the masked person of k3h (half_person), comp=True -> the OTHER triple of each pair (the complement cell k3hc). For every fact sentence s of the chunk whose triple is the chosen person of its pair: the tokens of the earlier-round same-triple sentences inside [window start, s's place token), in-chunk ones included, the current round excluded. Chunks without O mask nothing. k3h and k3hc are disjoint (tokens are owned by one sentence) and their union is K3 (sentencecover) exactly."""
         if not self.oracle(k):return []
         lo=max(0,k*CH-W);S=set()
         for s in self.cur_sentences(k):
-            if s['t']!=self.half_person(s['pair']):continue
+            if (s['t']==self.half_person(s['pair']))==comp:continue
             lim=s['place'][0]
             for u in self.t:
                 if u['t']==s['t'] and u['round']<s['round']:S|={p for p in u['toks'] if lo<=p<lim}
         return sorted(S)
+    def k3hmask(self,k):
+        """E47 k3h: K3 restricted to the fact sentences of the masked person of each pair (see _k3half). The partner's earlier exposures stay visible; a chunk that holds only the unmasked person's fact sentence of a pair masks nothing for that pair."""
+        return self._k3half(k,False)
+    def k3hcmask(self,k):
+        """E47 k3hc: the complement of k3h: the K3 share of the OTHER person of each pair (the one half_person_of did not choose)."""
+        return self._k3half(k,True)
     def k3r_chunks(self):
         """E47 k3r: the chunks that get K3: round(n/2) of the n chunks with O, drawn without replacement (seeded by (seed, pass, 'k3r')); the other O chunks mask nothing."""
         if getattr(self,'_k3r',None) is None:
@@ -344,6 +350,7 @@ class Sets:
         if cell=='noo':return self.noomask(k),1.0
         if cell=='op':return self.opmask(k),1.0
         if cell=='k3h':return self.k3hmask(k),1.0
+        if cell=='k3hc':return self.k3hcmask(k),1.0
         if cell=='k3r':return self.k3rmask(k),1.0
         if cell=='k3all':return self.k3allmask(k),1.0
         if cell=='kp':return self.kpmask(k),1.0

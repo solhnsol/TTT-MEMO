@@ -1,4 +1,4 @@
-"""E47 mask dump (CPU only; server: gen_world, suppress, tokenizer): for chosen chunks with an oracle set, the sentences of the chunk's pairs (every round that lies in [window start, chunk end)) printed as text, with the tokens masked by each cell marked by [[ ]]: cells K3 (Sets.sentencecover), k3h (Sets.k3hmask, only the masked person of each pair; the rule of half_person_of(seed, pair, triples)), k3all (Sets.k3all_parts: every earlier-round token of both persons, the current round excluded). Each sentence line: sentence index, role (WRITE = a fact sentence of the chunk, earlier round / same round, other person / later), person, round, token range, whether it lies in the window or in the chunk, and the rendering per cell. Masked text is shown token by token (a token is one tokenizer piece incl. its leading space); adjacent masked tokens are merged.
+"""E47 mask dump (CPU only; server: gen_world, suppress, tokenizer): for chosen chunks with an oracle set, the sentences of the chunk's pairs (every round that lies in [window start, chunk end)) printed as text, with the tokens masked by each cell marked by [[ ]]: cells K3 (Sets.sentencecover), k3hc (the complement of k3h: the OTHER person of each pair), k3h (Sets.k3hmask, only the masked person of each pair; the rule of half_person_of(seed, pair, triples)), k3all (Sets.k3all_parts: every earlier-round token of both persons, the current round excluded). Each sentence line: sentence index, role (WRITE = a fact sentence of the chunk, earlier round / same round, other person / later), person, round, token range, whether it lies in the window or in the chunk, and the rendering per cell. Masked text is shown token by token (a token is one tokenizer piece incl. its leading space); adjacent masked tokens are merged.
 Usage: e47_dump.py --seed 101 --world A --pass 2 [--chunks 12,30,41 | --auto 3] --out dump.txt   |   --selftest
 --auto n picks n chunks with O in this order of preference: (1) a pair with both persons' fact sentences in the chunk and an earlier round of both inside the window, (2) a pair whose partner has no fact sentence in the chunk (split pair) if one exists, (3) the next chunk with the most earlier-round sentences."""
 import sys,re,argparse
@@ -34,7 +34,7 @@ def pick(sets,n):
         if k not in chosen:chosen.append(k)
     return chosen[:n]
 def dump_chunk(sets,k,text,offs,spans,seed):
-    lo=max(0,k*CH-W);k0=k*CH;cur=sets.cur_sentences(k);curidx={s['idx'] for s in cur};K3=set(sets.sentencecover(k));H=set(sets.k3hmask(k));A,st=sets.k3all_parts(k);A=set(A);L=[f'=== chunk {k}: positions {k0}..{k0+CH-1}, window start {lo}; fact (WRITE) sentences {sorted(curidx)}; |K3|={len(K3)} |k3h|={len(H)} |k3all|={len(A)}; k3all stats {st}']
+    lo=max(0,k*CH-W);k0=k*CH;cur=sets.cur_sentences(k);curidx={s['idx'] for s in cur};K3=set(sets.sentencecover(k));H=set(sets.k3hmask(k));HC=set(sets.k3hcmask(k));A,st=sets.k3all_parts(k);A=set(A);L=[f'=== chunk {k}: positions {k0}..{k0+CH-1}, window start {lo}; fact (WRITE) sentences {sorted(curidx)}; |K3|={len(K3)} |k3h|={len(H)} |k3hc|={len(HC)} |k3all|={len(A)}; k3all stats {st}']
     pairs=sorted({s['pair'] for s in cur})
     for pr in pairs:
         ts=sorted({u['t'] for u in sets.t if u['pair']==pr});L.append(f'--- pair {pr}: persons {ts}; masked person of k3h = {sets.half_person(pr)}')
@@ -44,7 +44,7 @@ def dump_chunk(sets,k,text,offs,spans,seed):
             where='in chunk' if u['place'][0]>=k0 else 'in window'
             sp=spans[u['idx']];e=sp['end'] if 'end' in sp else sp['start']+len(sp['text'])
             L.append(f"  [{u['idx']}] {role}; person {u['t']} round {u['round']}; tokens {u['toks'][0]}..{u['toks'][-1]} ({where})")
-            for nm,M in (('K3   ',K3),('k3h  ',H),('k3all',A)):L.append(f"      {nm}: {render(text,offs,u['toks'],M,sp['start'],e)}")
+            for nm,M in (('K3   ',K3),('k3h  ',H),('k3hc ',HC),('k3all',A)):L.append(f"      {nm}: {render(text,offs,u['toks'],M,sp['start'],e)}")
     return '\n'.join(L)+'\n'
 def run(a):
     import e42_k2_tokens as K2
@@ -64,7 +64,7 @@ def selftest():
     words=[f'w{i}' for i in range(8300)];txt=' '.join(words);of=[(0,0)];p=0
     for w_ in words:of.append((p,p+len(w_)));p+=len(w_)+1
     sp=[{'start':of[u['toks'][0]][0],'end':of[u['toks'][-1]][1],'text':''} for u in sorted(tb,key=lambda u:u['idx'])]
-    dc=dump_chunk(sets,5,txt,of,sp,101);assert 'WRITE' in dc and 'earlier round' in dc and '[[' in dc and dc.count('k3all')>=8,dc[:400]
+    dc=dump_chunk(sets,5,txt,of,sp,101);assert 'WRITE' in dc and 'earlier round' in dc and '[[' in dc and dc.count('k3hc')>=6,dc[:400]
     print('e47_dump SELFTEST OK: render marks and merges masked tokens; pick chooses a pair-in-chunk chunk first',pick(sets,3))
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int,default=101);ap.add_argument('--world',default='A');ap.add_argument('--pass',dest='passno',type=int,default=2);ap.add_argument('--chunks',default=None);ap.add_argument('--auto',type=int,default=3);ap.add_argument('--out',default='/tmp/e47_dump.txt');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
