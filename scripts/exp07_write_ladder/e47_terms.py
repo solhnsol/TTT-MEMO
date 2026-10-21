@@ -44,6 +44,15 @@ def beta_table(T):
         assert abs(E[p]['D_a(a)']-E[p]['D_a(b)']-(b['A']-b['B']))<1e-9,(p,E[p],b)
         R[p]={'beta_A':b['A'],'beta_B':b['B'],'D_sum':ident,'D_diff':b['A']-b['B']}
     return R
+def abs_table(T):
+    """E49 (iii) and 2-candidate accuracy per pair from the raw terms. For an item the world-A bound place is its gold and the world-B bound place is its foil (the names are swapped in B), so  bound = [lp(gold|A) + lp(foil|B)]/2, unbound = [lp(foil|A) + lp(gold|B)]/2 (the log-prob of the place that is / is not bound to the person in that world, averaged over the two worlds; bound - unbound = the item's (A-B)/2 margin);  accuracy = [(margin_A > 0) + (margin_B < 0)]/2 = share of the two worlds in which the readout prefers the bound place of the two candidates (the formula of nat_analyze); both items of a pair are averaged. xbase = mean over the pair's XP items and both worlds of the two place log-probs (a binding-free reference: a shift of it is a general shift of place log-probs, not binding)."""
+    R={}
+    for p,d in T.items():
+        its={'a':('s(Pa|a)','s(Pb|a)'),'b':('s(Pb|b)','s(Pa|b)')};bo=[];un=[];ac=[]
+        for g,f in its.values():
+            bo.append((d[g]['A']+d[f]['B'])/2);un.append((d[f]['A']+d[g]['B'])/2);ac.append(((d[g]['A']-d[f]['A']>0)+(d[g]['B']-d[f]['B']<0))/2)
+        R[p]={'bound':float(np.mean(bo)),'unbound':float(np.mean(un)),'acc':float(np.mean(ac)),'xbase':float((d['xg']['A']+d['xf']['A']+d['xg']['B']+d['xf']['B'])/4)}
+    return R
 def analyse(od,cells,seed,epochs,ref,compare=()):
     rng=np.random.default_rng(54);md=['# E47 log-prob terms behind the binding margin (CPU)\n','t(term) = (term in world A - term in world B)/2 of the SUMMED log-prob of the answer span; a = k3h masked person, b = partner; D_a(a) = [t(Pa|a)-t(Pb|a)] - [t(xg)-t(xf)], D_a(b) = [t(Pb|b)-t(Pa|b)] - [t(xg)-t(xf)] (pair D_alt = their mean). 15 pairs, bootstrap 95% CI over pairs.\n'];res={'seed':seed,'epochs':{}};cols=list(TERMS)+['D_a(a)','D_a(b)']
     for ep in epochs:
@@ -58,7 +67,7 @@ def analyse(od,cells,seed,epochs,ref,compare=()):
             except FileNotFoundError as e:md.append(f'- {c}: missing ({Path(str(e.filename)).name})')
             except KeyError as e:md.append(f'- {c}: {e.args[0]}')
             except ValueError as e:md.append(f'- {c}: {e}')
-        R={'cells':{},'change':{},'beta':{}}
+        R={'cells':{},'change':{},'beta':{},'abs':{}}
         md+=['| cell | '+' | '.join(cols)+' |','|---|'+'---|'*len(cols)]
         for c,e in eff.items():
             ps=sorted(e,key=lambda p:TD._num(p,'p'));R['cells'][c]={k:TD.boot([e[p][k] for p in ps],rng) for k in cols};md.append(f'| {c} | '+' | '.join(f"{R['cells'][c][k][0]:+.3f}" for k in cols)+' |')
@@ -69,6 +78,15 @@ def analyse(od,cells,seed,epochs,ref,compare=()):
         for c,T in raw.items():
             bt=beta_table(T);ps=sorted(bt,key=lambda p:TD._num(p,'p'));v=lambda k:np.asarray([bt[p][k] for p in ps]);R['beta'][c]={'beta_A':float(v('beta_A').mean()),'beta_B':float(v('beta_B').mean()),'abs_beta_A':float(np.abs(v('beta_A')).mean()),'abs_beta_B':float(np.abs(v('beta_B')).mean()),'D_diff':float(v('D_diff').mean()),'abs_D_diff':float(np.abs(v('D_diff')).mean()),'D_sum':float(v('D_sum').mean()),'per_pair':bt}
             x=R['beta'][c];md.append(f"| {c} | {x['beta_A']:+.3f} | {x['beta_B']:+.3f} | {x['abs_beta_A']:.3f} | {x['abs_beta_B']:.3f} | {x['D_diff']:+.3f} | {x['abs_D_diff']:.3f} | {x['D_sum']:+.3f} |")
+        ab={c:abs_table(T) for c,T in raw.items()};md+=['\n### E49: absolute log-prob of the bound / unbound place and 2-candidate accuracy (L3 items, alt readout; 15 pairs, bootstrap 95% CI over pairs)\n','bound = log-prob of the place bound to the person in that world (world A: gold, world B: foil), averaged over A and B; unbound = the other candidate; acc = share of (item, world) cases in which the bound place of the two candidates is preferred (chance 0.5); xbase = mean place log-prob of the binding-free XP items (a shift of it is not binding).\n','| cell | mean bound lp [CI] | mean unbound lp [CI] | 2-cand accuracy [CI] | xbase |','|---|---|---|---|---|']
+        for c,t in ab.items():
+            ps=sorted(t,key=lambda p:TD._num(p,'p'));v=lambda k:[t[p][k] for p in ps];R['abs'][c]={k:TD.boot(v(k),rng) for k in ('bound','unbound','acc','xbase')};x=R['abs'][c];md.append(f"| {c} | {TD.f3(x['bound'])} | {TD.f3(x['unbound'])} | {x['acc'][0]:.3f} [{x['acc'][1]:.3f},{x['acc'][2]:.3f}] | {x['xbase'][0]:+.3f} |")
+        if ref in ab:
+            md+=[f'\nChange from `{ref}` (cell - {ref}): delta bound, delta unbound, delta XP base (general place shift), delta bound net of the XP shift, delta accuracy; mean [95% CI] over pairs. Pre-registered reading (E49): a change counts only if the CI excludes 0 and |delta| >= 0.2 nats (accuracy: >= 0.10).\n','| cell | delta bound | delta unbound | delta xbase | delta bound - delta xbase | delta accuracy |','|---|---|---|---|---|---|'];R['abs_change']=R.get('abs_change',{})
+            for c,t in ab.items():
+                if c==ref:continue
+                ps=sorted(t,key=lambda p:TD._num(p,'p'));d=lambda k:[t[p][k]-ab[ref][p][k] for p in ps];ch={'bound':TD.boot(d('bound'),rng),'unbound':TD.boot(d('unbound'),rng),'xbase':TD.boot(d('xbase'),rng),'bound_net':TD.boot([t[p]['bound']-ab[ref][p]['bound']-(t[p]['xbase']-ab[ref][p]['xbase']) for p in ps],rng),'acc':TD.boot(d('acc'),rng)};R['abs_change'][c]=ch
+                md.append(f"| {c} | {TD.f3(ch['bound'])} | {TD.f3(ch['unbound'])} | {TD.f3(ch['xbase'])} | {TD.f3(ch['bound_net'])} | {TD.f3(ch['acc'])} |")
         for pair in compare:
             c1,c2=pair.split('=')
             try:
@@ -103,6 +121,7 @@ def selftest():
     # k3: t(Pa|a) = ((-2-0)-(-3))/2... check by hand: gold_a A=-2, B=-3 -> t=+0.5 ; foil_a A=-3, B=-2 -> t=-0.5 ; D_a(a)=0.5+0.5-(0.25-(-0.25)=0 : xg 0, xf 0)=1.0
     c=R['cells']['k3'];assert abs(c['s(Pa|a)'][0]-0.5)<1e-9 and abs(c['s(Pb|a)'][0]+0.5)<1e-9 and abs(c['D_a(a)'][0]-1.0)<1e-9 and abs(c['xg'][0])<1e-9,c
     ch=R['change']['k3h'];assert abs(ch['s(Pa|a)'][0]-0.25)<1e-9 and abs(ch['s(Pb|a)'][0])<1e-9 and abs(ch['D_a(a)'][0]-0.25)<1e-9 and abs(ch['s(Pb|b)'][0]+0.15)<1e-9 and abs(ch['D_a(b)'][0]+0.15)<1e-9,ch   # sa=-0.5 raises t(Pa|a) by 0.25, sb=+0.3 lowers t(Pb|b) by 0.15
+    A_=R['abs']['k3'];assert abs(A_['bound'][0]+2.375)<1e-9 and abs(A_['unbound'][0]+3.125)<1e-9 and abs(A_['acc'][0]-0.75)<1e-9 and abs(A_['xbase'][0]+4.25)<1e-9,A_   # hand-computed from the synthetic k3 cell (a item: bound -2 / unbound -3 / acc 1; b item: -2.75 / -3.25 / 0.5)
     assert 'old: no gold/foil stored' in md and 'nofile: missing' in md
     import shutil
     for w in 'AB':shutil.copy(td/f'S3_k3_s{seed}_{w}.json',td/f'S3_k3_s{seed}_{w}.regold.json')
