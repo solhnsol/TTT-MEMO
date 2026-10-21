@@ -206,6 +206,23 @@ class Sets:
             oc=[k for k in range(63) if self.oracle(k)];n=int(round(len(oc)/2));self._k3r=set(random.Random(f'{self.seed}|{self.passno}|k3r').sample(oc,n))
         return self._k3r
     def k3rmask(self,k):return self.sentencecover(k) if k in self.k3r_chunks() else []
+    def k3all_parts(self,k):
+        """E47 k3all: (S, stats). Chunks WITH an oracle set: for every fact sentence s of the chunk, EVERY token of every EARLIER-round sentence (round < the round of s) of BOTH persons of the pair of s, wherever it lies: the whole chunk included (no cut at s's place token), partner inside or outside the chunk; the current round (the sentence s itself and the other person's sentence of the same round, written / measured now) is excluded. Only positions >= the window start (k*1024 - 8192) are returned (the write forward cannot attend to earlier keys, masking them changes nothing); stats counts what lies outside: out_window (tokens before the window start of those sentences), partner_not_in_chunk (partner triple has no fact sentence in the chunk: tokens kept in S), same_round_partner_excluded (tokens of the other person's same-round sentences inside the window that are NOT masked here although K3b may mask them). Chunks without O: ([], zeros)."""
+        z={'out_window':0,'partner_not_in_chunk':0,'same_round_partner_excluded':0}
+        if not self.oracle(k):return [],z
+        lo=max(0,k*CH-W);cur=self.cur_sentences(k);ts={s['t'] for s in cur};S=set();out=set();pnc=set();sr=set()
+        for s in cur:
+            for u in self.t:
+                if u['pair']!=s['pair']:continue
+                if u['round']<s['round']:
+                    for p in u['toks']:
+                        if p>=lo:
+                            S.add(p)
+                            if u['t']!=s['t'] and u['t'] not in ts:pnc.add(p)
+                        else:out.add(p)
+                elif u['round']==s['round'] and u['t']!=s['t'] and u['idx']!=s['idx']:sr|={p for p in u['toks'] if lo<=p<k*CH+CH}
+        sr-=S;return sorted(S),{'out_window':len(out),'partner_not_in_chunk':len(pnc),'same_round_partner_excluded':len(sr)}
+    def k3allmask(self,k):return self.k3all_parts(k)[0]
     def kxmask(self,k):return self._k3_plus(k,self.pxsplit(k)[1])
     def kpumask(self,k):return self._k3_plus(k,self.pxsplit(k)[0],True)
     def kxumask(self,k):return self._k3_plus(k,self.pxsplit(k)[1],True)
@@ -328,6 +345,7 @@ class Sets:
         if cell=='op':return self.opmask(k),1.0
         if cell=='k3h':return self.k3hmask(k),1.0
         if cell=='k3r':return self.k3rmask(k),1.0
+        if cell=='k3all':return self.k3allmask(k),1.0
         if cell=='kp':return self.kpmask(k),1.0
         if cell=='kx':return self.kxmask(k),1.0
         if cell=='kp_u':return self.kpumask(k),1.0
