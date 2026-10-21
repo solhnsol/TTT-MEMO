@@ -13,10 +13,11 @@ import nat_world as NW,nat_pass as NP,nat_filler as NF,nat_signal as NS
 import e51_nat_table as T
 CH=1024;NCH=63;EXPO_END=53*CH;MARGIN=600;WIN=8192
 DRIFT_UP=60;DRIFT_DN=450;C2_NO_GAP=9800;C1_T=3500;C2_T=12800;C1_MAX=4096;C2_MIN=12288
+LEN_SCALE=float(os.environ.get('E51_LEN_SCALE','1'))   # test hook: scale the PROXY token counts (real tokenizers give ~1.2-1.3x the proxy counts)
 def ntok_fn(tk):
     if tk is not None:return lambda s:len(tk.encode(s,add_special_tokens=False).ids)
     import nat_dryrun as D
-    px=D.Proxy();return lambda s:len(px.encode(s)[0])
+    px=D.Proxy();return lambda s:int(round(len(px.encode(s)[0])*LEN_SCALE))
 def persons_of(w):
     c={}
     for i,x in enumerate(w['texts']):
@@ -57,7 +58,7 @@ def align_c1(w,idx,st,lens):
             X=((st[c]-DRIFT_DN)//CH)*CH;d=max(0,st[c-1]+lens[idx[c-1]]+2-(X-550))
             for m in range(c):st[m]-=d
     return st
-def abs_times(w,idx,cond,lens,T,align=True):
+def abs_times(w,idx,cond,lens,T,align=True):   # align = apply the C1 chunk alignment
     st,_=timeline(w,idx,cond,lens,0);off=T-st[-1];st=[x+off for x in st]
     return align_c1(w,idx,st,lens) if (cond=='C1' and align) else st
 def plan(w,lens,P,base_start,max_ntok_c2=14,align=True):
@@ -76,17 +77,19 @@ def plan(w,lens,P,base_start,max_ntok_c2=14,align=True):
         else:P2.append(t);s2+=nf_
     P1.sort();P2.sort();res=[]
     def free(a,b):return all(b<=s_ or a>=e for s_,e in res)
-    T={}
-    for t in sorted(ids,key=lambda t:-len(P[t])):
-        idx=P[t];r1,r2,Tmin,Tmax=rel[t];T0=min(max(base_start[idx[-1]],Tmin),Tmax)
-        for tries in range(400):
-            Tc=T0+(250*(tries//2) if tries%2==0 else -250*((tries+1)//2))
-            if not (Tmin<=Tc<=Tmax):continue
-            iv=[(x,x+lens[i]+2) for cd in ('C1','C2') for x,i in zip(abs_times(w,idx,cd,lens,Tc,align),idx)]
-            if min(x for x,_ in iv)>=0 and all(free(a_,b_) for a_,b_ in iv):break
-        else:raise AssertionError(f'no free anchor for person {t}')
-        T[t]=Tc;res+=iv
-    return dict(P1=P1,P2=P2,skipped=[t for _,t in skip],T=T,res=res)
+    T={};aligned={};dropped=[];diag={}
+    for t in sorted(ids,key=lambda t:(rel[t][3]-rel[t][2],-len(P[t]))):      # tightest anchor range first
+        idx=P[t];r1,r2,Tmin,Tmax=rel[t];T0=min(max(base_start[idx[-1]],Tmin),Tmax);cands=sorted(range(Tmin,Tmax+1,25),key=lambda x:abs(x-T0));found=None
+        for al in ((True,False) if align else (False,)):
+            for Tc in cands:
+                iv=[(x,x+lens[i]+2) for cd in ('C1','C2') for x,i in zip(abs_times(w,idx,cd,lens,Tc,al),idx)]
+                if min(x for x,_ in iv)>=0 and all(free(a_,b_) for a_,b_ in iv):found=(Tc,al,iv);break
+            if found:break
+        diag[t]=dict(anchor_range=(Tmin,Tmax),candidates=len(cands),found=bool(found),aligned=bool(found and found[1]))
+        if not found:dropped.append(t);continue
+        T[t]=found[0];aligned[t]=found[1];res+=found[2]
+    P1=[t for t in P1 if t not in dropped];P2=[t for t in P2 if t not in dropped]
+    return dict(P1=P1,P2=P2,skipped=[t for _,t in skip],T=T,res=res,aligned=aligned,dropped=dropped,diag=diag)
 def relayout(w,layout,enc_len,bgs,base_start,max_ntok_c2=14,lens=None,pl=None,align=True):
     texts=w['texts'];P=persons_of(w);lens=lens or {i:enc_len(texts[i]['text']) for i in range(len(texts)) if texts[i]['kind']=='expo'}
     pl=pl or plan(w,lens,P,base_start,max_ntok_c2,align);P1,P2=pl['P1'],pl['P2']
@@ -95,7 +98,7 @@ def relayout(w,layout,enc_len,bgs,base_start,max_ntok_c2=14,lens=None,pl=None,al
     placed={};res=list(pl['res'])
     for t in cond:
         idx=P[t]
-        for s_,i in zip(abs_times(w,idx,cond[t],lens,pl['T'][t],align),idx):placed[i]=s_
+        for s_,i in zip(abs_times(w,idx,cond[t],lens,pl['T'][t],pl['aligned'][t]),idx):placed[i]=s_
     def free(a,b):return all(b<=s_ or a>=e for s_,e in res)
     for i in sorted(lens,key=lambda i:base_start[i]):
         if i in placed:continue
@@ -111,7 +114,7 @@ def relayout(w,layout,enc_len,bgs,base_start,max_ntok_c2=14,lens=None,pl=None,al
         out.append(copy.deepcopy(texts[i]));cur+=lens[i]+2
     while cur<NCH*CH+3000:
         x,n=take();out.append({'kind':'bg','text':x});cur+=n
-    nw=copy.deepcopy(w);nw['texts']=out;nw['layout']=layout;nw['relayout']=dict(base_layout=w.get('layout'),P1=P1,P2=P2,skipped=pl['skipped'],cond=cond,C1_target=C1_T,C2_target=C2_T,bg_reused=max(0,bi-len(bgs)),last_unit_anchor={str(t):int(v) for t,v in pl['T'].items()})
+    nw=copy.deepcopy(w);nw['texts']=out;nw['layout']=layout;nw['relayout']=dict(base_layout=w.get('layout'),P1=P1,P2=P2,skipped=pl['skipped'],cond=cond,C1_target=C1_T,C2_target=C2_T,bg_reused=max(0,bi-len(bgs)),last_unit_anchor={str(t):int(v) for t,v in pl['T'].items()},not_aligned=[t for t,v in pl['aligned'].items() if not v],dropped_no_free_anchor=pl['dropped'])
     nw['stats']={'note':'stats of the base world are stale after relayout; recompute with e51_nat_table.py'};return nw
 def gap_table(nw,tk,enc_ends):
     text,_,spans=NW.realize(nw,False);sp=NP.tok_spans(spans,enc_ends(text));rows=[]
@@ -179,7 +182,7 @@ def run(w,tk,out_dir,layouts,max_ntok=14,rec=None,align=True):
         nw=relayout(w,lay,enc_len,bgs,base_start,max_ntok,lens,pl,align);rows,ok=gap_table(nw,tk,ends)
         before=sorted((x['t'],x['label'],x['text']) for x in w['texts'] if x['kind']=='expo');after=sorted((x['t'],x['label'],x['text']) for x in nw['texts'] if x['kind']=='expo');assert before==after,'exposure units changed'
         rx=NF.forbid_regex(nw);bad=sum(1 for x in nw['texts'] if x['kind']=='bg' and rx.search(x['text']))
-        r=nw['relayout'];print(f"## {lay}: P1 {r['P1']} P2 {r['P2']} skipped (do not fit C2) {r['skipped']}; bg paragraphs reused beyond the base pool: {r['bg_reused']}; forbidden strings in background: {bad}; last exposure end token <= {EXPO_END}: {max(x[6] for x in rows)<=EXPO_END}");print(fmt(rows));print('ALL PASS' if ok else 'SOME FAIL');res[lay]=ok;_,sm,_=T.table_of(nw,T.encode_offs(tk,NW.realize(nw,False)[0]));print(f"O mask size ({lay}, all persons): sum O tokens {sm['sum_O']}, chunks with O {sm['chunks_with_O']}, eligible chunks {sm['eligible_chunks']}, answer tokens {sm['answer_tokens']}, sum s_cross {sm['sum_s_cross']}, sum s_same {sm['sum_s_same']}, sum n_out {sm['sum_n_out']}")
+        r=nw['relayout'];print(f"## {lay}: P1 {r['P1']} P2 {r['P2']} skipped (do not fit C2) {r['skipped']}; C1 chunk alignment skipped (no free anchor with it; their s_same stays in the table) {r['not_aligned']}; dropped (no free anchor at all) {r['dropped_no_free_anchor']}; bg paragraphs reused beyond the base pool: {r['bg_reused']}; forbidden strings in background: {bad}; last exposure end token <= {EXPO_END}: {max(x[6] for x in rows)<=EXPO_END}");print(fmt(rows));print('ALL PASS' if ok else 'SOME FAIL');res[lay]=ok;_,sm,_=T.table_of(nw,T.encode_offs(tk,NW.realize(nw,False)[0]));print(f"O mask size ({lay}, all persons): sum O tokens {sm['sum_O']}, chunks with O {sm['chunks_with_O']}, eligible chunks {sm['eligible_chunks']}, answer tokens {sm['answer_tokens']}, sum s_cross {sm['sum_s_cross']}, sum s_same {sm['sum_s_same']}, sum n_out {sm['sum_n_out']}")
         if out_dir:
             Path(out_dir).mkdir(parents=True,exist_ok=True);p=Path(out_dir)/f"nat_{w['seed']}_{lay}.json";p.write_text(json.dumps(nw,ensure_ascii=False));print('wrote',p)
     if rec is not None:rec['plan']=pl;rec['ok']=res
