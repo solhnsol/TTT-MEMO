@@ -2,9 +2,9 @@
 Base world (e.g. nat_9103_spread.json) -> new world json whose contrast persons are re-timed: P1 persons get condition C1 (every previous fact exposure <= 4096 tokens before the next one = inside the 8192 window),
 P2 persons C2 (consecutive fact exposures >= 12288 apart, and their name-only units sit right after the previous fact exposure so none lies within 8192 tokens before the next fact = outside the window).
 Layout relA: P1 = C1, P2 = C2;  layout relB: flipped. All other persons keep their base start position (moved to the next free slot only on collision). Background paragraphs are the base world's, taken in order (same cycling as build.py).
-Contrast persons = persons with >= 2 fact units whose C2 timeline fits before the end of chunk 52 (EXPO_END - margin); persons that do not fit (e.g. 10 fact units) stay at base positions and are listed. Split P1/P2: sorted by (n_fact, id), alternating, deterministic.
+Contrast persons = persons with >= 2 fact units whose C2 timeline fits before the end of chunk 52 (EXPO_END - margin); persons that do not fit (e.g. 10 fact units) stay at base positions and are listed. Split P1/P2: greedy by descending n_fact into the arm with the smaller fact-unit sum (deterministic), so the two arms have balanced fact counts.
 Targets carry margins (C1 3500, C2 12800 tokens); the ACTUAL gaps are re-measured after building (per-person table, PASS/FAIL), with the real tokenizer on the server (the proxy only tests the logic).
-No private data, no GPU. Usage: nat_relayout.py --base nat_9103_spread.json --out-dir DIR [--tokenizer-file F] [--require-real] [--layouts relA,relB] [--max-ntok 14]   |   --selftest"""
+No private data, no GPU. Usage: nat_relayout.py --nat 9103:spread,9101:spread,9104:spread,9105:spread [--nat-dir DIR] --out-dir DIR (or --base FILE for one world; old form: --base nat_9103_spread.json --out-dir DIR) [--tokenizer-file F] [--require-real] [--layouts relA,relB] [--max-ntok 14]   |   --selftest"""
 import os,sys,re,json,copy,argparse
 from pathlib import Path
 import numpy as np
@@ -57,7 +57,11 @@ def plan(w,lens,P,base_start,max_ntok_c2=14):
         r2,_=timeline(w,idx,'C2',lens,0);r1,_=timeline(w,idx,'C1',lens,0);Tmin=600+r2[-1];Tmax=EXPO_END-MARGIN-lens[idx[-1]]-2
         if Tmin<=Tmax and len(idx)<=max_ntok_c2:elig.append((nf,t));rel[t]=(r1,r2,Tmin,Tmax)
         else:skip.append((nf,t))
-    elig.sort();ids=[t for _,t in elig];P1=ids[0::2];P2=ids[1::2];res=[]
+    elig.sort();ids=[t for _,t in elig];P1,P2=[],[];s1=s2=0
+    for nf_,t in sorted(elig,key=lambda x:(-x[0],x[1])):   # balance the sum of fact units; equal counts (+-1) as tie-break
+        if (s1,len(P1))<=(s2,len(P2)):P1.append(t);s1+=nf_
+        else:P2.append(t);s2+=nf_
+    P1.sort();P2.sort();res=[]
     def free(a,b):return all(b<=s_ or a>=e for s_,e in res)
     T={}
     for t in sorted(ids,key=lambda t:-len(P[t])):
@@ -118,15 +122,35 @@ def fmt(rows):
         if c!='-':o.append(f'| {t} | {c} | {n} | {g} | {nw8} | {ok} | {end} |')
     return '\n'.join(o)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--base');ap.add_argument('--out-dir');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--require-real',action='store_true');ap.add_argument('--layouts',default='relA,relB');ap.add_argument('--selftest',action='store_true');ap.add_argument('--max-ntok',type=int,default=14);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--base',default=None);ap.add_argument('--nat',default=None);ap.add_argument('--nat-dir',default=None);ap.add_argument('--out-dir');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--require-real',action='store_true');ap.add_argument('--layouts',default='relA,relB');ap.add_argument('--selftest',action='store_true');ap.add_argument('--max-ntok',type=int,default=14);a=ap.parse_args()
     if a.selftest:selftest();return
     import nat_dryrun as D
     try:tk=D.load_tok(a.tokenizer_file)
     except Exception as e:print('real tokenizer not usable:',repr(e)[:100]);tk=None
     assert tk is not None or not a.require_real,'--require-real: no real tokenizer'
     print('tokenizer:','REAL' if tk else 'PROXY (logic test only; gaps are NOT final)')
-    assert a.base and Path(a.base).exists(),f'--base file not found: {a.base}';w=NW.load_world(a.base);run(w,tk,a.out_dir,a.layouts.split(','),a.max_ntok)
-def run(w,tk,out_dir,layouts,max_ntok=14):
+    if a.nat:
+        nd=T.find_nat_dir(a.nat_dir);ws=[]
+        for item in a.nat.split(','):
+            st,lay=item.split(':');p=NF.world_path(nd,int(st),lay);assert p.exists(),f'missing {p}';ws.append((item,NW.load_world(p)))
+        info={}
+        for item,w in ws:
+            print(f'\n######## {item}');run(w,tk,a.out_dir,a.layouts.split(','),a.max_ntok,info.setdefault(item,{}))
+        names={}
+        for item,w in ws:
+            r=info[item]['plan'];strs=set()
+            for t in r['P1']+r['P2']:
+                tri=w['triples'][t];strs|={tri['X'],tri['XS']}
+            names[item]=strs
+        items=list(names);clash=[(x,y,sorted(names[x]&names[y])) for i,x in enumerate(items) for y in items[i+1:] if names[x]&names[y]]
+        print('\n## across streams: contrast persons per stream',{k:len(info[k]['plan']['P1'])+len(info[k]['plan']['P2']) for k in items},'; total',sum(len(info[k]['plan']['P1'])+len(info[k]['plan']['P2']) for k in items))
+        for k in items:
+            w=dict(ws)[k];pk=info[k]['plan'];nf={t:sum(1 for x in w['texts'] if x['kind']=='expo' and x['t']==t and x['label']=='fact') for t in pk['P1']+pk['P2']}
+            print(f"  {k}: P1 {pk['P1']} (sum n_fact {sum(nf[t] for t in pk['P1'])}), P2 {pk['P2']} (sum n_fact {sum(nf[t] for t in pk['P2'])}), skipped (do not fit C2) {pk['skipped']}")
+        print('full names / surnames shared by contrast persons of two different streams (given names and places such as Chicago may repeat: they are real strings, not person identities):',clash if clash else 'none (a person appears in one stream only)')
+        sys.exit(0 if (not clash and all(all(i['ok'].values()) for i in info.values())) else 4)
+    assert a.base and Path(a.base).exists(),f'--base file not found: {a.base}';w=NW.load_world(a.base);ok=run(w,tk,a.out_dir,a.layouts.split(','),a.max_ntok);sys.exit(0 if all(ok.values()) else 4)
+def run(w,tk,out_dir,layouts,max_ntok=14,rec=None):
     enc_len=ntok_fn(tk);ends=lambda text:[b for a_,b in T.encode_offs(tk,text)]
     text,_,spans=NW.realize(w,False);sp=NP.tok_spans(spans,ends(text));ei=[i for i,x in enumerate(w['texts']) if x['kind']=='expo'];assert len(ei)==len(sp)
     base_start={i:s['tok_start'] for i,s in zip(ei,sp)};bgs=[x['text'] for x in w['texts'] if x['kind']=='bg'];res={}
@@ -139,6 +163,7 @@ def run(w,tk,out_dir,layouts,max_ntok=14):
         r=nw['relayout'];print(f"## {lay}: P1 {r['P1']} P2 {r['P2']} skipped (do not fit C2) {r['skipped']}; bg paragraphs reused beyond the base pool: {r['bg_reused']}; forbidden strings in background: {bad}; last exposure end token <= {EXPO_END}: {max(x[6] for x in rows)<=EXPO_END}");print(fmt(rows));print('ALL PASS' if ok else 'SOME FAIL');res[lay]=ok;_,sm,_=T.table_of(nw,T.encode_offs(tk,NW.realize(nw,False)[0]));print(f"O mask size ({lay}, all persons): sum O tokens {sm['sum_O']}, chunks with O {sm['chunks_with_O']}, eligible chunks {sm['eligible_chunks']}, answer tokens {sm['answer_tokens']}, sum s_cross {sm['sum_s_cross']}, sum s_same {sm['sum_s_same']}, sum n_out {sm['sum_n_out']}")
         if out_dir:
             Path(out_dir).mkdir(parents=True,exist_ok=True);p=Path(out_dir)/f"nat_{w['seed']}_{lay}.json";p.write_text(json.dumps(nw,ensure_ascii=False));print('wrote',p)
+    if rec is not None:rec['plan']=pl;rec['ok']=res
     return res
 def selftest():
     import nat_dryrun as D
