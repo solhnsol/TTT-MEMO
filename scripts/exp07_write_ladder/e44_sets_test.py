@@ -24,5 +24,10 @@ def main():
         assert len(U)==max(len(B),len(O)) and Os<=set(U),(k,len(U),len(B))
         rows.append((k,len(O),len(S),len(B),len(N)))
     assert nO>0
+    s2=SETS.Sets(T.table(),101,2,0.35)
+    for k in range(63):
+        assert [s2.sentmask(k),s2.bgmask(k),s2.noomask(k)]==[sets.sentmask(k),sets.bgmask(k),sets.noomask(k)]
+    k_=next(k for k in range(8,63) if sets.oracle(k));sets.fill_total={k_:len(sets.bgmask(k_))};s2.fill_total={k_:len(sets.bgmask(k_))};assert sets.chunk_set('oraclefill',k_)==s2.chunk_set('oraclefill',k_);sets.fill_total=None
+    print('E44 deterministic: a second Sets object with the same table / seed / pass gives identical sent, bg, noo and unif70 sets')
     print('E44 sets test OK: O<=K3<=SENT; BG = window minus non-O sentence tokens plus O; NOO = window minus O; types add up (SENT has no G, BG has no B/P/X, NOO has no O); UNIF70 = oraclefill with the BG size and the same O; chunks with O',nO,'(chunk, |O|, |SENT|, |BG|, |NOO|)',rows[:4],'...')
 if __name__=='__main__':main()
