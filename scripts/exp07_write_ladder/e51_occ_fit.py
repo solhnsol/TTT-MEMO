@@ -21,10 +21,13 @@ def fit(G,cur,cand,old):
         i,c=best[1];sw.append((cur[i],c));cur[i]=c
     return cur,sw,tgt
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--set',default='hold',choices=['hold','dev2'],help='dev2: the 30 occupations of the E52 insertion stream, chosen from frame_pools_dev2.DEV2_OCC_CANDS (excluded: gen_world.OCC, HOLD_OCC)');a=ap.parse_args()
     import e51_pool_audit as A;G=A.import_gw(a.selftest);import frame_pools_hold as H
-    final,sw,tgt=fit(G,H.HOLD_OCC,CAND,G.OCC)
+    if a.set=='dev2':
+        import frame_pools_dev2 as D2;taken=set(G.OCC)|set(H.HOLD_OCC);cand=[c for c in D2.DEV2_OCC_CANDS if c not in taken];final,sw,tgt=fit(G,cand[:30],cand[30:],G.OCC);print('set: dev2 (candidates',len(cand),')')
+    else:final,sw,tgt=fit(G,H.HOLD_OCC,CAND,G.OCC)
     print('old OCC token-length histogram (the target):',dict(sorted(tgt.items())));print('current HOLD_OCC:',dict(sorted(hist(G,H.HOLD_OCC).items())));print('final:',dict(sorted(hist(G,final).items())))
     print('swaps (out -> in):',sw);print('final list:',final);assert len(final)==30==len(set(final)) and not set(final)&set(G.OCC)
+    if a.set=='dev2':assert not set(final)&set(H.HOLD_OCC)
     if a.selftest:print('e51_occ_fit SELFTEST OK (fake tokenizer)')
 if __name__=='__main__':main()

@@ -65,7 +65,9 @@ def audit_hold(G):
     oo=collections.Counter(G.ntok(' '+o) for o in G.OCC);no=collections.Counter(G.ntok(' '+o) for o in H.HOLD_OCC);inter=sorted(set(G.OCC)&set(H.HOLD_OCC))
     out.append(f'occupations: old token lengths {dict(sorted(oo.items()))}, new {dict(sorted(no.items()))}, {len(H.HOLD_OCC)} new (need 30), overlap with the old 30: {inter}');ok&=len(H.HOLD_OCC)==30 and not inter
     fok,fl=H.audit_disjoint(FB.POOLS);ok&=fok;out+=['frame components: '+x for x in fl]
-    out.append('SEALED LISTS '+('OK' if ok else 'CHECK'));return out
+    import frame_pools_dev2 as D2
+    dok,dl=D2.audit_dev2(FB.POOLS,H.HOLD_POOLS);ok&=dok;out+=['dev2 frame components (E52): '+x for x in dl]
+    out.append('SEALED + DEV2 LISTS '+('OK' if ok else 'CHECK'));return out
 def selftest():
     G=import_gw(True);P,L,lp,ll,nP,nL=draw(G,101);assert len(P)==38 and len(L)==38 and len(set(P))==38,(len(P),len(L))
     P2,*_=draw(G,101);assert P==P2
