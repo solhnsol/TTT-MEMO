@@ -59,6 +59,7 @@ def main():
                 json.dump(ES.cell_record(name,places,gi,fi,pairs,S,{'epoch':(cellpre[name][1] if name!='W0' else 0),'cand_tokens':tl,'sec_total':time.monotonic()-t0}),open(fn(name),'w'))
     recs=[json.load(open(fn(n))) for n in names if fn(n).exists()]
     if not recs:print('no result files');return
-    out,text=ES.analyze(recs,a.ref or recs[0]['cell'],a.nboot);print(text)
-    json.dump({'ref':a.ref or recs[0]['cell'],'summary':{ro:{'cell':o['cell'],'change':o['change']} for ro,o in out.items()},'rule':'CI excludes 0 and |delta| >= 0.2 nats (log-prob metrics) / 0.10 (accuracy-like)'},open(OUT/f'e49_candidates_s{a.seed}{a.tag}.json','w'))
+    ref=nm(a.ref,max(EPS)) if a.ref else recs[0]['cell']   # several passes: the reference is the reference cell at the last read pass
+    out,text=ES.analyze(recs,ref,a.nboot);print(text)
+    json.dump({'ref':ref,'summary':{ro:{'cell':o['cell'],'change':o['change']} for ro,o in out.items()},'rule':'CI excludes 0 and |delta| >= 0.2 nats (log-prob metrics) / 0.10 (accuracy-like)'},open(OUT/f'e49_candidates_s{a.seed}{a.tag}.json','w'))
 if __name__=='__main__':main()
