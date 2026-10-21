@@ -5,7 +5,7 @@ adjacent in the text every round, so frequency, tokenization and recency are mat
 Snapshots (probe points) follow rounds 1, 4 and 16, each separated from the last exposure by >8192 tokens of filler.
 World B = world A with the two person names of every pair swapped everywhere (bindings flip, everything else identical).
 Background prose is real narrative text with capitalised names removed."""
-import random,re,json,sys
+import random,re,json,sys,os
 from pathlib import Path
 from tokenizers import Tokenizer
 ROOT=Path(__file__).resolve().parents[2]
@@ -60,7 +60,9 @@ ROUNDS={14:1,33:4,62:16}   # probe chunk index -> cumulative exposure rounds see
 NCH=63
 BLOCKS_V1=[(1,1,0,3),(2,4,15,22),(5,16,34,52)]  # v1 (seeds 1-3): later-round exposures could land inside the probe window (found by the integrity check)
 BLOCKS=[(1,1,0,3),(2,4,17,22),(5,16,37,52)]     # v2 (clean seeds): >2K tokens of margin between each probe chunk start and the next round
-def build_world(seed,pairs=15,v=2):
+def build_world(seed,pairs=15,v=2,frames=None):
+    """frames: 'shared' (default, the 30 shared frames FR, bit-identical to the earlier code), 'pair' (E48 W1: every pair owns R disjoint frames) or 'sentence' (E48 W2: every exposure sentence has its own frame); default from the environment variable E48_FRAMES. Only the sentence templates change: the rng stream (names, places, occupations, schedule, background order) is the same in all modes."""
+    frames=frames or os.environ.get('E48_FRAMES','shared')
     rng=random.Random(seed);npairs=pairs;nt=npairs*2
     pn=person_names(rng,nt*4);pl=place_names(rng,nt*4)
     byl={}
@@ -73,7 +75,11 @@ def build_world(seed,pairs=15,v=2):
     rng.shuffle(persons);rng.shuffle(places);occs=OCC[:];rng.shuffle(occs)
     triples=[{'id':i,'pair':f'p{i//2}','X':persons[i],'P':places[i],'o':occs[i]} for i in range(nt)]
     ctrl_persons=persons[nt:nt+8];ctrl_places=places[nt:nt+8]
-    fr={t['id']:rng.sample(FR,len(FR)) for t in triples}
+    fr={t['id']:rng.sample(FR,len(FR)) for t in triples}   # always drawn (keeps the rng stream identical in every frames mode)
+    bank=None
+    if frames!='shared':
+        import frame_bank as FB
+        R=max(b[1] for b in (BLOCKS if v>=2 else BLOCKS_V1));bank,fr,_=FB.assign(frames,seed,triples,npairs,R,FR)
     # events: (round, pair) -> two adjacent sentences, order random per event
     bg=background(rng);texts=[];events=[]  # texts: list of dict(kind,text,...)
     chunk_tokens=1024
@@ -90,11 +96,13 @@ def build_world(seed,pairs=15,v=2):
             _,r,p=sched[si];si+=1;ts=[triples[2*p],triples[2*p+1]]
             if rng.random()<0.5:ts=ts[::-1]
             for t in ts:
-                f=fr[t['id']][(r-1)%len(FR)]
+                f=fr[t['id']][(r-1)%len(fr[t['id']])]
                 texts.append({'kind':'expo','t':t['id'],'round':r,'text':f.format(X='@X%d@'%t['id'],P=t['P'],o=t['o'],a_o=A(t['o']))});ntoks+=len(TOK.encode(texts[-1]['text'].replace('@X','Xx').replace('@',''),add_special_tokens=False).ids)+1
         else:
             txt=bg[bi%len(bg)];bi+=1;texts.append({'kind':'bg','text':txt});ntoks+=len(TOK.encode(txt,add_special_tokens=False).ids)+1
-    return {'seed':seed,'v':v,'triples':triples,'ctrl_persons':ctrl_persons,'ctrl_places':ctrl_places,'texts':texts,'name_len':L,'place_len':Lp,'pairs':npairs}
+    w={'seed':seed,'v':v,'triples':triples,'ctrl_persons':ctrl_persons,'ctrl_places':ctrl_places,'texts':texts,'name_len':L,'place_len':Lp,'pairs':npairs}
+    if bank is not None:w['frames_mode']=frames;w['frames']=bank   # E48: the bank of the frames of this world (s3_sets.sentence_table identifies the frame of a sentence in it)
+    return w
 def realize(world,swap):
     """full text with names substituted + char spans of exposure sentences; swap=True is the counterfactual world B."""
     pairs={}
