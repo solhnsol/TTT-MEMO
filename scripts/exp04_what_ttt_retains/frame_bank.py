@@ -30,14 +30,15 @@ def _check(t):
     t.format(X='x',P='p',o='o',a_o='an o')
 def _partition(pool,k,rng):
     p=pool[:];rng.shuffle(p);return p
-def make(mode,R,npairs,orig_FR,seed='E48'):
+def make(mode,R,npairs,orig_FR,seed='E48',pools=None):
     """-> (bank [frames], owner [pair index of each bank frame, or triple index for 'sentence'], info). W1: bank = npairs*R frames, pair p owns bank[p*R:(p+1)*R]; W2: bank = 2*npairs*R frames, triple i owns bank[i*R:(i+1)*R]."""
     rng=random.Random(f'{seed}|{mode}|{R}|{npairs}');olen=orig_lengths(orig_FR);bank=[];comp=[]
+    PL=pools or POOLS;SUBJ_,VERB_,ADJ_,NOUN_,ADV_,LEAD_=(PL[k] for k in ('subj','verb','adj','noun','adv','lead'))
     if mode=='pair':
         need={'subj':2,'verb':3,'adj':3,'noun':3,'adv':3,'lead':3}
         part={}
         for k,n in need.items():
-            assert len(POOLS[k])>=n*npairs,(k,len(POOLS[k]),n*npairs);p=POOLS[k][:];rng.shuffle(p);part[k]=[p[i*n:(i+1)*n] for i in range(npairs)]
+            assert len(PL[k])>=n*npairs,(k,len(PL[k]),n*npairs);p=PL[k][:];rng.shuffle(p);part[k]=[p[i*n:(i+1)*n] for i in range(npairs)]
         for pi in range(npairs):
             cand=[]
             for s,v,a,n,d,l in itertools.product(part['subj'][pi],part['verb'][pi],part['adj'][pi],part['noun'][pi],part['adv'][pi]+[''],part['lead'][pi]+['']):
@@ -47,7 +48,7 @@ def make(mode,R,npairs,orig_FR,seed='E48'):
         used=set();nframes=2*npairs*R
         cand=[]
         for _ in range(nframes*40):
-            c=(rng.choice(SUBJ),rng.choice(VERB),rng.choice(ADJ),rng.choice(NOUN),rng.choice(ADV+['']),rng.choice(LEAD+['']));t=compose(*c);cand.append((_words(t),t,c))
+            c=(rng.choice(SUBJ_),rng.choice(VERB_),rng.choice(ADJ_),rng.choice(NOUN_),rng.choice(ADV_+['']),rng.choice(LEAD_+['']));t=compose(*c);cand.append((_words(t),t,c))
         bank=_pick(cand,nframes,olen,rng,comp,shuffle_out=False)
     else:raise ValueError(mode)
     for t in bank:_check(t)
@@ -77,9 +78,9 @@ def _pick(cand,n,olen,rng,comp,shuffle_out=True):
         else:raise ValueError('not enough candidate frames')
     if shuffle_out:rng.shuffle(chosen)
     comp+=[c for _,c in chosen];return [t for t,_ in chosen]
-def assign(mode,world_seed,triples,npairs,R,orig_FR):
+def assign(mode,world_seed,triples,npairs,R,orig_FR,seed='E48',pools=None):
     """-> (bank, fr) with fr[triple id] = list of R frame templates (round r uses fr[t][r-1]); persons of a pair share the pair's frames in own random orders (pair), or every triple has its own (sentence)."""
-    bank,info=make(mode,R,npairs,orig_FR);fr={}
+    bank,info=make(mode,R,npairs,orig_FR,seed,pools);fr={}
     for t in triples:
         i=t['id']
         if mode=='pair':own=bank[(i//2)*R:(i//2+1)*R]

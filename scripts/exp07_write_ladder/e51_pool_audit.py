@@ -3,6 +3,7 @@ Reproduces gen_world.build_world's first draws exactly (person_names(rng,120), p
 Reports: size of every token-length class of the full pools (SYL1 x SYL2 = 600 persons, PL_PRE x PL_SUF = 300 places), the class each seed uses, the names each dev seed uses (38 persons incl. 8 control, 38 places),
 their union over the dev seeds, what is left in the same class for an eval world (38 + 38 needed), the same for halved pools, the 30 occupations (all used by every world), and the E48 frame bank facts
 (W1 'pair' bank depends only on (R, npairs): seed-independent, whole component pools at 15 pairs).
+Also audits the SEALED-HOLDOUT lists (frame_pools_hold.py: new syllables, new place parts, 30 new occupations, new frame components): token-length classes of the new person / place name pools, overlap of the full names and of the syllables with the dev pools, occupation token lengths vs the 30 old ones, frame-component disjointness (--hold).
 No GPU; needs the real tokenizer (data/tokenizer/llama3/tokenizer.json via gen_world). Usage: e51_pool_audit.py --dev-seeds 101,102,103 [--eval-seeds 201] | --selftest"""
 import sys,argparse,random,itertools
 from pathlib import Path
@@ -49,14 +50,30 @@ def audit(G,dev,ev,pairs=15):
     other_p={k:len(v) for k,v in cp.items() if k!=lp0};other_l={k:len(v) for k,v in cl.items() if k!=ll0}
     out.append(f'other token-length classes (different-length names would change the tokenization-matched design): persons {other_p}, places {other_l}')
     return out
+def audit_hold(G):
+    import frame_pools_hold as H,frame_bank as FB,collections
+    out=['## sealed-holdout lists (frame_pools_hold.py)'];ok=True
+    pp=[a+b for a in H.HOLD_SYL1 for b in H.HOLD_SYL2];pl=[a+b for a in H.HOLD_PRE for b in H.HOLD_SUF]
+    oldp={a+b for a in G.SYL1 for b in G.SYL2};oldl={a+b for a in G.PL_PRE for b in G.PL_SUF}
+    for nm,new,old,s1,s2,o1,o2 in (('persons',pp,oldp,H.HOLD_SYL1,H.HOLD_SYL2,G.SYL1,G.SYL2),('places',pl,oldl,H.HOLD_PRE,H.HOLD_SUF,G.PL_PRE,G.PL_SUF)):
+        cls=collections.defaultdict(list)
+        for n in new:cls[G.ntok(n)].append(n)
+        best=max(cls,key=lambda k:len(cls[k]));shared=sorted((set(s1)&set(o1))|(set(s2)&set(o2)));sub=sorted(n for n in new if n in old)
+        good=len(cls[best])>=38+8 and not shared and not sub;ok&=good
+        out.append(f'{nm}: {len(new)} combinations, token-length classes { {k:len(v) for k,v in sorted(cls.items())} }, largest class {best} tokens ({len(cls[best])}; need >= 46 = 38 + 8 spare), shared syllables with the dev lists {shared}, identical full names {len(sub)} -> {"OK" if good else "CHECK"}')
+        out.append(f'  dev (old) pool token classes: { {k:v for k,v in sorted(collections.Counter(G.ntok(n) for n in old).items())} } -> the holdout world should use a class of the same token length as the dev worlds ({best} vs dev see above)')
+    oo=collections.Counter(G.ntok(' '+o) for o in G.OCC);no=collections.Counter(G.ntok(' '+o) for o in H.HOLD_OCC);inter=sorted(set(G.OCC)&set(H.HOLD_OCC))
+    out.append(f'occupations: old token lengths {dict(sorted(oo.items()))}, new {dict(sorted(no.items()))}, {len(H.HOLD_OCC)} new (need 30), overlap with the old 30: {inter}');ok&=len(H.HOLD_OCC)==30 and not inter
+    fok,fl=H.audit_disjoint(FB.POOLS);ok&=fok;out+=['frame components: '+x for x in fl]
+    out.append('SEALED LISTS '+('OK' if ok else 'CHECK'));return out
 def selftest():
     G=import_gw(True);P,L,lp,ll,nP,nL=draw(G,101);assert len(P)==38 and len(L)==38 and len(set(P))==38,(len(P),len(L))
     P2,*_=draw(G,101);assert P==P2
-    lines=audit(G,[101,102,103],[201]);print('\n'.join(lines));print('e51_pool_audit SELFTEST OK (fake tokenizer: counts are NOT real)')
+    lines=audit(G,[101,102,103],[201])+audit_hold(G);print('\n'.join(lines));print('e51_pool_audit SELFTEST OK (fake tokenizer: counts are NOT real)')
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--dev-seeds',default='101,102,103');ap.add_argument('--eval-seeds',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     G=import_gw();print('\n'.join(audit(G,[int(x) for x in a.dev_seeds.split(',')],[int(x) for x in a.eval_seeds.split(',') if x])))
     import frame_bank as FB
-    print('E48 frame pools:',{k:len(v) for k,v in FB.POOLS.items()},'; W1 needs per 15 pairs',{'subj':30,'verb':45,'adj':45,'noun':45,'adv':45,'lead':45},'-> the whole pools; bank seed-independent (make(mode,R,npairs) only)')
+    print('\n'.join(audit_hold(G)));print('E48 frame pools:',{k:len(v) for k,v in FB.POOLS.items()},'; W1 needs per 15 pairs',{'subj':30,'verb':45,'adj':45,'noun':45,'adv':45,'lead':45},'-> the whole pools; bank seed-independent (make(mode,R,npairs) only)')
 if __name__=='__main__':main()
