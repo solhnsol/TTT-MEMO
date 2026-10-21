@@ -4,6 +4,7 @@ Masked person of a pair (the k3h cell masks only his K3 share) = s3_sets.half_pe
 Modes:
   k3    --cells k3 --seeds 101,102,103   per seed: mean D_a of the masked persons and of the partners (15 triples each, pair bootstrap 95% CI), masked - partner (paired within pair), the number of triples; per world (A: item margin of world A / 2, B: minus the item margin of world B / 2, each minus the pair's XP part) mean and sd over the 15 triples; across seeds: mean and sd (n = number of seeds) of the 15-triple means. Seeds without result files are listed as missing.
   indep --cells k3h|k3hc --seeds 101 --epochs 1,2,3,4 [--native L0fs:main --ref k3]   independence prediction P_ind(pair) = (D_a[K3, chosen person] + D_b[native, partner])/2 vs the observed pair mean of the cell (see mode_indep).
+  additivity --cells k3,L0fs:main,k3h,k3hc --seeds 101 --epochs 1,2,3,4   I = Dpair(K3)+Dpair(native)-Dpair(k3h)-Dpair(k3hc) per pair (mean, bootstrap CI, worlds A+B / A / B), single-cell gains vs native and the ratio (g_h+g_hc)/g_K3.
   pairstruct --cells L0fs:main,L0reset_P63:r5fresh,oracle,k3,sent,... [--epochs 4] [--stream 4]   a (k3h masked person) vs b (partner): T1 D_a(a), D_a(b), b-a, #b>a; T2 correlation, within-pair sum, K3->k3h/k3hc loss allocation; T3 stream distance (needs --stream: server tokenizer). Cell spec: S3 tag (k3) or LEVEL:TAG (L0fs:main).
   k3h   --cells k3h --ref k3 --seeds 101   dD_a = D_a(k3h) - D_a(K3) per triple (same seed): mean over the masked persons (15 triples, bootstrap 95% CI), over the partners, and the within-pair contrast (masked - partner), plus the same per world.
 Output: <out-dir>/e47_triple_da_<mode>.{md,json}. --selftest: synthetic."""
@@ -207,6 +208,47 @@ def run_stream(seed,ps):
     import e42_k2_tokens as K2
     sys.path.insert(0,str(K2.ROOT/'scripts/exp04_what_ttt_retains'));import gen_world as gw;import suppress as SP
     w=K2.build_world_pass(gw,seed,ps);return stream_dist(SETS.sentence_table(w,False,gw.TOK,gw,SP),seed,ps)
+def _pairmean(tri,key):
+    """pair id -> mean over the pair's two triples of D_a[key] (key 'AB' = the pair D_alt)"""
+    d={}
+    for t,v in tri.items():d.setdefault(v['pair'],[]).append(v[key])
+    assert all(len(x)==2 for x in d.values());return {p:float(np.mean(x)) for p,x in d.items()}
+def mode_additivity(od,cells,seed,epochs,nb=10000):
+    """E47 additivity: cells = [K3, native, k3h, k3hc] (default k3, L0fs:main, k3h, k3hc). Dpair = pair D_alt (mean of the two triple D_a; assert of triple_da keeps it equal to the margin based D_alt). Per pair I = Dpair(K3) + Dpair(native) - Dpair(k3h) - Dpair(k3hc) = g_K3 - (g_h + g_hc) with the single-cell gains g_x = Dpair(x) - Dpair(native). Mean over the 15 pairs with pair bootstrap 95% CI (nb resamples), for worlds A+B (primary; D_alt scale), world A and world B (the world parts, each half of the A+B value) and epochs 1-4; the gains g_h, g_hc, g_K3 and the ratio (g_h + g_hc)/g_K3 (ratio of the pair means, bootstrap CI; undefined when a resampled g_K3 mean is <= 0)."""
+    rng=np.random.default_rng(55);K3,NA,H,HC=cells;md=[f'# E47 additivity of the two half-masks (seed {seed}; CPU)\n',f'Cells: K3 = {K3}, native = {NA}, k3h = {H}, k3hc = {HC}. Dpair = pair D_alt; g_x = Dpair(x) - Dpair(native); I = g_K3 - (g_h + g_hc) = Dpair(K3) + Dpair(native) - Dpair(k3h) - Dpair(k3hc). 15 pairs, pair bootstrap 95% CI ({nb} resamples). I > 0: the two halves together gain less than K3 (sub-additive); I < 0: super-additive.\n'];res={'cells':cells,'seed':seed,'epochs':{}}
+    for ep in epochs:
+        tris={};md.append(f'\n## epoch {ep}\n')
+        try:
+            for nm,c in (('K3',K3),('native',NA),('h',H),('hc',HC)):E,fam=load(od,c,seed,ep,True);tris[nm]=triple_da(E,fam,seed)
+        except FileNotFoundError as e:md.append(f'missing ({Path(str(e.filename)).name})');continue
+        except ValueError as e:md.append(str(e));continue
+        mp={k:v['pair'] for k,v in tris['K3'].items()};assert all({k:v['pair'] for k,v in t.items()}==mp for t in tris.values()),'triple / pair ids differ between the cells'
+        R={};md+=['| world | I mean [95% CI] | g_h | g_hc | g_K3 | g_h + g_hc | (g_h+g_hc)/g_K3 [95% CI] |','|---|---|---|---|---|---|---|']
+        for key,lab in (('AB','A+B (primary)'),('A','A'),('B','B')):
+            pm={nm:_pairmean(t,key) for nm,t in tris.items()};ps=sorted(pm['K3'],key=lambda p:_num(p,'p'));v={nm:np.asarray([pm[nm][p] for p in ps]) for nm in pm}
+            g={x:v[x]-v['native'] for x in ('K3','h','hc')};I=v['K3']+v['native']-v['h']-v['hc'];assert np.allclose(I,g['K3']-g['h']-g['hc'])
+            idx=[rng.integers(0,len(ps),len(ps)) for _ in range(nb)];rat=[]
+            for i in idx:
+                d=g['K3'][i].mean()
+                if d>0:rat.append((g['h'][i].mean()+g['hc'][i].mean())/d)
+            r0=(g['h'].mean()+g['hc'].mean())/g['K3'].mean() if g['K3'].mean()>0 else float('nan');ci=(float(np.percentile(rat,2.5)),float(np.percentile(rat,97.5))) if len(rat)>=0.9*nb else (float('nan'),float('nan'))
+            R[key]={'I':boot(I,rng,nb),'g_h':boot(g['h'],rng,nb),'g_hc':boot(g['hc'],rng,nb),'g_K3':boot(g['K3'],rng,nb),'sum_h_hc':float(g['h'].mean()+g['hc'].mean()),'ratio':[float(r0),ci[0],ci[1]],'n_valid_ratio_resamples':len(rat),'per_pair':{p:{'I':float(I[i]),'g_h':float(g['h'][i]),'g_hc':float(g['hc'][i]),'g_K3':float(g['K3'][i])} for i,p in enumerate(ps)},'n_pairs':len(ps)}
+            x=R[key];md.append(f"| {lab} | {f3(x['I'])} | {f3(x['g_h'])} | {f3(x['g_hc'])} | {f3(x['g_K3'])} | {x['sum_h_hc']:+.3f} | {x['ratio'][0]:.3f} [{x['ratio'][1]:.3f}, {x['ratio'][2]:.3f}] |")
+        res['epochs'][ep]=R
+    md.append('\nDescriptive only (one seed, 15 pairs). Ratio CI is shown only if at least 90% of the resamples had a positive mean g_K3.');return '\n'.join(md)+'\n',res
+def selftest_additivity():
+    td=Path(tempfile.mkdtemp());seed=101;items=[];fs={}
+    for f in ('L3','XP'):
+        its=[{'pair':(f'p{i//2}' if f=='L3' else f'x{i//2}'),'tid':i} for i in range(30)];items+=its;fs[f]=30
+    def cellw(pre,val):
+        for w,sg in (('A',1),('B',-1)):
+            L3=[sg*2*(val(t)/2+0.1) for t in range(30)];json.dump({'log':[{'epoch':e,'margins':{'_alt':{'L3':L3 if e else [0.0]*30,'XP':[sg*0.2]*30 if e else [0.0]*30}}} for e in (0,4)]},open(td/f'{pre}_s{seed}_{w}.json','w'))
+        json.dump({'items':items,'fam_sizes':fs},open(td/f'meta_{pre}_s{seed}.json','w'))
+    cellw('L0fs_main',lambda t:0.2);cellw('S3_k3',lambda t:1.2);cellw('S3_k3h',lambda t:0.6);cellw('S3_k3hc',lambda t:0.7)   # D: native 0.2, K3 1.2, h 0.6, hc 0.7: g_K3 1.0, g_h 0.4, g_hc 0.5, I = 1.0-0.9 = 0.1
+    md,res=mode_additivity(td,['k3','L0fs:main','k3h','k3hc'],seed,[4],500);r=res['epochs'][4]['AB'];assert abs(r['I'][0]-0.1)<1e-9 and abs(r['g_K3'][0]-1.0)<1e-9 and abs(r['ratio'][0]-0.9)<1e-9 and r['n_pairs']==15,r
+    assert abs(res['epochs'][4]['A']['I'][0]-0.05)<1e-9   # world part = half of the A+B value
+    md2,_=mode_additivity(td,['k3','L0fs:main','k3h','nofile'],seed,[4],50);assert 'missing' in md2
+    print('additivity SELFTEST OK (I 0.1, gains 0.4 / 0.5 / 1.0, ratio 0.9, world A part = half, missing cell reported)');print(md)
 def selftest_pairstruct():
     td=Path(tempfile.mkdtemp());seed=101;tid=list(range(30));items=[];fs={}
     for f in ('L3','XP'):
@@ -274,14 +316,17 @@ def selftest():
     mdf,resf=mode_fixed(td,[101,102,103],[4],101);R=resf['epochs'][4];assert R['pooled_sd_pair']['AB']>0 and len(R['pairs'])>=9 and R['seeds']==[101,102,103],R['pooled_sd_pair']
     tri_a=triple_da(*load(td,'k3',102,4),102,101);tri_b=triple_da(*load(td,'k3',101,4),101);assert {t for t,v in tri_a.items() if v['masked']}=={t for t,v in tri_b.items() if v['masked']}   # same masked persons
     md2,res2=mode_k3(td,[101,102,103,104],4);assert 'missing' in md2 and 'across_seeds' in res2 and res2['seeds'][101]['n']==[15,15]
-    selftest_indep();selftest_pairstruct()
+    selftest_indep();selftest_pairstruct();selftest_additivity()
     print('e47_triple_da SELFTEST OK: XP pair ids x<n> aligned to p<n>, pair mean of D_a == D_alt (assert), masked person rule, 15+15 triples, dD_a of masked persons recovered (+0.8 in this synthetic scale), partner 0, missing seeds reported');print(md);print(md2)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('mode',nargs='?',choices=['k3','k3h','indep','pairstruct']);ap.add_argument('--cells',default=None);ap.add_argument('--ref',default='k3');ap.add_argument('--seeds',default='101,102,103');ap.add_argument('--epoch',type=int,default=4);ap.add_argument('--out-dir',default=None);ap.add_argument('--fixed-persons-from-seed',type=int,default=None);ap.add_argument('--epochs',default='1,2,3,4');ap.add_argument('--native',default='L0fs:main');ap.add_argument('--stream',type=int,default=None,help='pairstruct T3: pass number of the real sentence table (server, tokenizer)');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('mode',nargs='?',choices=['k3','k3h','indep','pairstruct','additivity']);ap.add_argument('--cells',default=None);ap.add_argument('--ref',default='k3');ap.add_argument('--seeds',default='101,102,103');ap.add_argument('--epoch',type=int,default=4);ap.add_argument('--out-dir',default=None);ap.add_argument('--fixed-persons-from-seed',type=int,default=None);ap.add_argument('--epochs',default='1,2,3,4');ap.add_argument('--native',default='L0fs:main');ap.add_argument('--stream',type=int,default=None,help='pairstruct T3: pass number of the real sentence table (server, tokenizer)');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     seeds=[int(x) for x in a.seeds.split(',')]
     if a.mode=='k3' and a.fixed_persons_from_seed is not None:
         md,res=mode_fixed(OUT,seeds,[int(x) for x in a.epochs.split(',')],a.fixed_persons_from_seed,a.cells or 'k3');od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_triple_da_k3_fixed.md').write_text(md);json.dump(res,open(od/'e47_triple_da_k3_fixed.json','w'),indent=1);print(md);return
+    if a.mode=='additivity':
+        cells=(a.cells or 'k3,L0fs:main,k3h,k3hc').split(',');assert len(cells)==4,'--cells needs exactly K3,native,k3h,k3hc'
+        md,res=mode_additivity(OUT,cells,seeds[0],[int(x) for x in a.epochs.split(',')]);od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_triple_da_additivity.md').write_text(md);json.dump(res,open(od/'e47_triple_da_additivity.json','w'),indent=1);print(md);return
     if a.mode=='pairstruct':
         cells=(a.cells or DEF_CELLS).split(',');stream=run_stream(seeds[0],a.stream) if a.stream else None
         md,res=mode_pairstruct(OUT,cells,seeds[0],[int(x) for x in a.epochs.split(',')] if a.epochs!='1,2,3,4' else [4],stream);od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_triple_da_pairstruct.md').write_text(md);json.dump(res,open(od/'e47_triple_da_pairstruct.json','w'),indent=1);print(md);return
