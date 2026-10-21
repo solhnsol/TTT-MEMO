@@ -53,7 +53,17 @@ def abs_table(T):
             bo.append((d[g]['A']+d[f]['B'])/2);un.append((d[f]['A']+d[g]['B'])/2);ac.append(((d[g]['A']-d[f]['A']>0)+(d[g]['B']-d[f]['B']<0))/2)
         R[p]={'bound':float(np.mean(bo)),'unbound':float(np.mean(un)),'acc':float(np.mean(ac)),'xbase':float((d['xg']['A']+d['xf']['A']+d['xg']['B']+d['xf']['B'])/4)}
     return R
-def analyse(od,cells,seed,epochs,ref,compare=()):
+def mt_table(T):
+    """per pair: every raw term split into the two-world common level m = (A+B)/2 and the contrast t = (A-B)/2 (term = m + t in world A, m - t in world B), plus the derived level L = mean of the m of the four place terms s(Pa|a), s(Pb|a), s(Pb|b), s(Pa|b) (how likely the two candidate places are on average, whatever the binding), xbase = (m(xg)+m(xf))/2 (the same XP place level as in the E49 table), L - xbase, and H = half of the pair's mean margin contrast = [(t(Pa|a)-t(Pb|a)) + (t(Pb|b)-t(Pa|b))]/4. Identities (asserted): bound = L + H and unbound = L - H (abs_table), so  delta bound = delta L + delta H, delta unbound = delta L - delta H: the absolute probability of the correct place can rise through the level L (both places more likely) without the binding H changing."""
+    A=abs_table(T);R={}
+    for p,d in T.items():
+        r={}
+        for k in TERMS:r['m '+k]=(d[k]['A']+d[k]['B'])/2;r['t '+k]=(d[k]['A']-d[k]['B'])/2
+        pl=['s(Pa|a)','s(Pb|a)','s(Pb|b)','s(Pa|b)'];r['L']=float(np.mean([r['m '+k] for k in pl]));r['xbase']=(r['m xg']+r['m xf'])/2;r['L-xbase']=r['L']-r['xbase']
+        r['H']=((r['t s(Pa|a)']-r['t s(Pb|a)'])+(r['t s(Pb|b)']-r['t s(Pa|b)']))/4
+        assert abs(A[p]['bound']-(r['L']+r['H']))<1e-9 and abs(A[p]['unbound']-(r['L']-r['H']))<1e-9 and abs(A[p]['xbase']-r['xbase'])<1e-9,(p,A[p],r);R[p]=r
+    return R
+def analyse(od,cells,seed,epochs,ref,compare=(),mt=False):
     rng=np.random.default_rng(54);md=['# E47 log-prob terms behind the binding margin (CPU)\n','t(term) = (term in world A - term in world B)/2 of the SUMMED log-prob of the answer span; a = k3h masked person, b = partner; D_a(a) = [t(Pa|a)-t(Pb|a)] - [t(xg)-t(xf)], D_a(b) = [t(Pb|b)-t(Pa|b)] - [t(xg)-t(xf)] (pair D_alt = their mean). 15 pairs, bootstrap 95% CI over pairs.\n'];res={'seed':seed,'epochs':{}};cols=list(TERMS)+['D_a(a)','D_a(b)']
     for ep in epochs:
         eff={};raw={};md.append(f'\n## epoch {ep}\n')
@@ -87,6 +97,16 @@ def analyse(od,cells,seed,epochs,ref,compare=()):
                 if c==ref:continue
                 ps=sorted(t,key=lambda p:TD._num(p,'p'));d=lambda k:[t[p][k]-ab[ref][p][k] for p in ps];ch={'bound':TD.boot(d('bound'),rng),'unbound':TD.boot(d('unbound'),rng),'xbase':TD.boot(d('xbase'),rng),'bound_net':TD.boot([t[p]['bound']-ab[ref][p]['bound']-(t[p]['xbase']-ab[ref][p]['xbase']) for p in ps],rng),'acc':TD.boot(d('acc'),rng)};R['abs_change'][c]=ch
                 md.append(f"| {c} | {TD.f3(ch['bound'])} | {TD.f3(ch['unbound'])} | {TD.f3(ch['xbase'])} | {TD.f3(ch['bound_net'])} | {TD.f3(ch['acc'])} |")
+        if mt:
+            MT={c:mt_table(T) for c,T in raw.items()};mc=[f'm {k}' for k in TERMS]+[f't {k}' for k in TERMS]+['L','xbase','L-xbase','H'];R['mt']={};R['mt_change']={}
+            md+=['\n### m / t split (two-world common level m = (A+B)/2, contrast t = (A-B)/2) of every raw term; mean [95% CI] over 15 pairs\n','L = mean of the four place-term levels m(s(Pa|a)), m(s(Pb|a)), m(s(Pb|b)), m(s(Pa|b)); xbase = (m(xg)+m(xf))/2; H = half the pair mean contrast of the margin; bound = L + H, unbound = L - H (asserted per pair).\n','| cell | '+' | '.join(mc)+' |','|---|'+'---|'*len(mc)]
+            for c,t in MT.items():
+                ps=sorted(t,key=lambda p:TD._num(p,'p'));R['mt'][c]={k:TD.boot([t[p][k] for p in ps],rng) for k in mc};md.append(f'| {c} | '+' | '.join(TD.f3(R['mt'][c][k]) for k in mc)+' |')
+            if ref in MT:
+                md+=[f'\nChange of the m / t parts from `{ref}` to the cell (cell - {ref}; mean [95% CI] over pairs). delta bound = delta L + delta H; delta unbound = delta L - delta H.\n','| cell | '+' | '.join(mc)+' |','|---|'+'---|'*len(mc)]
+                for c,t in MT.items():
+                    if c==ref:continue
+                    ps=sorted(t,key=lambda p:TD._num(p,'p'));R['mt_change'][c]={k:TD.boot([t[p][k]-MT[ref][p][k] for p in ps],rng) for k in mc};md.append(f'| {c} | '+' | '.join(TD.f3(R['mt_change'][c][k]) for k in mc)+' |')
         for pair in compare:
             c1,c2=pair.split('=')
             try:
@@ -122,12 +142,16 @@ def selftest():
     c=R['cells']['k3'];assert abs(c['s(Pa|a)'][0]-0.5)<1e-9 and abs(c['s(Pb|a)'][0]+0.5)<1e-9 and abs(c['D_a(a)'][0]-1.0)<1e-9 and abs(c['xg'][0])<1e-9,c
     ch=R['change']['k3h'];assert abs(ch['s(Pa|a)'][0]-0.25)<1e-9 and abs(ch['s(Pb|a)'][0])<1e-9 and abs(ch['D_a(a)'][0]-0.25)<1e-9 and abs(ch['s(Pb|b)'][0]+0.15)<1e-9 and abs(ch['D_a(b)'][0]+0.15)<1e-9,ch   # sa=-0.5 raises t(Pa|a) by 0.25, sb=+0.3 lowers t(Pb|b) by 0.15
     A_=R['abs']['k3'];assert abs(A_['bound'][0]+2.375)<1e-9 and abs(A_['unbound'][0]+3.125)<1e-9 and abs(A_['acc'][0]-0.75)<1e-9 and abs(A_['xbase'][0]+4.25)<1e-9,A_   # hand-computed from the synthetic k3 cell (a item: bound -2 / unbound -3 / acc 1; b item: -2.75 / -3.25 / 0.5)
+    md5,res5=analyse(td,['k3','k3h'],seed,[4],'k3',(),True);M=res5['epochs'][4]['mt']['k3'];Ch=res5['epochs'][4]['mt_change']['k3h'];Ab=res5['epochs'][4]['abs_change']['k3h']
+    assert abs(M['L'][0]+2.75)<1e-9 and abs(M['H'][0]-0.375)<1e-9 and abs(M['L-xbase'][0]-1.5)<1e-9 and abs(M['m s(Pb|b)'][0]+2.75)<1e-9 and abs(M['t s(Pa|b)'][0]+0.25)<1e-9,M   # hand-computed from the synthetic k3 cell (L = -2.75, H = 0.375, bound = L + H = -2.375)
+    assert abs((Ch['L'][0]+Ch['H'][0])-Ab['bound'][0])<1e-9 and abs((Ch['L'][0]-Ch['H'][0])-Ab['unbound'][0])<1e-9,(Ch,Ab)   # delta bound = delta L + delta H, delta unbound = delta L - delta H
+    assert '### m / t split' in md5 and 'L-xbase' in md5
     assert 'old: no gold/foil stored' in md and 'nofile: missing' in md
     import shutil
     for w in 'AB':shutil.copy(td/f'S3_k3_s{seed}_{w}.json',td/f'S3_k3_s{seed}_{w}.regold.json')
     md4,res4=analyse(td,['k3@regold'],seed,[4],'k3@regold',['k3@regold=k3']);assert res4['epochs'][4]['compare']['k3@regold=k3']==0.0 and abs(res4['epochs'][4]['cells']['k3@regold']['D_a(a)'][0]-1.0)<1e-9   # the .regold file naming works and the compare check reports 0
     print('e47_terms SELFTEST OK (terms, effects, D_a reproduces the margin based triple_da, change K3 -> k3h, old file and missing file reported)');print(md)
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--cells',default='L0fs:main,k3,k3h,k3hc');ap.add_argument('--seeds',default='101');ap.add_argument('--epochs',default='4');ap.add_argument('--ref',default='k3');ap.add_argument('--compare',default='',help='comma list of cellA=cellB: max |alt margin difference| between two result files (e.g. k3@regold=k3 to check the re-scoring, L0fs:fskeep@regold=L0fs:main for the native)');ap.add_argument('--out-dir',default=None);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--cells',default='L0fs:main,k3,k3h,k3hc');ap.add_argument('--seeds',default='101');ap.add_argument('--epochs',default='4');ap.add_argument('--ref',default='k3');ap.add_argument('--compare',default='',help='comma list of cellA=cellB: max |alt margin difference| between two result files (e.g. k3@regold=k3 to check the re-scoring, L0fs:fskeep@regold=L0fs:main for the native)');ap.add_argument('--out-dir',default=None);ap.add_argument('--mt',action='store_true',help='E49: also split every raw term into m=(A+B)/2 and t=(A-B)/2 and print the level / binding decomposition of bound and unbound');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();sys.exit(0)
-    md,res=analyse(OUT,a.cells.split(','),int(a.seeds.split(',')[0]),[int(x) for x in a.epochs.split(',')],a.ref,[x for x in a.compare.split(',') if x]);od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_terms.md').write_text(md);json.dump(res,open(od/'e47_terms.json','w'),indent=1);print(md)
+    md,res=analyse(OUT,a.cells.split(','),int(a.seeds.split(',')[0]),[int(x) for x in a.epochs.split(',')],a.ref,[x for x in a.compare.split(',') if x],a.mt);od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_terms.md').write_text(md);json.dump(res,open(od/'e47_terms.json','w'),indent=1);print(md)
