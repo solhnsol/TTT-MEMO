@@ -5,7 +5,7 @@ Layout relA: P1 = C1, P2 = C2;  layout relB: flipped. All other persons keep the
 Contrast persons = persons with >= 2 fact units whose C2 timeline fits before the end of chunk 52 (EXPO_END - margin); persons that do not fit (e.g. 10 fact units) stay at base positions and are listed. Split P1/P2: greedy by descending n_fact into the arm with the smaller fact-unit sum (deterministic), so the two arms have balanced fact counts.
 Targets carry margins (C1 3500, C2 12800 tokens); the ACTUAL gaps are re-measured after building (per-person table, PASS/FAIL), with the real tokenizer on the server (the proxy only tests the logic).
 No private data, no GPU. Usage: nat_relayout.py --nat 9103:spread,9101:spread,9104:spread,9105:spread [--nat-dir DIR] --out-dir DIR (or --base FILE for one world; old form: --base nat_9103_spread.json --out-dir DIR) [--tokenizer-file F] [--require-real] [--layouts relA,relB] [--max-ntok 14]   |   --selftest"""
-import os,sys,re,json,copy,argparse
+import os,sys,re,json,copy,argparse,math
 from pathlib import Path
 import numpy as np
 HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
@@ -96,7 +96,7 @@ def plan(w,lens,P,base_start,max_ntok_c2=14,align=True,early=False):
         idx=P[t];lf=last_fact(w,idx);base_t=base_start[idx[lf]];found=None
         for al,ea in modes:
             Tmin_,Tmax_=(rel[t][2],rel[t][3]) if ea else (rel[t][0],rel[t][1]);T0=min(max(base_t,Tmin_),Tmax_)
-            for Tc in sorted(range(Tmin_,Tmax_+1,25),key=lambda x:abs(x-T0)):
+            for Tc in sorted(range(int(math.ceil(Tmin_)),int(Tmax_)+1,25),key=lambda x:abs(x-T0)):
                 iv=[(x,x+lens[i]) for cd in (('C1E' if ea else 'C1'),'C2') for x,i in zip(abs_times(w,idx,cd,lens,Tc,al),idx)]
                 if min(x for x,_ in iv)>=0 and all(free(a_,b_) for a_,b_ in iv):found=(Tc,al,ea,iv);break
             if found:break
@@ -105,7 +105,7 @@ def plan(w,lens,P,base_start,max_ntok_c2=14,align=True,early=False):
         T[t]=found[0];aligned[t]=found[1];early_ok[t]=found[2];res+=found[3]
     P1=[t for t in P1 if t not in dropped];P2=[t for t in P2 if t not in dropped]
     return dict(P1=P1,P2=P2,skipped=[t for _,t in skip],T=T,res=res,aligned=aligned,early=early_ok,dropped=dropped,diag=diag)
-def relayout(w,layout,enc_len,bgs,base_start,max_ntok_c2=14,lens=None,pl=None,align=True,early=False):
+def relayout(w,layout,enc_len,bgs,base_start,max_ntok_c2=14,lens=None,pl=None,align=True,early=False,target_len=NCH*CH+3000):
     texts=w['texts'];P=persons_of(w);lens=lens or {i:enc_len(texts[i]['text'])+SEP for i in range(len(texts)) if texts[i]['kind']=='expo'}
     pl=pl or plan(w,lens,P,base_start,max_ntok_c2,align,early);P1,P2=pl['P1'],pl['P2']
     cond={t:'C1' for t in P1};cond.update({t:'C2' for t in P2})
@@ -125,12 +125,12 @@ def relayout(w,layout,enc_len,bgs,base_start,max_ntok_c2=14,lens=None,pl=None,al
     def take():
         nonlocal bi;x=bgs[bi%len(bgs)];n=bgl[bi%len(bgs)];bi+=1;return x,n
     for i in order:
-        while cur+bgl[bi%len(bgs)]<=placed[i]+60:
+        while bi<len(bgs) and cur+bgl[bi%len(bgs)]<=placed[i]+60:
             x,n=take();out.append({'kind':'bg','text':x});cur+=n
         out.append(copy.deepcopy(texts[i]));cur+=lens[i]
-    while cur<NCH*CH+3000:
+    while cur<target_len and bi<len(bgs):
         x,n=take();out.append({'kind':'bg','text':x});cur+=n
-    nw=copy.deepcopy(w);nw['texts']=out;nw['layout']=layout+('2' if early else '');nw['relayout']=dict(base_layout=w.get('layout'),P1=P1,P2=P2,skipped=pl['skipped'],cond=cond,C1_target=C1_T,C2_target=C2_T,bg_reused=max(0,bi-len(bgs)),last_unit_anchor={str(t):int(v) for t,v in pl['T'].items()},not_aligned=[t for t,v in pl['aligned'].items() if not v],dropped_no_free_anchor=pl['dropped'])
+    nw=copy.deepcopy(w);nw['texts']=out;nw['layout']=layout+('2' if early else '');nw['relayout']=dict(base_layout=w.get('layout'),P1=P1,P2=P2,skipped=pl['skipped'],cond=cond,C1_target=C1_T,C2_target=C2_T,bg_reused=0,bg_used=bi,bg_available=len(bgs),short_by_tokens=max(0,target_len-cur),target_len=target_len,last_unit_anchor={str(t):int(v) for t,v in pl['T'].items()},not_aligned=[t for t,v in pl['aligned'].items() if not v],dropped_no_free_anchor=pl['dropped'])
     nw['stats']={'note':'stats of the base world are stale after relayout; recompute with e51_nat_table.py'};return nw
 def gap_table(nw,tk,enc_ends):
     text,_,spans=NW.realize(nw,False);sp=NP.tok_spans(spans,enc_ends(text));rows=[]
@@ -195,20 +195,20 @@ def calibrate_sep(w,enc_len,base_start):
     for i,x in enumerate(w['texts']):
         if x['kind']=='expo' and i>=20 and i in base_start:est.append((base_start[i]-acc)/i)
         acc+=enc_len(x['text'])
-    return int(round(float(np.median(est))))
+    return float(np.median(est))
 SEP=2
 def run(w,tk,out_dir,layouts,max_ntok=14,rec=None,align=True,early=False):
     global SEP
     enc_len=ntok_fn(tk);ends=lambda text:[b for a_,b in T.encode_offs(tk,text)]
     text,_,spans=NW.realize(w,False);sp=NP.tok_spans(spans,ends(text));ei=[i for i,x in enumerate(w['texts']) if x['kind']=='expo'];assert len(ei)==len(sp)
     base_start={i:s['tok_start'] for i,s in zip(ei,sp)};bgs=[x['text'] for x in w['texts'] if x['kind']=='bg'];res={}
-    SEP=calibrate_sep(w,enc_len,base_start);lens={i:enc_len(w['texts'][i]['text'])+SEP for i in ei};print(f'separator cost per text calibrated on the base world: {SEP} tokens (position bookkeeping: tokens of a text + this)');pl=plan(w,lens,persons_of(w),base_start,max_ntok,align,early);rx0=NF.forbid_regex(w);print('background paragraphs with a forbidden string in the BASE world (same pool, property of the base):',sum(1 for b in bgs if rx0.search(b)),'of',len(bgs))
+    n_base=len(ends(text))+1;SEP=calibrate_sep(w,enc_len,base_start);lens={i:enc_len(w['texts'][i]['text'])+SEP for i in ei};print(f'separator cost per text calibrated on the base world: {SEP:.3f} tokens (position bookkeeping: tokens of a text + this)');pl=plan(w,lens,persons_of(w),base_start,max_ntok,align,early);rx0=NF.forbid_regex(w);print('background paragraphs with a forbidden string in the BASE world (same pool, property of the base):',sum(1 for b in bgs if rx0.search(b)),'of',len(bgs))
     _,sm0,_=T.table_of(w,T.encode_offs(tk,text));print(f"O mask size (BASE {w.get('layout')}, all persons): sum O tokens {sm0['sum_O']}, chunks with O {sm0['chunks_with_O']}, eligible chunks {sm0['eligible_chunks']}, answer tokens {sm0['answer_tokens']}, sum s_cross {sm0['sum_s_cross']}, sum s_same {sm0['sum_s_same']}, sum n_out {sm0['sum_n_out']}")
     for lay in layouts:
-        nw=relayout(w,lay,enc_len,bgs,base_start,max_ntok,lens,pl,align,early);rows,ok=gap_table(nw,tk,ends)
+        nw=relayout(w,lay,enc_len,bgs,base_start,max_ntok,lens,pl,align,early,n_base);rows,ok=gap_table(nw,tk,ends)
         before=sorted((x['t'],x['label'],x['text']) for x in w['texts'] if x['kind']=='expo');after=sorted((x['t'],x['label'],x['text']) for x in nw['texts'] if x['kind']=='expo');assert before==after,'exposure units changed'
         rx=NF.forbid_regex(nw);bad=sum(1 for x in nw['texts'] if x['kind']=='bg' and rx.search(x['text']))
-        r=nw['relayout'];c1e=sorted(t for t,c in r['cond'].items() if c=='C1E');c1n=sorted(t for t,c in r['cond'].items() if c=='C1');print(f"## {nw['layout']}: C1 persons with name-only units moved before the first fact (C1E) {c1e}, C1 persons left as they were (early not possible or option off) {c1n}; P1 {r['P1']} P2 {r['P2']} skipped (do not fit C2) {r['skipped']}; C1 chunk alignment skipped (no free anchor with it; their s_same stays in the table) {r['not_aligned']}; dropped (no free anchor at all) {r['dropped_no_free_anchor']}; bg paragraphs reused beyond the base pool: {r['bg_reused']}; forbidden strings in background: {bad}; last exposure end token <= {EXPO_END}: {max(x[6] for x in rows)<=EXPO_END}");print(fmt(rows));print('ALL PASS' if ok else 'SOME FAIL');res[lay]=ok;_,sm,_=T.table_of(nw,T.encode_offs(tk,NW.realize(nw,False)[0]));print(f"O mask size ({lay}, all persons): sum O tokens {sm['sum_O']}, chunks with O {sm['chunks_with_O']}, eligible chunks {sm['eligible_chunks']}, answer tokens {sm['answer_tokens']}, sum s_cross {sm['sum_s_cross']}, sum s_same {sm['sum_s_same']}, sum n_out {sm['sum_n_out']}")
+        r=nw['relayout'];c1e=sorted(t for t,c in r['cond'].items() if c=='C1E');c1n=sorted(t for t,c in r['cond'].items() if c=='C1');print(f"## {nw['layout']}: C1 persons with name-only units moved before the first fact (C1E) {c1e}, C1 persons left as they were (early not possible or option off) {c1n}; P1 {r['P1']} P2 {r['P2']} skipped (do not fit C2) {r['skipped']}; C1 chunk alignment skipped (no free anchor with it; their s_same stays in the table) {r['not_aligned']}; dropped (no free anchor at all) {r['dropped_no_free_anchor']}; background paragraphs used {r['bg_used']} of {r['bg_available']} (never reused; stream is {r['short_by_tokens']:.0f} tokens shorter than the base stream {r['target_len']} when the paragraphs run out); forbidden strings in background: {bad}; last exposure end token <= {EXPO_END}: {max(x[6] for x in rows)<=EXPO_END}");print(fmt(rows));print('ALL PASS' if ok else 'SOME FAIL');res[lay]=ok;_,sm,_=T.table_of(nw,T.encode_offs(tk,NW.realize(nw,False)[0]));print(f"O mask size ({lay}, all persons): sum O tokens {sm['sum_O']}, chunks with O {sm['chunks_with_O']}, eligible chunks {sm['eligible_chunks']}, answer tokens {sm['answer_tokens']}, sum s_cross {sm['sum_s_cross']}, sum s_same {sm['sum_s_same']}, sum n_out {sm['sum_n_out']}")
         if out_dir:
             Path(out_dir).mkdir(parents=True,exist_ok=True);p=Path(out_dir)/f"nat_{w['seed']}_{nw['layout']}.json";p.write_text(json.dumps(nw,ensure_ascii=False));print('wrote',p)
     if rec is not None:rec['plan']=pl;rec['ok']=res
