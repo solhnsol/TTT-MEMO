@@ -29,14 +29,14 @@ def main():
                 if 'x' in fl and fl.startswith('{'):fatal+=1
     fb=FB.make('pair',4,30,None,pools=D.DEV2_POOLS,need=D.DEV2_NEED) if False else None
     try:
-        import gen_world as G;fb=FB.make('pair',4,30,G.FR,pools=D.DEV2_POOLS,need=D.DEV2_NEED)
+        import gen_world as G;fb=FB.make('pair',4,30,G.FR,pools=D.DEV2_POOLS,need=D.DEV2_NEED)[0]
     except Exception as e:L.append(f'(bank render skipped: {e!r:.120})');fb=None
     if fb is not None:
-        frames=fb['frames'] if isinstance(fb,dict) and 'frames' in fb else fb
-        flat=[t for v in (frames.values() if isinstance(frames,dict) else frames) for t in (v if isinstance(v,(list,tuple)) else [v])]
+        flat=[t for t in fb if isinstance(t,str)]
         vs=set(D.VERB);n=0
+        vs|={w for l in D.LEAD+D.SUBJ+D.ADV for w in re.findall(r"[a-z]+",l)}&vs   # (words of leads / subjects that are also verb-pool words would show up as 2 verbs)
         for t in flat:
-            t=t if isinstance(t,str) else str(t);k=sum(1 for w in re.findall(r"[a-z]+",t) if w in vs)
+            k=sum(1 for w in re.findall(r"[a-z]+",t) if w in vs)
             if k!=1:L.append(f'FATAL verb-pool words {k}: {t}');fatal+=1
             if t.count(',')%2==1 and not re.search(r',\s*(?:\{X\}|[a-z])',t) :L.append(f'SUSPECT comma pairing: {t}')
             n+=1

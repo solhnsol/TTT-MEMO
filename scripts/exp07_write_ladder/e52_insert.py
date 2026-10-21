@@ -124,7 +124,7 @@ def verify(nw_a,nw_b,tk,cond_a,cond_b,plan):
     ba=[x['text'] for x in nw_a['texts'] if x['kind']=='bg'];bb=[x['text'] for x in nw_b['texts'] if x['kind']=='bg']
     L.append(f'background: {len(ba)} / {len(bb)} paragraphs, duplicates inside {len(ba)-len(set(ba))} / {len(bb)-len(set(bb))}, set equal {set(ba)==set(bb)}');ok&=len(ba)==len(set(ba)) and len(bb)==len(set(bb)) and set(ba)==set(bb)
     rx=NF.forbid_regex(nw_a);h=sum(1 for t in ba if rx.search(t));L.append(f'background paragraphs containing a name / place of the new world: {h}');ok&=h==0
-    fam=NW.build_items(nw_a);L.append('items per family: '+str({k:len(v) for k,v in fam.items() if v}));ok&=len(fam['L3'])==len(nw_a['triples']) and len(fam['XP'])==2*nw_a['pairs']
+    fam=NW.build_items(nw_a);L.append('items per family: '+str({k:len(v) for k,v in fam.items() if v}));ok&=all(it['gold']!=it['foil'] for k in('FN0','FP0','PS','FN','FP') for it in fam[k]);ok&=len(fam['L3'])==len(nw_a['triples']) and len(fam['XP'])==2*nw_a['pairs']
     return ok,L
 def run(base,pool_ws,tk,G,FB,D2,H,out_dir,stream_id,occ_dev2,seed,passes,nat_dir_for_audit=None,n_flip=24,n_c0=6,target_len=NCH*CH+3000,audit_pool_streams=None):
     rng=random.Random(f'E52|{seed}');enc_len=RL.ntok_fn(tk);ends=lambda text:[b for a,b in T.encode_offs(tk,text)]
