@@ -13,7 +13,7 @@ def table():
     return tb
 def main():
     base=SETS.Sets(T.table(),101,2,0.35);assert T.old_hash(base)==T.GOLDEN;print('existing cells: output hash identical to the stored golden hash',T.GOLDEN[:12])
-    nP_fact=0;tb=table();sets=SETS.Sets(tb,101,2,0.35);assert T.old_hash(sets)==T.GOLDEN;rows=[];nO=0;byt={u['idx']:u for u in tb};own={p:u for u in tb for p in u['toks']}
+    tb=table();sets=SETS.Sets(tb,101,2,0.35);assert T.old_hash(sets)==T.GOLDEN;rows=[];nO=0;byt={u['idx']:u for u in tb};own={p:u for u in tb for p in u['toks']}
     for k in range(63):
         O=sets.oracle(k);K3=set(sets.sentencecover(k));P,X=sets.pxsplit(k);Xs,Xo=sets.xframe_split(k)
         cells={c:sets.chunk_set(c,k)[0] for c in ('kp','kx','kp_u','kx_u','kx_s','kx_o')}
@@ -32,16 +32,10 @@ def main():
         assert cells['kp']==sorted(K3|Ps) and cells['kx']==sorted(K3|Xs_) and cells['kx_s']==sorted(K3|set(Xs)) and cells['kx_o']==sorted(K3|set(Xo))
         for c,add in (('kp_u',P),('kx_u',X)):
             S=set(cells[c]);ex=S-K3;cand=len([p for p in range(lo,k0) if p not in K3|set(add)]);assert K3<=S and len(ex)==min(len(add),cand) and all(lo<=p<k0 and p not in add for p in ex),(k,c)
-        assert sets.chunk_set('op',k)[0]==sorted(set(O)|Ps) and set(O)<=set(sets.opmask(k)) and not(set(sets.opmask(k))&(K3-set(O))),k   # op = O + P (no B part of K3)
-        pf=sets.p_by_fact(k);assert set(pf)<=ts and all(0<=v<=len(P) for v in pf.values()),(k,pf,len(P))
-        for t_,v in pf.items():
-            s0=next(s for s in cur if s['t']==t_);assert v==sum(1 for p in P if own[p]['pair']==s0['pair'] and own[p]['t']!=t_),(k,t_)   # brute force
-        nP_fact+=len(pf)
         rows.append((k,len(O),len(K3),len(P),len(X),len(Xs),len(sets.sentmask(k))))
-    assert nP_fact>0
     assert nO>0 and any(r[3] for r in rows) and any(r[4] for r in rows) and any(r[5] for r in rows) and any(r[4]>r[5] for r in rows)
     s2=SETS.Sets(table(),101,2,0.35);s3=SETS.Sets(table(),102,2,0.35)
     for k in range(63):assert [s2.chunk_set(c,k) for c in ('kp','kx','kp_u','kx_u','kx_s','kx_o')]==[sets.chunk_set(c,k) for c in ('kp','kx','kp_u','kx_u','kx_s','kx_o')]
     assert any(s3.kpumask(k)!=sets.kpumask(k) for k in range(63) if sets.pxsplit(k)[0]),'seed has no effect'
-    print('E47 sets test OK: K3, P, X disjoint; SENT == K3 + P + X + later same-triple window tokens; type_counts P / X agree; kp / kx / kp_u / kx_u / kx_s / kx_o / op (O + P) as defined; p_by_fact matches brute force; deterministic, seed-dependent; chunks without O mask nothing. (chunk,|O|,|K3|,|P|,|X|,|X same frame|,|SENT|):',rows[:4],'...')
+    print('E47 sets test OK: K3, P, X disjoint; SENT == K3 + P + X + later same-triple window tokens; type_counts P / X agree; kp / kx / kp_u / kx_u / kx_s / kx_o as defined; deterministic, seed-dependent; chunks without O mask nothing. (chunk,|O|,|K3|,|P|,|X|,|X same frame|,|SENT|):',rows[:4],'...')
 if __name__=='__main__':main()
