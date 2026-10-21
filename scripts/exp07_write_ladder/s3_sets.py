@@ -23,7 +23,8 @@ def sentence_table(w,swap,tok,gw,SP):
             nt=[j for j in SP._ptoks(offs,s['start']+x0,s['start']+x0+len(s['X'])) if j>0];names+=nt;spans.append(sorted(set(nt)))
         assert place and names,s['text']
         toks=sorted(set(j for j in SP._ptoks(offs,s['start'],s['start']+len(s['text'])) if j>0))   # E43: every token of the sentence (the sentence-cover cells k3 / k3b)
-        out.append(dict(idx=s['idx'],t=s['t'],pair=tri[s['t']]['pair'],round=s['round'],place=sorted(set(place)),names=sorted(set(names)),spans=spans,text=s['text'],toks=toks))
+        nm=set(names)|set(place);occ=sorted(set(j for m in re.finditer(r'\b'+re.escape(tri[s['t']]['o'])+r'\b',s['text']) for j in SP._ptoks(offs,s['start']+m.start(),s['start']+m.end()) if j>0)-nm)   # E46: occupation ({o}) tokens of the sentence, without name / place tokens (the article of {a_o} is not part of it)
+        out.append(dict(idx=s['idx'],t=s['t'],pair=tri[s['t']]['pair'],round=s['round'],place=sorted(set(place)),names=sorted(set(names)),spans=spans,text=s['text'],toks=toks,occ=occ))
     return out
 def select_by_ctx(delta,tau):
     """E (label-free K6'): chunk k is masked whole when its window context gain delta[k] < tau (strict); chunk 0 (no context) is never selected. Pure function."""
@@ -127,6 +128,27 @@ class Sets:
                     tk=[p for p in u['toks'] if lo<=p<lim]
                     if tk:S|=set(tk);cov.add(u['idx'])
         self.last_nsent=len(cov);return sorted(S)
+    def kindsplit(self,k):
+        """E46: the K3 set of chunk k split by token kind: (O, OCC, FRM) as sorted lists. O = oracle (name / place); OCC = occupation tokens of the earlier same-triple sentences (inside the K3 position range, not in O); FRM = the rest of K3 (not O, not OCC). Chunks without O: three empty lists. O + OCC + FRM == sentencecover(k) exactly (disjoint)."""
+        O=self.oracle(k)
+        if not O:return [],[],[]
+        K3=set(self.sentencecover(k));Oset=set(O);occ=set()
+        for u in self.t:
+            for p in u.get('occ',[]):
+                if p in K3 and p not in Oset:occ.add(p)
+        return sorted(Oset),sorted(occ),sorted(K3-Oset-occ)
+    def occmask(self,k):
+        """E46 occ: O + OCC (occupation tokens of the earlier same-triple sentences); chunks without O mask nothing."""
+        O,C,F=self.kindsplit(k);return sorted(set(O)|set(C))
+    def frmmask(self,k):
+        """E46 frm: O + FRM (the earlier same-triple sentences without their occupation tokens); chunks without O mask nothing."""
+        O,C,F=self.kindsplit(k);return sorted(set(O)|set(F))
+    def unifoccmask(self,k):
+        """E46 unif_occ: O plus |OCC| uniformly drawn window positions (before the chunk) that are neither O nor OCC (so the extra count equals occ's); chunks without O mask nothing. Seeded by (seed, pass, chunk, 'unifocc')."""
+        O,C,F=self.kindsplit(k)
+        if not O:return []
+        k0=k*CH;lo=max(0,k0-W);ex=set(O)|set(C);cand=[p for p in range(lo,k0) if p not in ex];n=min(len(C),len(cand))
+        return sorted(set(O)|set(self._rng('unifocc',k).sample(cand,n)))
     def sentencecover_fill(self,k):
         """E43 K3f: K3 plus a uniform fill over the window positions outside K3 so that |S| = fill_total[k] (another cell's n_masked, e.g. attnfill35) or round(frac x window); fill_attn_cands restricts the fill to the attention cells' candidates; chunks without O mask nothing. If K3 is already larger than the target nothing is added."""
         base=self.sentencecover(k)
@@ -229,4 +251,7 @@ class Sets:
         if cell=='sent':return self.sentmask(k),1.0
         if cell=='bg':return self.bgmask(k),1.0
         if cell=='noo':return self.noomask(k),1.0
+        if cell=='occ':return self.occmask(k),1.0
+        if cell=='frm':return self.frmmask(k),1.0
+        if cell=='unif_occ':return self.unifoccmask(k),1.0
         raise ValueError(cell)
