@@ -9,10 +9,10 @@ import os,sys,re,json,copy,argparse
 from pathlib import Path
 import numpy as np
 HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
-import nat_world as NW,nat_pass as NP,nat_filler as NF
+import nat_world as NW,nat_pass as NP,nat_filler as NF,nat_signal as NS
 import e51_nat_table as T
 CH=1024;NCH=63;EXPO_END=53*CH;MARGIN=600;WIN=8192
-DRIFT_UP=60;DRIFT_DN=450;C1_T=3500;C2_T=12800;C1_MAX=4096;C2_MIN=12288
+DRIFT_UP=60;DRIFT_DN=450;C2_NO_GAP=9800;C1_T=3500;C2_T=12800;C1_MAX=4096;C2_MIN=12288
 def ntok_fn(tk):
     if tk is not None:return lambda s:len(tk.encode(s,add_special_tokens=False).ids)
     import nat_dryrun as D
@@ -39,13 +39,14 @@ def timeline(w,idx,cond,lens,a0):
     # C2: facts >= C2_T apart; name-only run goes tight right after the previous fact (or leads the first fact by >= 8192+600)
     pos=a0;fi=[m for m in range(n) if lab[m]=='fact'];first=fi[0];lead=list(range(first))
     for m in lead:starts.append(pos);pos+=lens[idx[m]]+2+50
-    if lead:pos=max(pos,starts[-1]+lens[idx[lead[-1]]]+WIN+600)
-    prev_f=None;m=first
+    if lead:pos=max(pos,starts[-1]+lens[idx[lead[-1]]]+C2_NO_GAP)
+    prev_f=None;m=first;last_no_end=-10**9
+    if lead:last_no_end=starts[-1]+lens[idx[lead[-1]]]+2
     while m<n:
         if lab[m]=='fact':
-            st=pos if prev_f is None else max(pos,prev_f+C2_T);starts.append(st);prev_f=st;pos=st+lens[idx[m]]+2+50;m+=1
+            st=pos if prev_f is None else max(pos,prev_f+C2_T,last_no_end+C2_NO_GAP);starts.append(st);prev_f=st;pos=st+lens[idx[m]]+2+50;m+=1
         else:
-            starts.append(pos);pos+=lens[idx[m]]+2+50;m+=1
+            starts.append(pos);last_no_end=pos+lens[idx[m]]+2;pos+=lens[idx[m]]+2+50;m+=1
     return starts,pos
 def align_c1(w,idx,st,lens):
     """C1 chunk alignment: where two consecutive fact units start in the SAME 1024-token chunk, shift every unit before the later one earlier so that the unit just before it ends before the chunk boundary (then the earlier fact starts in an earlier chunk = s_cross instead of s_same; margins DRIFT_UP/DRIFT_DN cover the shift the background fill adds between the planned and the realized start). The last unit never moves."""
@@ -117,22 +118,27 @@ def gap_table(nw,tk,enc_ends):
     by={}
     for s in sp:by.setdefault(s['t'],[]).append(s)
     cond=nw['relayout']['cond'];ok=True
+    tab,_=NS.build_table(nw,False,T.encode_offs(tk,text));sets=NS.NatSets(tab,0);ans={}
+    for k in range(NCH):
+        for s_ in sets.cur_sentences(k):
+            lo=max(0,k*CH-WIN)
+            if sets.prior_units(s_,lo):ans[s_['t']]=ans.get(s_['t'],0)+len([j for j in s_['place'] if j-1-k*CH>=0])
     for t,us in sorted(by.items()):
         f=[u['tok_start'] for u in us if u['label']=='fact'];g=[b-a for a,b in zip(f,f[1:])]
         cross=sum(1 for a,b in zip(f,f[1:]) if a//CH!=b//CH);same=len(g)-cross
-        no=[u['tok_start'] for u in us if u['label']!='fact'];nw8=[sum(1 for n_ in no if 0<f_-n_<WIN) for f_ in f]
+        no=[(u['tok_start'],u['tok_end']) for u in us if u['label']!='fact'];nw8=[sum(1 for a_,e_ in no if a_<f_ and e_>(f_//CH)*CH-WIN) for f_ in f]
         c=cond.get(t,'-');good=True
         if c=='C1':good=all(x<=C1_MAX for x in g)
         if c=='C2':good=all(x>=C2_MIN for x in g) and all(x==0 for x in nw8[1:]) and len(f)>=2
         if c!='-':ok&=good
-        rows.append((t,c,len(f),g,nw8,'PASS' if good else 'FAIL',max([u['tok_end'] for u in us]),cross,same,sum(nw8[1:])))
+        rows.append((t,c,len(f),g,nw8,'PASS' if good else 'FAIL',max([u['tok_end'] for u in us]),cross,same,sum(nw8[1:]),ans.get(t,0)))
     return rows,ok
 def fmt(rows):
-    o=['| person | condition | n_fact | fact-to-fact gaps (tokens) | pairs with the earlier fact in an EARLIER chunk (s_cross) / SAME chunk (s_same) | name-only units within 8192 before each fact | name-only units before facts 2.. (sum) | check | last unit end |','|---|---|---|---|---|---|---|---|---|']
-    for t,c,n,g,nw8,ok,end,cr,sa,nsum in rows:
-        if c!='-':o.append(f'| {t} | {c} | {n} | {g} | {cr} / {sa} | {nw8} | {nsum} | {ok} | {end} |')
+    o=['| person | condition | n_fact | fact-to-fact gaps (tokens) | pairs with the earlier fact in an EARLIER chunk (s_cross) / SAME chunk (s_same) | name-only units inside the O window (8192 before the chunk) before each fact | name-only units before facts 2.. (sum) | answer tokens (facts with an earlier unit in the window) | check | last unit end |','|---|---|---|---|---|---|---|---|---|---|']
+    for t,c,n,g,nw8,ok,end,cr,sa,nsum,na in rows:
+        if c!='-':o.append(f'| {t} | {c} | {n} | {g} | {cr} / {sa} | {nw8} | {nsum} | {na} | {ok} | {end} |')
     c1=[r for r in rows if r[1]=='C1'];c2=[r for r in rows if r[1]=='C2']
-    o.append('');o.append(f"C1 persons {len(c1)}: with >= 1 earlier-chunk pair {sum(1 for r in c1 if r[7]>0)}, with only same-chunk pairs {sum(1 for r in c1 if r[7]==0)}, with a name-only unit in the window before facts 2.. {sum(1 for r in c1 if r[9]>0)}, with NO name-only unit in the window {sum(1 for r in c1 if r[9]==0)}; sum s_cross {sum(r[7] for r in c1)}, sum s_same {sum(r[8] for r in c1)}. C2 persons {len(c2)}: sum s_cross {sum(r[7] for r in c2)}, sum s_same {sum(r[8] for r in c2)}, name-only units in window {sum(r[9] for r in c2)}")
+    o.append('');o.append(f"C1 persons {len(c1)}: with >= 1 earlier-chunk pair {sum(1 for r in c1 if r[7]>0)}, with only same-chunk pairs {sum(1 for r in c1 if r[7]==0)}, with a name-only unit in the window before facts 2.. {sum(1 for r in c1 if r[9]>0)}, with NO name-only unit in the window {sum(1 for r in c1 if r[9]==0)}; sum s_cross {sum(r[7] for r in c1)}, sum s_same {sum(r[8] for r in c1)}. answer tokens C1 {sum(r[10] for r in c1)} / C2 {sum(r[10] for r in c2)}. C2 persons {len(c2)}: sum s_cross {sum(r[7] for r in c2)}, sum s_same {sum(r[8] for r in c2)}, name-only units in window {sum(r[9] for r in c2)}")
     return '\n'.join(o)
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--base',default=None);ap.add_argument('--nat',default=None);ap.add_argument('--nat-dir',default=None);ap.add_argument('--out-dir');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--require-real',action='store_true');ap.add_argument('--layouts',default='relA,relB');ap.add_argument('--selftest',action='store_true');ap.add_argument('--max-ntok',type=int,default=14);ap.add_argument('--no-align',action='store_true',help='do not align C1 consecutive facts to different chunks');a=ap.parse_args()
