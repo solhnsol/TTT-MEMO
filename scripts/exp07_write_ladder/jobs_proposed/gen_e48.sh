@@ -1,7 +1,7 @@
 #!/bin/bash
-# generator (not a job): writes 129_e48_world_table.sh (CPU only) and 130-134 (E48 frame-disjoint world, GPU); code pinned to the commit H (local checkout, no fetch)
+# generator (not a job): writes 129_e48_world_table.sh (CPU only), 130-134 (single-cell jobs) and 135 (bundle oracle + k6p + k3all in one process) (E48 frame-disjoint world, GPU); code pinned to the commit H (local checkout, no fetch)
 cd "$(dirname "$0")/.."
-H=7dc1b841bee081e90cc4118ba9edd2379d4669c7
+H=fe966694cfd0f801a35efb726056bfbc1610ac33
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
 FILES="$D/s3.py $D/s3_sets.py $D/e43_sets_test.py $D/e44_sets_test.py $D/e46_sets_test.py $D/e47_sets_test.py $D/e42_k2_tokens.py $D/k3_counts.py $D/suppress.py $D/ladder.py $D/margins_split.py $D/margins_split_test.py $D/e48_world_test.py $D/e48_world_stats.py $D4/gen_world.py $D4/frame_bank.py"
@@ -74,3 +74,17 @@ for c in "131 oracle oracle 35-40" "132 k6p k6p 40" "133 k3all k3all 42" "134 se
   \$PY \$S/s3.py --cell $3 --world-seed 101 --passes 4 --worlds AB --keep --tag \${TP}_$3 --mode \$M
 done"
 done
+# bundle: several cells in ONE s3.py process per mode (one model load / setup per call); per-cell result files as for single jobs; a failing cell does not delete the finished ones
+head 135 bundle_oracle_k6p_k3all "about 75 min GPU [estimate from the lab timing of single-cell jobs: save call 8-10 min overhead + ~14 min training A+B per cell, eval call ~7.5 min overhead + ~5.5 min per cell: 9 + 3 x 14 + 7.5 + 3 x 5.5 = about 75 min instead of about 3 x 45; NOT measured for the bundle]; SMOKE=1 runs only a 2-cell smoke test of the bundling (canary only, 2 chunks, tags smoke_*) first" > jobs_proposed/135_e48_bundle_oracle_k6p_k3all.sh
+cat >> jobs_proposed/135_e48_bundle_oracle_k6p_k3all.sh <<JOB
+if [ -n "\$SMOKE" ]; then
+  # untested-on-GPU bundling code: tiny smoke first (2 cells, canary only, 2 chunks), results tagged smoke_*; nothing of the real cells is touched
+  \$PY \$S/s3.py --cells oracle,k3all --tags smoke_b1,smoke_b2 --world-seed 101 --passes 1 --worlds A --canary-only --smoke-chunks 2 --mode save
+  exit 0
+fi
+[ -n "\$CPU_ONLY" ] && exit 0
+for M in save eval; do
+  \$PY \$S/s3.py --cells oracle,k6p,k3all --tags \${TP}_oracle,\${TP}_k6p,\${TP}_k3all --world-seed 101 --passes 4 --worlds AB --keep --mode \$M
+done
+JOB
+

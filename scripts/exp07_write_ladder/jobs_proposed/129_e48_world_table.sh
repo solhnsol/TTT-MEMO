@@ -7,7 +7,7 @@ set -e
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=7dc1b841bee081e90cc4118ba9edd2379d4669c7
+COMMIT=fe966694cfd0f801a35efb726056bfbc1610ac33
 FILES="scripts/exp07_write_ladder/s3.py scripts/exp07_write_ladder/s3_sets.py scripts/exp07_write_ladder/e43_sets_test.py scripts/exp07_write_ladder/e44_sets_test.py scripts/exp07_write_ladder/e46_sets_test.py scripts/exp07_write_ladder/e47_sets_test.py scripts/exp07_write_ladder/e42_k2_tokens.py scripts/exp07_write_ladder/k3_counts.py scripts/exp07_write_ladder/suppress.py scripts/exp07_write_ladder/ladder.py scripts/exp07_write_ladder/margins_split.py scripts/exp07_write_ladder/margins_split_test.py scripts/exp07_write_ladder/e48_world_test.py scripts/exp07_write_ladder/e48_world_stats.py scripts/exp04_what_ttt_retains/gen_world.py scripts/exp04_what_ttt_retains/frame_bank.py "
 LADDER_OK="b9fd20049420 714b08ea3b90"
 GW_OK="1514a13e67c7 c1ae126eadda"
@@ -27,7 +27,7 @@ if [ -z "$SKIP_VERIFY" ]; then
     if [ "$F" = "$D/suppress.py" ]; then [ "$G" = "$HH" ] || echo "WARNING suppress.py differs from the repo copy: have $G, repo $HH (the lab copy is used)"; continue; fi
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH"; exit 5; }
   done <<'MANIFEST'
-5442628d45b2 scripts/exp07_write_ladder/s3.py
+a16e6dd0d4c9 scripts/exp07_write_ladder/s3.py
 b69477a8f778 scripts/exp07_write_ladder/s3_sets.py
 a256dbbcb9ec scripts/exp07_write_ladder/e43_sets_test.py
 3dc2e49e33fc scripts/exp07_write_ladder/e44_sets_test.py
