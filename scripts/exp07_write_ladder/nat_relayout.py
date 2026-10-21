@@ -12,7 +12,7 @@ HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import nat_world as NW,nat_pass as NP,nat_filler as NF
 import e51_nat_table as T
 CH=1024;NCH=63;EXPO_END=53*CH;MARGIN=600;WIN=8192
-C1_T=3500;C2_T=12800;C1_MAX=4096;C2_MIN=12288
+DRIFT_UP=60;DRIFT_DN=450;C1_T=3500;C2_T=12800;C1_MAX=4096;C2_MIN=12288
 def ntok_fn(tk):
     if tk is not None:return lambda s:len(tk.encode(s,add_special_tokens=False).ids)
     import nat_dryrun as D
@@ -47,7 +47,19 @@ def timeline(w,idx,cond,lens,a0):
         else:
             starts.append(pos);pos+=lens[idx[m]]+2+50;m+=1
     return starts,pos
-def plan(w,lens,P,base_start,max_ntok_c2=14):
+def align_c1(w,idx,st,lens):
+    """C1 chunk alignment: where two consecutive fact units start in the SAME 1024-token chunk, shift every unit before the later one earlier so that the unit just before it ends before the chunk boundary (then the earlier fact starts in an earlier chunk = s_cross instead of s_same; margins DRIFT_UP/DRIFT_DN cover the shift the background fill adds between the planned and the realized start). The last unit never moves."""
+    st=list(st);fi=[m for m,i in enumerate(idx) if w['texts'][i]['label']=='fact']
+    for k in range(len(fi)-1,0,-1):
+        c,p=fi[k],fi[k-1]
+        if (st[p]+DRIFT_UP)//CH>=(st[c]-DRIFT_DN)//CH:      # not safely in different chunks once the background fill has moved the units by its drift
+            X=((st[c]-DRIFT_DN)//CH)*CH;d=max(0,st[c-1]+lens[idx[c-1]]+2-(X-550))
+            for m in range(c):st[m]-=d
+    return st
+def abs_times(w,idx,cond,lens,T,align=True):
+    st,_=timeline(w,idx,cond,lens,0);off=T-st[-1];st=[x+off for x in st]
+    return align_c1(w,idx,st,lens) if (cond=='C1' and align) else st
+def plan(w,lens,P,base_start,max_ntok_c2=14,align=True):
     """layout-independent plan: contrast persons, split, and per person the common start T of its LAST unit (equal in relA and relB, so recency to the readout is matched).
     T = max(base start of the last unit, earliest start that lets the C2 timeline begin at token 600); persons whose C2 timeline does not fit before EXPO_END - MARGIN are skipped. Reservations are checked under BOTH conditions."""
     texts=w['texts'];elig=[];skip=[];rel={}
@@ -69,22 +81,20 @@ def plan(w,lens,P,base_start,max_ntok_c2=14):
         for tries in range(400):
             Tc=T0+(250*(tries//2) if tries%2==0 else -250*((tries+1)//2))
             if not (Tmin<=Tc<=Tmax):continue
-            iv=[(Tc-r[-1]+x,Tc-r[-1]+x+lens[i]+2) for r in (r1,r2) for x,i in zip(r,idx)]
-            if all(free(a_,b_) for a_,b_ in iv):break
+            iv=[(x,x+lens[i]+2) for cd in ('C1','C2') for x,i in zip(abs_times(w,idx,cd,lens,Tc,align),idx)]
+            if min(x for x,_ in iv)>=0 and all(free(a_,b_) for a_,b_ in iv):break
         else:raise AssertionError(f'no free anchor for person {t}')
-        T[t]=Tc
-        for r in (r1,r2):
-            for x,i in zip(r,idx):res.append((Tc-r[-1]+x,Tc-r[-1]+x+lens[i]+2))
+        T[t]=Tc;res+=iv
     return dict(P1=P1,P2=P2,skipped=[t for _,t in skip],T=T,res=res)
-def relayout(w,layout,enc_len,bgs,base_start,max_ntok_c2=14,lens=None,pl=None):
+def relayout(w,layout,enc_len,bgs,base_start,max_ntok_c2=14,lens=None,pl=None,align=True):
     texts=w['texts'];P=persons_of(w);lens=lens or {i:enc_len(texts[i]['text']) for i in range(len(texts)) if texts[i]['kind']=='expo'}
-    pl=pl or plan(w,lens,P,base_start,max_ntok_c2);P1,P2=pl['P1'],pl['P2']
+    pl=pl or plan(w,lens,P,base_start,max_ntok_c2,align);P1,P2=pl['P1'],pl['P2']
     cond={t:'C1' for t in P1};cond.update({t:'C2' for t in P2})
     if layout=='relB':cond={t:('C2' if c=='C1' else 'C1') for t,c in cond.items()}
     placed={};res=list(pl['res'])
     for t in cond:
-        idx=P[t];st,_=timeline(w,idx,cond[t],lens,0);off=pl['T'][t]-st[-1]
-        for s_,i in zip(st,idx):placed[i]=s_+off
+        idx=P[t]
+        for s_,i in zip(abs_times(w,idx,cond[t],lens,pl['T'][t],align),idx):placed[i]=s_
     def free(a,b):return all(b<=s_ or a>=e for s_,e in res)
     for i in sorted(lens,key=lambda i:base_start[i]):
         if i in placed:continue
@@ -109,20 +119,23 @@ def gap_table(nw,tk,enc_ends):
     cond=nw['relayout']['cond'];ok=True
     for t,us in sorted(by.items()):
         f=[u['tok_start'] for u in us if u['label']=='fact'];g=[b-a for a,b in zip(f,f[1:])]
+        cross=sum(1 for a,b in zip(f,f[1:]) if a//CH!=b//CH);same=len(g)-cross
         no=[u['tok_start'] for u in us if u['label']!='fact'];nw8=[sum(1 for n_ in no if 0<f_-n_<WIN) for f_ in f]
         c=cond.get(t,'-');good=True
         if c=='C1':good=all(x<=C1_MAX for x in g)
         if c=='C2':good=all(x>=C2_MIN for x in g) and all(x==0 for x in nw8[1:]) and len(f)>=2
         if c!='-':ok&=good
-        rows.append((t,c,len(f),g,nw8,'PASS' if good else 'FAIL',max([u['tok_end'] for u in us])))
+        rows.append((t,c,len(f),g,nw8,'PASS' if good else 'FAIL',max([u['tok_end'] for u in us]),cross,same,sum(nw8[1:])))
     return rows,ok
 def fmt(rows):
-    o=['| person | condition | n_fact | fact-to-fact gaps (tokens) | name-only units within 8192 before each fact | check | last unit end |','|---|---|---|---|---|---|---|']
-    for t,c,n,g,nw8,ok,end in rows:
-        if c!='-':o.append(f'| {t} | {c} | {n} | {g} | {nw8} | {ok} | {end} |')
+    o=['| person | condition | n_fact | fact-to-fact gaps (tokens) | pairs with the earlier fact in an EARLIER chunk (s_cross) / SAME chunk (s_same) | name-only units within 8192 before each fact | name-only units before facts 2.. (sum) | check | last unit end |','|---|---|---|---|---|---|---|---|---|']
+    for t,c,n,g,nw8,ok,end,cr,sa,nsum in rows:
+        if c!='-':o.append(f'| {t} | {c} | {n} | {g} | {cr} / {sa} | {nw8} | {nsum} | {ok} | {end} |')
+    c1=[r for r in rows if r[1]=='C1'];c2=[r for r in rows if r[1]=='C2']
+    o.append('');o.append(f"C1 persons {len(c1)}: with >= 1 earlier-chunk pair {sum(1 for r in c1 if r[7]>0)}, with only same-chunk pairs {sum(1 for r in c1 if r[7]==0)}, with a name-only unit in the window before facts 2.. {sum(1 for r in c1 if r[9]>0)}, with NO name-only unit in the window {sum(1 for r in c1 if r[9]==0)}; sum s_cross {sum(r[7] for r in c1)}, sum s_same {sum(r[8] for r in c1)}. C2 persons {len(c2)}: sum s_cross {sum(r[7] for r in c2)}, sum s_same {sum(r[8] for r in c2)}, name-only units in window {sum(r[9] for r in c2)}")
     return '\n'.join(o)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--base',default=None);ap.add_argument('--nat',default=None);ap.add_argument('--nat-dir',default=None);ap.add_argument('--out-dir');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--require-real',action='store_true');ap.add_argument('--layouts',default='relA,relB');ap.add_argument('--selftest',action='store_true');ap.add_argument('--max-ntok',type=int,default=14);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--base',default=None);ap.add_argument('--nat',default=None);ap.add_argument('--nat-dir',default=None);ap.add_argument('--out-dir');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--require-real',action='store_true');ap.add_argument('--layouts',default='relA,relB');ap.add_argument('--selftest',action='store_true');ap.add_argument('--max-ntok',type=int,default=14);ap.add_argument('--no-align',action='store_true',help='do not align C1 consecutive facts to different chunks');a=ap.parse_args()
     if a.selftest:selftest();return
     import nat_dryrun as D
     try:tk=D.load_tok(a.tokenizer_file)
@@ -135,7 +148,7 @@ def main():
             st,lay=item.split(':');p=NF.world_path(nd,int(st),lay);assert p.exists(),f'missing {p}';ws.append((item,NW.load_world(p)))
         info={}
         for item,w in ws:
-            print(f'\n######## {item}');run(w,tk,a.out_dir,a.layouts.split(','),a.max_ntok,info.setdefault(item,{}))
+            print(f'\n######## {item}');run(w,tk,a.out_dir,a.layouts.split(','),a.max_ntok,info.setdefault(item,{}),not a.no_align)
         names={}
         for item,w in ws:
             r=info[item]['plan'];strs=set()
@@ -149,15 +162,15 @@ def main():
             print(f"  {k}: P1 {pk['P1']} (sum n_fact {sum(nf[t] for t in pk['P1'])}), P2 {pk['P2']} (sum n_fact {sum(nf[t] for t in pk['P2'])}), skipped (do not fit C2) {pk['skipped']}")
         print('full names / surnames shared by contrast persons of two different streams (given names and places such as Chicago may repeat: they are real strings, not person identities):',clash if clash else 'none (a person appears in one stream only)')
         sys.exit(0 if (not clash and all(all(i['ok'].values()) for i in info.values())) else 4)
-    assert a.base and Path(a.base).exists(),f'--base file not found: {a.base}';w=NW.load_world(a.base);ok=run(w,tk,a.out_dir,a.layouts.split(','),a.max_ntok);sys.exit(0 if all(ok.values()) else 4)
-def run(w,tk,out_dir,layouts,max_ntok=14,rec=None):
+    assert a.base and Path(a.base).exists(),f'--base file not found: {a.base}';w=NW.load_world(a.base);ok=run(w,tk,a.out_dir,a.layouts.split(','),a.max_ntok,None,not a.no_align);sys.exit(0 if all(ok.values()) else 4)
+def run(w,tk,out_dir,layouts,max_ntok=14,rec=None,align=True):
     enc_len=ntok_fn(tk);ends=lambda text:[b for a_,b in T.encode_offs(tk,text)]
     text,_,spans=NW.realize(w,False);sp=NP.tok_spans(spans,ends(text));ei=[i for i,x in enumerate(w['texts']) if x['kind']=='expo'];assert len(ei)==len(sp)
     base_start={i:s['tok_start'] for i,s in zip(ei,sp)};bgs=[x['text'] for x in w['texts'] if x['kind']=='bg'];res={}
-    lens={i:enc_len(w['texts'][i]['text']) for i in ei};pl=plan(w,lens,persons_of(w),base_start,max_ntok);rx0=NF.forbid_regex(w);print('background paragraphs with a forbidden string in the BASE world (same pool, property of the base):',sum(1 for b in bgs if rx0.search(b)),'of',len(bgs))
+    lens={i:enc_len(w['texts'][i]['text']) for i in ei};pl=plan(w,lens,persons_of(w),base_start,max_ntok,align);rx0=NF.forbid_regex(w);print('background paragraphs with a forbidden string in the BASE world (same pool, property of the base):',sum(1 for b in bgs if rx0.search(b)),'of',len(bgs))
     _,sm0,_=T.table_of(w,T.encode_offs(tk,text));print(f"O mask size (BASE {w.get('layout')}, all persons): sum O tokens {sm0['sum_O']}, chunks with O {sm0['chunks_with_O']}, eligible chunks {sm0['eligible_chunks']}, answer tokens {sm0['answer_tokens']}, sum s_cross {sm0['sum_s_cross']}, sum s_same {sm0['sum_s_same']}, sum n_out {sm0['sum_n_out']}")
     for lay in layouts:
-        nw=relayout(w,lay,enc_len,bgs,base_start,max_ntok,lens,pl);rows,ok=gap_table(nw,tk,ends)
+        nw=relayout(w,lay,enc_len,bgs,base_start,max_ntok,lens,pl,align);rows,ok=gap_table(nw,tk,ends)
         before=sorted((x['t'],x['label'],x['text']) for x in w['texts'] if x['kind']=='expo');after=sorted((x['t'],x['label'],x['text']) for x in nw['texts'] if x['kind']=='expo');assert before==after,'exposure units changed'
         rx=NF.forbid_regex(nw);bad=sum(1 for x in nw['texts'] if x['kind']=='bg' and rx.search(x['text']))
         r=nw['relayout'];print(f"## {lay}: P1 {r['P1']} P2 {r['P2']} skipped (do not fit C2) {r['skipped']}; bg paragraphs reused beyond the base pool: {r['bg_reused']}; forbidden strings in background: {bad}; last exposure end token <= {EXPO_END}: {max(x[6] for x in rows)<=EXPO_END}");print(fmt(rows));print('ALL PASS' if ok else 'SOME FAIL');res[lay]=ok;_,sm,_=T.table_of(nw,T.encode_offs(tk,NW.realize(nw,False)[0]));print(f"O mask size ({lay}, all persons): sum O tokens {sm['sum_O']}, chunks with O {sm['chunks_with_O']}, eligible chunks {sm['eligible_chunks']}, answer tokens {sm['answer_tokens']}, sum s_cross {sm['sum_s_cross']}, sum s_same {sm['sum_s_same']}, sum n_out {sm['sum_n_out']}")
