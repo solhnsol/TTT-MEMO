@@ -16,7 +16,7 @@ CH=1024;W=8192;BIN=256
 def sentence_table(w,swap,tok,gw,SP):
     """per exposure sentence (stream order): triple id t, pair, round, place-token positions, name-token positions (positions = indices into ids, BOS at 0)."""
     text,_,spans=gw.realize(w,swap);e=tok.encode(text,add_special_tokens=False);offs=[(0,0)]+list(e.offsets);info=SP._sent_info(w,swap);tri={t['id']:t for t in w['triples']};out=[]
-    expo=[x for x in w.get('texts',[]) if x['kind']=='expo'];FR=getattr(gw,'FR',None);Af=getattr(gw,'A',None)
+    expo=[x for x in w.get('texts',[]) if x['kind']=='expo'];FR=w.get('frames') or getattr(gw,'FR',None);Af=getattr(gw,'A',None)   # E48: worlds with their own frame bank carry it in w['frames']
     def frame_of(i):
         """E47: index of the exposure frame (gen_world.FR template) of the i-th exposure sentence; -1 if it cannot be identified"""
         if FR is None or Af is None or i>=len(expo):return -1
