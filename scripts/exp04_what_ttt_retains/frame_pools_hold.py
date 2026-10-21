@@ -24,4 +24,4 @@ HOLD_SYL1=['Alb','Bor','Cres','Dav','Egr','Fal','Gor','Hav','Ing','Jas','Kor','L
 HOLD_SYL2=['ika','osh','ald','una','ley','ark','ell','ido','ang','ew','ond','ira','ust','ean','ys','ott','yn','abe','ode','ilo']
 HOLD_PRE=['Alder','Birch','Clay','Dove','Esk','Fox','Gorse','Heron','Ings','Lark','Marsh','Nether','Over','Pike','Quarry','Reed','Salt','Teal','Under','Whin']
 HOLD_SUF=['bourne','burn','cote','den','field','gate','hurst','ley','mouth','pool','shaw','side','ton','wall','worth']
-HOLD_OCC=['wheelwright','tailor','baker','butcher','farrier','joiner','roofer','stonecutter','ropemaker','shipwright','goldsmith','silversmith','bookbinder','printer','scrivener','fiddler','piper','bellringer','gravedigger','innkeeper','ostler','cutler','tiler','plasterer','hatter','vintner','distiller','herbalist','midwife','woodcutter']
+HOLD_OCC=['wheelwright','tailor','baker','butcher','farrier','joiner','carpenter','fisherman','ropemaker','shipwright','goldsmith','gardener','grocer','printer','pedlar','swineherd','piper','bellringer','gravedigger','innkeeper','ostler','cutler','tiler','plasterer','hatter','vintner','distiller','herbalist','midwife','woodcutter']
