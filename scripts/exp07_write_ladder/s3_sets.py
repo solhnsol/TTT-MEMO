@@ -61,6 +61,9 @@ def _fill(need_bins,pool,rng):
         if not cand:continue
         nb=min(cand,key=lambda bb:(abs(bb-b),bb));chosen.append(pool[nb].pop())
     return sorted(chosen),(hit/len(need_bins) if len(need_bins) else 1.0)
+def half_person_of(seed,pair,triples):
+    """E47 k3h: the masked person of a pair = random.Random(f'{seed}|k3h|{pair}').choice(sorted triple ids of the pair). Pure function (the CPU analysis e47_triple_da.py calls it with the triple ids of the item list, no tokenizer needed)."""
+    return random.Random(f'{seed}|k3h|{pair}').choice(sorted(triples))
 class Sets:
     def __init__(self,table,seed,passno,frac=0.25):
         self.t=table;self.seed=seed;self.passno=passno;self.frac=frac;self.fill_total=None;self.fill_attn_cands=False;self.fill_no_o=False   # fill_attn_cands (E41/K6 follow-up): draw oraclefill's fill only from the attention cells' candidate set (not the first 4 stream positions, not the 128 tokens right before the chunk); fill_total: optional {chunk: total} (E41 U49: total masked count taken from another cell's file); frac: frac: only used by the E39 cells oraclefill / randfill
@@ -185,8 +188,7 @@ class Sets:
     def half_person(self,pair):
         """E47 k3h: the one triple (person) of the pair whose K3 share is masked; fixed per (world seed, pair) for the whole run and the same in worlds A and B (chosen by triple id): random.Random(f'{seed}|k3h|{pair}').choice(sorted triple ids of the pair in the table)."""
         if getattr(self,'_hp',None) is None:self._hp={}
-        if pair not in self._hp:
-            ts=sorted({u['t'] for u in self.t if u['pair']==pair});self._hp[pair]=random.Random(f'{self.seed}|k3h|{pair}').choice(ts)
+        if pair not in self._hp:self._hp[pair]=half_person_of(self.seed,pair,{u['t'] for u in self.t if u['pair']==pair})
         return self._hp[pair]
     def k3hmask(self,k):
         """E47 k3h: K3 restricted to the fact sentences of the masked person of each pair: for every fact sentence s of the chunk whose triple is half_person(its pair): the tokens of the earlier-round same-triple sentences inside [window start, s's place token) (this contains the O tokens of s). The partner's earlier exposures stay visible, a chunk that holds only the unmasked person's fact sentence of a pair masks nothing for that pair (single-person chunk, e.g. a pair split by the chunk border). Chunks without O mask nothing (also when only unmasked persons are present)."""
