@@ -7,7 +7,7 @@
 set -e
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
-COMMIT=b23e5f8035cfb6526d3b799c1cd0d1b866bc1d1a
+COMMIT=95ebe31de2a71593a5089d400d69823afa6ea41b
 FILES="$D/s3.py $D/s3_sets.py $D/e43_sets_test.py $D/e44_sets_test.py $D/e46_sets_test.py $D/e47_sets_test.py $D/e46_counts.py $D/e47_counts.py $D/e47_p_split.py $D/e47_k3h_test.py $D/e47_k3h_counts.py $D/e47_triple_da.py $D/k3_counts.py $D/e42_k2_tokens.py $D/suppress.py "
 if [ -z "$NO_INSTALL" ]; then
   git cat-file -e $COMMIT^{commit} || { echo "commit $COMMIT not in the local clone: git fetch origin claude/project-thread-rwhdac first"; exit 4; }
@@ -31,7 +31,7 @@ f3973540244b e47_counts.py
 07e32342b1dd e47_p_split.py
 e9f3937ed7ea e47_k3h_test.py
 b8f46d8f4c40 e47_k3h_counts.py
-5ae22e2a1749 e47_triple_da.py
+97222009403b e47_triple_da.py
 fe0ba0b228a6 k3_counts.py
 9153e937b8c1 e42_k2_tokens.py
 9dac9fdda99e suppress.py

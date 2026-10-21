@@ -1,7 +1,7 @@
 #!/bin/bash
-# generator (not a job): writes 108_e47_k3h.sh from the same template (109_e47_k3r.sh was withdrawn by the design thread and moved to withdrawn/; earlier jobs stay pinned to their own commits); code pinned to commit b23e5f8035cfb6526d3b799c1cd0d1b866bc1d1a (local checkout, no fetch)
+# generator (not a job): writes 108_e47_k3h.sh from the same template (109_e47_k3r.sh was withdrawn by the design thread and moved to withdrawn/; earlier jobs stay pinned to their own commits); code pinned to commit 95ebe31de2a71593a5089d400d69823afa6ea41b (local checkout, no fetch)
 cd "$(dirname "$0")/.."
-H=b23e5f8035cfb6526d3b799c1cd0d1b866bc1d1a
+H=95ebe31de2a71593a5089d400d69823afa6ea41b
 D=scripts/exp07_write_ladder
 FILES="s3.py s3_sets.py e43_sets_test.py e44_sets_test.py e46_sets_test.py e47_sets_test.py e46_counts.py e47_counts.py e47_p_split.py e47_k3h_test.py e47_k3h_counts.py e47_triple_da.py k3_counts.py e42_k2_tokens.py suppress.py"
 FL="";MAN="";for F in $FILES;do FL="$FL\$D/$F ";MAN="$MAN$(git show $H:$D/$F | sha256sum | cut -c1-12) $F
