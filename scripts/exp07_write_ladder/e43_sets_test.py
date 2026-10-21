@@ -52,7 +52,9 @@ def main():
     assert nO>0
     sel=SETS.select_by_ctx([-0.9,-0.9,-0.2,-0.65,-0.66,0.1],-0.65);assert sel==[False,True,False,False,True,False],sel   # chunk 0 never, strict inequality at tau
     d_=[0.0]+[-0.1*(k%7)-0.001*k for k in range(1,63)];q=SETS.select_by_ctx_quantile(d_,0.30);assert sum(q)==19 and not q[0] and all(d_[k]<=max(d_[j] for j in range(63) if q[j]) for k in range(63) if q[k]) and min(d_[k] for k in range(1,63) if not q[k])>=max(d_[k] for k in range(1,63) if q[k]),q   # 19 = round(0.30 x 62), the lowest ones
+    print('k6ctx test OK: select_by_ctx tau boundary strict, chunk 0 never; k6ctxq selects',sum(q),'lowest-delta chunks of 62 (frac 0.30), chunk 0 never')
     k_=next(k for k in range(8,63) if sets.oracle(k));assert sets.prefixall(k_)==sets.chunk_set('k6p',k_)[0]   # a selected k6ctx chunk is masked exactly like a K6' chunk
+    print('k6ctx / k6ctxq masks identical to K6\' prefixall on selected chunk',k_,' (sets.prefixall == chunk_set k6p); the s3.py wiring (S = prefixall if selected else empty) is GPU-side and not exercised here')
     print('E43 sets test OK; synthetic table, chunks with O',nO,'(chunk, |O|, |K3|, |K3b|, covered sentences):',rows[:6],'...')
     print('old-cell hash',old_hash(sets))
 if __name__=='__main__':main()
