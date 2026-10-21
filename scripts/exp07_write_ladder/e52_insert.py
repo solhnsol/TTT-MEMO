@@ -171,7 +171,7 @@ def selftest():
     print('e52_insert SELFTEST OK (proxy tokenizer, fake gen_world tokenizer, synthetic base)')
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--nat-dir',default=None);ap.add_argument('--out-dir');ap.add_argument('--base-nat',default='9105:spread');ap.add_argument('--pool-streams',default='9101,9103,9104');ap.add_argument('--stream-id',type=int,default=9201)
-    ap.add_argument('--occ-dev2',default=None,help='30 occupations (comma list or a file with one per line); default = the first 30 candidates (UNFITTED, test only)');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--require-real',action='store_true');ap.add_argument('--seed',type=int,default=52)
+    ap.add_argument('--occ-dev2',default=None,help='30 occupations (comma list or a file with one per line); default = frame_pools_dev2.DEV2_OCC_FINAL');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--require-real',action='store_true');ap.add_argument('--seed',type=int,default=52)
     ap.add_argument('--passes',type=int,default=2);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     import nat_dryrun as D
@@ -182,7 +182,7 @@ def main():
     nd=T.find_nat_dir(a.nat_dir);st,lay=a.base_nat.split(':');base=NW.load_world(NF.world_path(nd,int(st),lay));ps=[int(x) for x in a.pool_streams.split(',')];assert not set(ps)&{9102,9106},'sealed streams must not be used'
     pool_ws=[NW.load_world(NF.world_path(nd,s,'spread')) for s in ps]
     if a.occ_dev2:occ=[x.strip() for x in (Path(a.occ_dev2).read_text().split() if Path(a.occ_dev2).exists() else a.occ_dev2.split(','))]
-    else:occ=D2.DEV2_OCC_CANDS[:30];print('WARNING: occupations are the UNFITTED first 30 candidates (run e51_occ_fit.py --set dev2)')
+    else:occ=list(D2.DEV2_OCC_FINAL);print('occupations: DEV2_OCC_FINAL (server-fitted)')
     ok,_,_=run(base,pool_ws,tk,G,FB,D2,H,a.out_dir,a.stream_id,occ,a.seed,a.passes,nat_dir_for_audit=nd,audit_pool_streams=sorted(set(ps)|{int(st)}))
     sys.exit(0 if ok else 3)
 if __name__=='__main__':main()
