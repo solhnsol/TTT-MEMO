@@ -1,9 +1,9 @@
 #!/bin/bash
-# generator (not a job): writes 108_e47_k3h.sh and 109_e47_k3r.sh from the same template (earlier jobs stay pinned to their own commits); code pinned to commit 4f0557f0c4e8c18f55b394413c18354e84553303 (local checkout, no fetch)
+# generator (not a job): writes 108_e47_k3h.sh from the same template (109_e47_k3r.sh was withdrawn by the design thread and moved to withdrawn/; earlier jobs stay pinned to their own commits); code pinned to commit fb9b0ecc9296c91bd9234bc72d39c662d8e800ca (local checkout, no fetch)
 cd "$(dirname "$0")/.."
-H=4f0557f0c4e8c18f55b394413c18354e84553303
+H=fb9b0ecc9296c91bd9234bc72d39c662d8e800ca
 D=scripts/exp07_write_ladder
-FILES="s3.py s3_sets.py e43_sets_test.py e44_sets_test.py e46_sets_test.py e47_sets_test.py e46_counts.py e47_counts.py e47_p_split.py e47_k3h_test.py e47_k3h_counts.py k3_counts.py e42_k2_tokens.py suppress.py"
+FILES="s3.py s3_sets.py e43_sets_test.py e44_sets_test.py e46_sets_test.py e47_sets_test.py e46_counts.py e47_counts.py e47_p_split.py e47_k3h_test.py e47_k3h_counts.py e47_triple_da.py k3_counts.py e42_k2_tokens.py suppress.py"
 FL="";MAN="";for F in $FILES;do FL="$FL\$D/$F ";MAN="$MAN$(git show $H:$D/$F | sha256sum | cut -c1-12) $F
 ";done
 gen() { # num cell label
@@ -40,6 +40,7 @@ fi
 \$PY \$S/e47_sets_test.py
 \$PY \$S/e47_k3h_test.py
 \$PY \$S/e47_k3h_counts.py --selftest
+\$PY \$S/e47_triple_da.py --selftest >/dev/null
 \$PY \$S/e47_k3h_counts.py --seeds 101,102,103 --passes 4 --worlds AB --out-dir \${E47_COUNTS_DIR:-/tmp/e47_k3h_counts}
 [ -n "\$CPU_ONLY" ] && exit 0
 for M in save eval; do
@@ -48,4 +49,3 @@ done
 JOB
 }
 gen 108 k3h "K3 of ONE person per pair (fixed per pair: random choice by seed and pair, same in worlds A and B); the partner's earlier exposures stay visible; a chunk with only the unmasked person of a pair masks nothing for that pair"
-gen 109 k3r "K3 on a random half of the chunks with O (round(n/2) chunks drawn per pass), other O chunks mask nothing: amount control for k3h"

@@ -7,8 +7,8 @@
 set -e
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
-COMMIT=4f0557f0c4e8c18f55b394413c18354e84553303
-FILES="$D/s3.py $D/s3_sets.py $D/e43_sets_test.py $D/e44_sets_test.py $D/e46_sets_test.py $D/e47_sets_test.py $D/e46_counts.py $D/e47_counts.py $D/e47_p_split.py $D/e47_k3h_test.py $D/e47_k3h_counts.py $D/k3_counts.py $D/e42_k2_tokens.py $D/suppress.py "
+COMMIT=fb9b0ecc9296c91bd9234bc72d39c662d8e800ca
+FILES="$D/s3.py $D/s3_sets.py $D/e43_sets_test.py $D/e44_sets_test.py $D/e46_sets_test.py $D/e47_sets_test.py $D/e46_counts.py $D/e47_counts.py $D/e47_p_split.py $D/e47_k3h_test.py $D/e47_k3h_counts.py $D/e47_triple_da.py $D/k3_counts.py $D/e42_k2_tokens.py $D/suppress.py "
 if [ -z "$NO_INSTALL" ]; then
   git cat-file -e $COMMIT^{commit} || { echo "commit $COMMIT not in the local clone: git fetch origin claude/project-thread-rwhdac first"; exit 4; }
   git checkout $COMMIT -- $(for F in $FILES; do [ "$F" = "$D/suppress.py" ] || echo $F; done)
@@ -21,7 +21,7 @@ if [ -z "$SKIP_VERIFY" ]; then
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH"; exit 5; }
   done <<'MANIFEST'
 ed578faa8763 s3.py
-f849c8460de0 s3_sets.py
+d734bf596422 s3_sets.py
 a256dbbcb9ec e43_sets_test.py
 3dc2e49e33fc e44_sets_test.py
 0b7f4b351d23 e46_sets_test.py
@@ -31,6 +31,7 @@ f3973540244b e47_counts.py
 07e32342b1dd e47_p_split.py
 e9f3937ed7ea e47_k3h_test.py
 b8f46d8f4c40 e47_k3h_counts.py
+01857a7a7ea4 e47_triple_da.py
 fe0ba0b228a6 k3_counts.py
 9153e937b8c1 e42_k2_tokens.py
 9dac9fdda99e suppress.py
@@ -44,6 +45,7 @@ $PY $S/e44_sets_test.py
 $PY $S/e47_sets_test.py
 $PY $S/e47_k3h_test.py
 $PY $S/e47_k3h_counts.py --selftest
+$PY $S/e47_triple_da.py --selftest >/dev/null
 $PY $S/e47_k3h_counts.py --seeds 101,102,103 --passes 4 --worlds AB --out-dir ${E47_COUNTS_DIR:-/tmp/e47_k3h_counts}
 [ -n "$CPU_ONLY" ] && exit 0
 for M in save eval; do
