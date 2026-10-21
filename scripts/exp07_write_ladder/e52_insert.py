@@ -13,12 +13,12 @@ HERE=Path(__file__).resolve().parent;GW=HERE.parents[0]/'exp04_what_ttt_retains'
 import nat_world as NW,nat_pass as NP,nat_filler as NF,e51_nat_table as T,e51_pool_audit as PA,nat_relayout as RL
 CH=1024;NCH=63;WIN=8192;UP=60;DN=450
 T_LO,T_HI=39500,53500;C2_GAP=12800;C1_MAX=4096;C2_MIN=12288
-def draw_pool(G,parts_a,parts_b,rng,n,tag):
+def draw_pool(G,parts_a,parts_b,rng,n,tag,min_n=None):
     """names a+b of the most frequent token-length class (as gen_world), shuffled; returns n distinct"""
     allw=[a+b for a in parts_a for b in parts_b];cls={}
-    for w in allw:cls.setdefault(G.ntok(' '+w),[]).append(w)
+    for w in allw:cls.setdefault(G.ntok(w),[]).append(w)
     L=max(cls,key=lambda k:len(cls[k]));pool=sorted(cls[L]);rng.shuffle(pool)
-    assert len(pool)>=n,f'{tag}: class of {L} tokens has {len(pool)} < {n} names'
+    assert len(pool)>=(min_n or n),f'{tag}: class of {L} tokens has {len(pool)} < {n} names (class sizes {sorted((k,len(v)) for k,v in cls.items())})'
     return pool[:n],L
 def align_slots(st,ln):
     """consecutive slot starts must lie safely in different chunks (margins UP / DN cover the shift of the background fill); shift the earlier slots earlier. The last slot never moves."""
@@ -36,14 +36,14 @@ def c1_starts(T,ln,rng):
 def c2_starts(T):return [T-3*C2_GAP,T-2*C2_GAP,T-C2_GAP,T]
 def make_world(base,G,FB,D2,H,rng,stream_id,occ_dev2,n_flip=24,n_c0=6,R=4):
     npairs=n_flip+n_c0;nt=2*npairs
-    persons,Lp=draw_pool(G,G.SYL1,G.SYL2,rng,3*nt,'persons');places,Ll=draw_pool(G,G.PL_PRE,G.PL_SUF,rng,3*nt,'places')
+    persons,Lp=draw_pool(G,G.SYL1,G.SYL2,rng,2*nt,'persons');places,Ll=draw_pool(G,G.PL_PRE,G.PL_SUF,rng,2*nt,'places')   # 2*60 names per class: the pseudo lists are the control lists reversed (never exposed in the stream, so sharing is harmless; the class of 3 tokens has only 174 places on the server)
     occ=list(G.OCC)+list(occ_dev2);assert len(occ)>=nt and len(set(occ))==len(occ),'need 60 distinct occupations';rng.shuffle(occ)
     bank,_=FB.make('pair',R,npairs,G.FR,seed='E52dev2',pools=D2.DEV2_POOLS,need=D2.DEV2_NEED)
     tri=[];fr={}
     for i in range(nt):
         tri.append({'id':i,'pair':f'p{i//2}','X':persons[i],'XF':persons[i],'XS':persons[i],'P':places[i],'Q':None,'E':None,'o':occ[i],'natg':'L2','region':''})
         own=bank[(i//2)*R:(i//2+1)*R];o=own[:];random.Random(f'E52fr|{stream_id}|{i}').shuffle(o);fr[i]=o
-    w={'seed':stream_id,'v':'l2','kind':'natural','layout':'','triples':tri,'ctrl_persons':persons[nt:2*nt],'ctrl_places':places[nt:2*nt],'pseudo_persons':persons[2*nt:],'pseudo_places':places[2*nt:],'texts':[],'pairs':npairs,
+    w={'seed':stream_id,'v':'l2','kind':'natural','layout':'','triples':tri,'ctrl_persons':persons[nt:2*nt],'ctrl_places':places[nt:2*nt],'pseudo_persons':persons[nt:2*nt][::-1],'pseudo_places':places[nt:2*nt][::-1],'texts':[],'pairs':npairs,
        'frames':{'birth':G.PR_HOME,'rev':G.PR_REV,'school':'','freq_p':G.PR_FREQ_P,'freq_l':G.PR_FREQ_L,'em':[]},'stats':{}}
     return w,fr,Lp,Ll
 def sentence(G,w,fr,i,r):
