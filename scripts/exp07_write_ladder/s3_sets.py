@@ -22,7 +22,8 @@ def sentence_table(w,swap,tok,gw,SP):
         for x0 in s['xs']:
             nt=[j for j in SP._ptoks(offs,s['start']+x0,s['start']+x0+len(s['X'])) if j>0];names+=nt;spans.append(sorted(set(nt)))
         assert place and names,s['text']
-        out.append(dict(idx=s['idx'],t=s['t'],pair=tri[s['t']]['pair'],round=s['round'],place=sorted(set(place)),names=sorted(set(names)),spans=spans,text=s['text']))
+        toks=sorted(set(j for j in SP._ptoks(offs,s['start'],s['start']+len(s['text'])) if j>0))   # E43: every token of the sentence (the sentence-cover cells k3 / k3b)
+        out.append(dict(idx=s['idx'],t=s['t'],pair=tri[s['t']]['pair'],round=s['round'],place=sorted(set(place)),names=sorted(set(names)),spans=spans,text=s['text'],toks=toks))
     return out
 def attn_fill(A,cand,O,base,nF):
     """E41 attnfill: the nF highest-score window positions that are candidates and not in O (score A[i] for position base+i; ties -> lower index). Pure function (CPU testable)."""
@@ -107,6 +108,26 @@ class Sets:
                     for sp in u['spans']:
                         if all(lo<=p<s['place'][0] for p in sp):out.append(tuple(sp))
         return sorted(set(out))
+    def sentencecover(self,k,pair_all=False):
+        """E43 K3: chunks WITH an oracle set -> O plus every other token of the EARLIER (smaller round) exposure sentences of the same triple as each fact sentence of the chunk, inside the window and before that fact sentence's place token (the span O already uses);
+        chunks without O mask nothing. K3b (pair_all): plus every token of the sentences of the same pair but another triple, in the same position range [window start, the fact sentence's place token). Sets self.last_nsent = number of covered sentences."""
+        O=self.oracle(k);self.last_nsent=0
+        if not O:return []
+        lo=max(0,k*CH-W);S=set(O);cov=set()
+        for s in self.cur_sentences(k):
+            lim=s['place'][0]
+            for u in self.t:
+                if (u['t']==s['t'] and u['round']<s['round']) or (pair_all and u['pair']==s['pair'] and u['t']!=s['t']):
+                    tk=[p for p in u['toks'] if lo<=p<lim]
+                    if tk:S|=set(tk);cov.add(u['idx'])
+        self.last_nsent=len(cov);return sorted(S)
+    def sentencecover_fill(self,k):
+        """E43 K3f: K3 plus a uniform fill over the window positions outside K3 so that |S| = fill_total[k] (another cell's n_masked, e.g. attnfill35) or round(frac x window); fill_attn_cands restricts the fill to the attention cells' candidates; chunks without O mask nothing. If K3 is already larger than the target nothing is added."""
+        base=self.sentencecover(k)
+        if not base:return []
+        k0=k*CH;lo=max(0,k0-W);bs=set(base);nF=max(0,(self.fill_total[k] if self.fill_total and k in self.fill_total else self._target(k,self.frac))-len(base))
+        cand=[p for p in range(lo,k0) if p not in bs and not(self.fill_attn_cands and (p<4 or p>=k0-128))];n=min(nF,len(cand))
+        return sorted(bs|set(self._rng('k3f',k).sample(cand,n))) if n else base
     def sub_sets(self,k):
         """oracle-sub / oth-ent-sub (professor 17:03 ruling): distance bins as in rand-dist (256 tokens from the chunk start); per bin b, m_b = min(|O_b|, |P_b|) tokens (O_b: O span tokens in the bin,
         P_b: tokens of other pairs' name/place spans in the bin, window before the chunk); whole spans, token total within +-10% of m_b (greedy over a seeded shuffle); oracle-sub draws from O, oth-ent-sub from P.
@@ -159,4 +180,7 @@ class Sets:
         if cell=='k6':return self.k6(k)
         if cell=='k6p':return self.k6p(k)
         if cell=='native3':return [],1.0
+        if cell=='k3':return self.sentencecover(k),1.0
+        if cell=='k3b':return self.sentencecover(k,True),1.0
+        if cell=='k3f':return self.sentencecover_fill(k),1.0
         raise ValueError(cell)
