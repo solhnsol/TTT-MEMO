@@ -3,6 +3,7 @@ D_a(triple t) = (L3 binding margin of t) - (XP margin of the pair of t), both as
 Masked person of a pair (the k3h cell masks only his K3 share) = s3_sets.half_person_of(seed, pair, the triple ids of the pair), the same rule as job 108 (fixed per seed and pair, the same in worlds A and B); partner = the other triple of the pair. 15 pairs = 15 masked persons + 15 partners per seed.
 Modes:
   k3    --cells k3 --seeds 101,102,103   per seed: mean D_a of the masked persons and of the partners (15 triples each, pair bootstrap 95% CI), masked - partner (paired within pair), the number of triples; per world (A: item margin of world A / 2, B: minus the item margin of world B / 2, each minus the pair's XP part) mean and sd over the 15 triples; across seeds: mean and sd (n = number of seeds) of the 15-triple means. Seeds without result files are listed as missing.
+  indep --cells k3h|k3hc --seeds 101 --epochs 1,2,3,4 [--native L0fs:main --ref k3]   independence prediction P_ind(pair) = (D_a[K3, chosen person] + D_b[native, partner])/2 vs the observed pair mean of the cell (see mode_indep).
   k3h   --cells k3h --ref k3 --seeds 101   dD_a = D_a(k3h) - D_a(K3) per triple (same seed): mean over the masked persons (15 triples, bootstrap 95% CI), over the partners, and the within-pair contrast (masked - partner), plus the same per world.
 Output: <out-dir>/e47_triple_da_<mode>.{md,json}. --selftest: synthetic."""
 import os,sys,json,argparse,tempfile
@@ -11,10 +12,14 @@ import numpy as np
 HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import s3_sets as SETS
 ROOT=HERE.parents[1];OUT=Path(os.environ.get('EXP07_OUT',ROOT/'experiments/exp07_write_ladder'));NB=5000
-def load(od,cell,seed,epoch):
-    meta=json.load(open(od/f'meta_S3_{cell}_s{seed}.json'));E={}
+def load(od,cell,seed,epoch,strict=False):
+    """cell 'k3' -> S3_k3_s<seed>_{A,B}.json + meta_S3_k3_s<seed>.json; cell 'L0fs:main' -> L0fs_main_s<seed>_..., meta_L0fs_main_s<seed>.json. epoch missing: falls back to the last epoch unless strict (then ValueError)."""
+    pre=cell.replace(':','_',1) if ':' in cell else f'S3_{cell}'
+    meta=json.load(open(od/f'meta_{pre}_s{seed}.json'));E={}
     for w in 'AB':
-        ent={e['epoch']:e for e in json.load(open(od/f'S3_{cell}_s{seed}_{w}.json'))['log'] if isinstance(e.get('margins'),dict) and 'epoch' in e};E[w]=ent[epoch if epoch in ent else max(ent)]
+        ent={e['epoch']:e for e in json.load(open(od/f'{pre}_s{seed}_{w}.json'))['log'] if isinstance(e.get('margins'),dict) and 'epoch' in e}
+        if strict and epoch not in ent:raise ValueError(f'{pre} s{seed} world {w}: epoch {epoch} not in the log (epochs {sorted(ent)})')
+        E[w]=ent[epoch if epoch in ent else max(ent)]
     items=meta['items'];fam={};i=0
     for f,n in meta['fam_sizes'].items():fam[f]=items[i:i+n];i+=n
     return E,fam
@@ -101,7 +106,47 @@ def mode_k3h(od,cell,ref,seed,epoch):
         ps,m1,p1=split(t1,key);_,m0,p0=split(t0,key);dm,dp=m1-m0,p1-p0;R={'dD_masked':boot(dm,rng),'dD_partner':boot(dp,rng),'contrast':boot(dm-dp,rng),'D_masked_ref':float(m0.mean()),'D_masked_cell':float(m1.mean()),'D_partner_ref':float(p0.mean()),'D_partner_cell':float(p1.mean()),'n_pairs':len(ps)};res['worlds'][key]=R
         md.append(f"| {lab} | {f3(R['dD_masked'])} | {f3(R['dD_partner'])} | {f3(R['contrast'])} | {R['D_masked_ref']:+.3f} / {R['D_masked_cell']:+.3f} | {R['D_partner_ref']:+.3f} / {R['D_partner_cell']:+.3f} |")
     md.append(f'\nPairs {res["worlds"]["AB"]["n_pairs"]}. Descriptive only (one seed, 15 pairs).');return '\n'.join(md)+'\n',res
+def mode_indep(od,cell,seed,epochs,native='L0fs:main',ref='k3'):
+    """Independence prediction. Per pair, chosen person c = the person the cell masks (cell k3h: half_person_of(seed,pair,..) = masked person of job 108; cell k3hc: the other person), partner q = the pair's other triple. P_ind(pair) = (D_a[ref cell K3, c] + D_b[native, q]) / 2, D_a/D_b = triple-level L3 margin minus the pair's XP part (same s<seed> world, so triple ids agree; asserted). Observed = mean of D_a[cell] over the pair's two triples (= the cell's pair D_alt). diff = observed - P_ind per pair; bootstrap over the 15 pairs. Worlds: 'A+B' is the primary (D_a AB form = pair D_alt scale); 'A' and 'B' are the world-A / world-B parts of the same 15 pairs (the chosen person is the same in both worlds, so they are two views of the same 15 pairs, not 30 pairs)."""
+    rng=np.random.default_rng(52);comp=cell.startswith('k3hc');md=[f'# E47 independence prediction for {cell} (seed {seed}; CPU)\n',f'P_ind(pair) = (D_a[{ref}, {"complement of the k3h masked person" if comp else "k3h masked person"}] + D_b[{native}, the other person]) / 2; observed = pair mean D_a[{cell}]. 15 pairs (chosen person fixed per (seed, pair), the same in worlds A and B). Descriptive; bootstrap 95% CI over pairs.\n'];res={'cell':cell,'ref':ref,'native':native,'seed':seed,'epochs':{}}
+    for ep in epochs:
+        try:
+            Ec,fc=load(od,cell,seed,ep,True);Er,fr=load(od,ref,seed,ep,True);En,fn=load(od,native,seed,ep,True)
+        except FileNotFoundError as e:md.append(f'\nepoch {ep}: missing ({Path(str(e.filename)).name})');continue
+        except ValueError as e:md.append(f'\nepoch {ep}: {e}');continue
+        tc,tr,tn=triple_da(Ec,fc,seed),triple_da(Er,fr,seed),triple_da(En,fn,seed)
+        assert set(tc)==set(tr)==set(tn) and all(tc[t]['pair']==tr[t]['pair']==tn[t]['pair'] for t in tc),'triple ids / pair ids differ between the files'
+        R={};md+=[f'\n## epoch {ep}\n','| world | P_ind mean | observed mean | observed - P_ind (paired, 95% CI) | pairs |','|---|---|---|---|---|']
+        for key,lab in (('AB','A+B (primary)'),('A','A'),('B','B')):
+            pairs=sorted({v['pair'] for v in tc.values()},key=lambda p:_num(p,'p'));P=[];O=[]
+            for p in pairs:
+                ts=[t for t in tc if tc[t]['pair']==p];assert len(ts)==2
+                m=[t for t in ts if tc[t]['masked']];assert len(m)==1;c=m[0]
+                if comp:c=[t for t in ts if t!=c][0]
+                q=[t for t in ts if t!=c][0];P.append((tr[c][key]+tn[q][key])/2);O.append((tc[ts[0]][key]+tc[ts[1]][key])/2)
+            P,O=np.asarray(P),np.asarray(O);R[key]={'P_ind':float(P.mean()),'observed':float(O.mean()),'diff':boot(O-P,rng),'n_pairs':len(P),'per_pair':{p:{'P_ind':float(a),'observed':float(b)} for p,a,b in zip(pairs,P,O)}}
+            md.append(f"| {lab} | {P.mean():+.3f} | {O.mean():+.3f} | {f3(R[key]['diff'])} | {len(P)} |")
+        res['epochs'][ep]=R
+    md.append('\nIf observed = P_ind the two persons act independently (additive); observed > P_ind means the masking of one person also helps the unmasked partner (or the K3 share of that person is larger when the partner is masked too).');return '\n'.join(md)+'\n',res
+def selftest_indep():
+    td=Path(tempfile.mkdtemp());seed=101;tid=list(range(30));items=[];fs={}
+    for f in ('L3','XP'):
+        its=[{'pair':(f'p{i//2}' if f=='L3' else f'x{i//2}'),'tid':tid[i]} for i in range(30)];items+=its;fs[f]=30
+    hp={f'p{n}':SETS.half_person_of(seed,f'p{n}',[2*n,2*n+1]) for n in range(15)}
+    def cellw(pre,val,epochs=(0,4)):
+        for w,sg in (('A',1),('B',-1)):
+            L3=[sg*2*(val(t)/2+0.1) for t in tid];XP=[sg*0.2]*30
+            json.dump({'log':[{'epoch':e,'margins':{'_alt':{'L3':L3 if e else [0.0]*30,'XP':XP if e else [0.0]*30}}} for e in epochs]},open(td/f'{pre}_s{seed}_{w}.json','w'))
+        json.dump({'items':items,'fam_sizes':fs},open(td/f'meta_{pre}_s{seed}.json','w'))
+    ism=lambda t:t==hp[f'p{t//2}']
+    cellw('L0fs_main',lambda t:0.2);cellw('S3_k3',lambda t:1.0 if ism(t) else 0.6)
+    cellw('S3_k3h',lambda t:1.1 if ism(t) else 0.3);cellw('S3_k3hc',lambda t:0.2 if ism(t) else 0.5)
+    md,res=mode_indep(td,'k3h',seed,[4]);r=res['epochs'][4]['AB'];assert abs(r['P_ind']-0.6)<1e-9 and abs(r['observed']-0.7)<1e-9 and abs(r['diff'][0]-0.1)<1e-9 and r['n_pairs']==15,r
+    md2,res2=mode_indep(td,'k3hc',seed,[4]);r2=res2['epochs'][4]['AB'];assert abs(r2['P_ind']-0.4)<1e-9 and abs(r2['observed']-0.35)<1e-9 and abs(res2['epochs'][4]['A']['observed']-0.175)<1e-9,r2
+    md3,_=mode_indep(td,'k3h',seed,[2,4]);assert 'epoch 2' in md3 and 'not in the log' in md3   # missing epoch is reported, not silently replaced
+    print('indep SELFTEST OK (P_ind 0.6 / observed 0.7 for k3h; 0.4 / 0.35 for k3hc; missing epoch reported)');print(md);print(md2)
 def selftest():
+
     td=Path(tempfile.mkdtemp());tid=list(range(30));seed=101;items=[];fs={}
     for f in ('L3','XP'):
         its=[{'pair':(f'p{i//2}' if f=='L3' else f'x{i//2}'),'tid':tid[i]} for i in range(30)];items+=its;fs[f]=30
@@ -129,13 +174,16 @@ def selftest():
     mdf,resf=mode_fixed(td,[101,102,103],[4],101);R=resf['epochs'][4];assert R['pooled_sd_pair']['AB']>0 and len(R['pairs'])>=9 and R['seeds']==[101,102,103],R['pooled_sd_pair']
     tri_a=triple_da(*load(td,'k3',102,4),102,101);tri_b=triple_da(*load(td,'k3',101,4),101);assert {t for t,v in tri_a.items() if v['masked']}=={t for t,v in tri_b.items() if v['masked']}   # same masked persons
     md2,res2=mode_k3(td,[101,102,103,104],4);assert 'missing' in md2 and 'across_seeds' in res2 and res2['seeds'][101]['n']==[15,15]
+    selftest_indep()
     print('e47_triple_da SELFTEST OK: XP pair ids x<n> aligned to p<n>, pair mean of D_a == D_alt (assert), masked person rule, 15+15 triples, dD_a of masked persons recovered (+0.8 in this synthetic scale), partner 0, missing seeds reported');print(md);print(md2)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('mode',nargs='?',choices=['k3','k3h']);ap.add_argument('--cells',default=None);ap.add_argument('--ref',default='k3');ap.add_argument('--seeds',default='101,102,103');ap.add_argument('--epoch',type=int,default=4);ap.add_argument('--out-dir',default=None);ap.add_argument('--fixed-persons-from-seed',type=int,default=None);ap.add_argument('--epochs',default='1,2,3,4');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('mode',nargs='?',choices=['k3','k3h','indep']);ap.add_argument('--cells',default=None);ap.add_argument('--ref',default='k3');ap.add_argument('--seeds',default='101,102,103');ap.add_argument('--epoch',type=int,default=4);ap.add_argument('--out-dir',default=None);ap.add_argument('--fixed-persons-from-seed',type=int,default=None);ap.add_argument('--epochs',default='1,2,3,4');ap.add_argument('--native',default='L0fs:main');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     seeds=[int(x) for x in a.seeds.split(',')]
     if a.mode=='k3' and a.fixed_persons_from_seed is not None:
         md,res=mode_fixed(OUT,seeds,[int(x) for x in a.epochs.split(',')],a.fixed_persons_from_seed,a.cells or 'k3');od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_triple_da_k3_fixed.md').write_text(md);json.dump(res,open(od/'e47_triple_da_k3_fixed.json','w'),indent=1);print(md);return
+    if a.mode=='indep':
+        md,res=mode_indep(OUT,a.cells or 'k3h',seeds[0],[int(x) for x in a.epochs.split(',')],a.native,a.ref);od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);nm=f'e47_triple_da_indep_{a.cells or "k3h"}';(od/(nm+'.md')).write_text(md);json.dump(res,open(od/(nm+'.json'),'w'),indent=1);print(md);return
     if a.mode=='k3':md,res=mode_k3(OUT,seeds,a.epoch,a.cells or 'k3')
     else:md,res=mode_k3h(OUT,a.cells or 'k3h',a.ref,seeds[0],a.epoch)
     od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/f'e47_triple_da_{a.mode}.md').write_text(md);json.dump(res,open(od/f'e47_triple_da_{a.mode}.json','w'),indent=1);print(md)
