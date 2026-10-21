@@ -1,0 +1,59 @@
+"""E51 one-command filler audit (E33 2.6 rules) for relayout worlds: for every target stream and layout, pass-1 = the relayout world's own background, passes 2..P = pools drawn from OTHER streams' background
+(nat_filler.select + audit + forbid_hits, canary 8-grams when pg11 / pg1342 exist). Pool streams are explicit (--pool-streams, default = the 1st-tier streams 9101,9103,9104,9105; the sealed 9102 / 9106 are NOT used unless
+named; add --pool-sealed to include them). The background paragraphs are identical in every layout of a stream, so the pool of a stream is read from the file given for it (relayout file if present in --relayout-dir, else the base file in --nat-dir).
+Reports per (stream, layout): pool budget per pass (paragraphs vs slots + margin), duplicate paragraphs inside the own pass-1 background (relayout reuse), 8-gram overlap between passes, forbidden-string hits, AUDIT PASS/FAIL; exit 3 on any FAIL or an impossible pool.
+Usage: e51_relayout_audit.py --relayout-dir DIR --nat-dir DIR --streams 9103,9101,9104,9105 --layouts relA,relB --passes 3 [--pool-streams ...] [--pool-sealed] [--out-dir D]   |   --selftest"""
+import os,sys,json,argparse,tempfile,shutil
+from pathlib import Path
+HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
+import nat_world as NW,nat_filler as NF,e51_nat_table as T
+SEALED=(9102,9106)
+def audit_one(wdir,stream,layout,passes,margin=None):
+    canary=NF.canary_grams() or None
+    w=NW.load_world(NF.world_path(wdir,stream,layout))
+    if margin is not None:NF.MARGIN=margin
+    try:pools,info=NF.select(wdir,stream,passes,layout,canary=canary)
+    except AssertionError as e:return dict(stream=stream,layout=layout,ok=False,error=str(e)[:300])
+    own=NF.bg_texts(w);rep=NF.audit(pools,own,canary);hits=NF.forbid_hits(pools,w);rep['pass']&=all(v==0 for v in hits.values())
+    return dict(stream=stream,layout=layout,ok=bool(rep['pass']),own_duplicates=rep['passes'][1]['duplicates_inside'],n_slots=info['n_slots'],pool_sizes={p:len(v) for p,v in pools.items()},origin=info['origin_streams'],dropped=info['dropped'],
+                overlap=rep['pair_overlap_8gram'],exact=rep['exact_overlap'],forbid_hits=hits,canary=bool(canary))
+def stage(tmp,nat_dir,rel_dir,streams,pool_streams,layouts):
+    """one temp dir per layout holding exactly the target streams' relayout files and the pool streams' files (same layout name), via symlinks"""
+    for lay in layouts:
+        for st in sorted(set(streams)|set(pool_streams)):
+            src=NF.world_path(rel_dir,st,lay)
+            if not src.exists():src=NF.world_path(nat_dir,st,'spread')
+            if not src.exists():raise SystemExit(f'e51_relayout_audit: no file for stream {st} layout {lay} ({src})')
+            dst=NF.world_path(tmp,st,lay)
+            os.symlink(src.resolve(),dst)
+def main():
+    ap=argparse.ArgumentParser();ap.add_argument('--relayout-dir');ap.add_argument('--nat-dir',default=None);ap.add_argument('--streams',default='9103,9101,9104,9105');ap.add_argument('--layouts',default='relA,relB');ap.add_argument('--passes',type=int,default=3)
+    ap.add_argument('--pool-streams',default='9101,9103,9104,9105');ap.add_argument('--pool-sealed',action='store_true');ap.add_argument('--out-dir',default=None);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    if a.selftest:selftest();return
+    nd=T.find_nat_dir(a.nat_dir);streams=[int(x) for x in a.streams.split(',')];pool=[int(x) for x in a.pool_streams.split(',')]
+    if a.pool_sealed:pool=sorted(set(pool)|set(SEALED))
+    layouts=a.layouts.split(',');allres=[];tmp=tempfile.mkdtemp()
+    try:
+        stage(tmp,nd,a.relayout_dir,streams,pool,layouts)
+        for lay in layouts:
+            for st in streams:
+                r=audit_one(tmp,st,lay,a.passes);allres.append(r);print(json.dumps(r,default=str));print(f"{st} {lay}: {'PASS' if r['ok'] else 'FAIL'}"+(f" ({r.get('error')})" if r.get('error') else ''))
+    finally:shutil.rmtree(tmp,ignore_errors=True)
+    if a.out_dir:Path(a.out_dir).mkdir(parents=True,exist_ok=True);(Path(a.out_dir)/'e51_relayout_audit.json').write_text(json.dumps(allres,indent=1,default=str))
+    print('pool streams used:',pool,'(sealed 9102/9106 excluded)' if not a.pool_sealed else '(sealed streams INCLUDED)')
+    sys.exit(0 if all(r['ok'] for r in allres) else 3)
+def selftest():
+    import random
+    tmp=Path(tempfile.mkdtemp());rng=random.Random(0);V=[f'w{i}' for i in range(5000)];mk=lambda:' '.join(rng.choice(V) for _ in range(60))
+    def world(seed):
+        tri=[{'id':i,'pair':f'p{i//2}','X':f'N{seed}{i} Zork{seed}{i}','XF':f'N{seed}{i}','XS':f'Zork{seed}{i}','P':f'Town{seed}{i}','Q':None,'E':None} for i in range(2)]
+        return {'seed':seed,'layout':'relA','triples':tri,'texts':[{'kind':'bg','text':mk()} for _ in range(40)],'ctrl_persons':[f'C{seed}'],'ctrl_places':[f'Cv{seed}'],'pseudo_persons':[f'Ps{seed}'],'pseudo_places':[f'Pv{seed}'],'pairs':1,'frames':{}}
+    for s in (9101,9103,9104,9105,9102):json.dump(world(s),open(tmp/f'nat_{s}_relA.json','w'))
+    json.dump(world(9101),open(tmp/'nat_9101_spread.json','w'))
+    t2=Path(tempfile.mkdtemp());NF.MARGIN=0
+    stage(t2,tmp,tmp,[9103],[9101,9104,9105],['relA']);r=audit_one(t2,9103,'relA',3,margin=0);assert r['ok'] and sorted(r['origin'].keys())==[2,3],r
+    assert not any(9102 in v for v in r['origin'].values()),'sealed stream used'
+    # a pool that is too small is reported, not silently passed
+    t3=Path(tempfile.mkdtemp());stage(t3,tmp,tmp,[9103],[9101],['relA']);r=audit_one(t3,9103,'relA',3,margin=0);assert not r['ok'] and 'error' in r
+    print('e51_relayout_audit SELFTEST OK')
+if __name__=='__main__':main()
