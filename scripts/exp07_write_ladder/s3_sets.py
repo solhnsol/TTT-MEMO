@@ -61,6 +61,9 @@ def _fill(need_bins,pool,rng):
         if not cand:continue
         nb=min(cand,key=lambda bb:(abs(bb-b),bb));chosen.append(pool[nb].pop())
     return sorted(chosen),(hit/len(need_bins) if len(need_bins) else 1.0)
+def half_person_of(seed,pair,triples):
+    """E47 k3h: the masked person of a pair = random.Random(f'{seed}|k3h|{pair}').choice(sorted triple ids of the pair). Pure function (the CPU analysis e47_triple_da.py calls it with the triple ids of the item list, no tokenizer needed)."""
+    return random.Random(f'{seed}|k3h|{pair}').choice(sorted(triples))
 class Sets:
     def __init__(self,table,seed,passno,frac=0.25):
         self.t=table;self.seed=seed;self.passno=passno;self.frac=frac;self.fill_total=None;self.fill_attn_cands=False;self.fill_no_o=False   # fill_attn_cands (E41/K6 follow-up): draw oraclefill's fill only from the attention cells' candidate set (not the first 4 stream positions, not the 128 tokens right before the chunk); fill_total: optional {chunk: total} (E41 U49: total masked count taken from another cell's file); frac: frac: only used by the E39 cells oraclefill / randfill
@@ -170,6 +173,62 @@ class Sets:
         k0=k*CH;lo=max(0,k0-W);ex=set(K3)|set(add);cand=[p for p in range(lo,k0) if p not in ex];n=min(len(add),len(cand))
         return sorted(set(K3)|set(self._rng('kpxu%d'%len(add),k).sample(cand,n)))
     def kpmask(self,k):return self._k3_plus(k,self.pxsplit(k)[0])
+    def opmask(self,k):
+        """E47 op: O + P (no other tokens of the earlier same-triple sentences, i.e. K3 without its B part); chunks without O mask nothing."""
+        O=self.oracle(k)
+        return sorted(set(O)|set(self.pxsplit(k)[0])) if O else []
+    def p_by_fact(self,k):
+        """E47 analysis: {triple id: number of P tokens (of the other triple of its pair) masked in chunk k on behalf of that triple}; a triple is counted when one of its sentences in the chunk has an earlier same-triple exposure inside the window (it contributes O) and the other triple of its pair is not itself a triple of a fact sentence of the chunk (else its sentences are B, not P)."""
+        if not self.oracle(k):return {}
+        P=set(self.pxsplit(k)[0]);own=self._owner();lo=max(0,k*CH-W);out={}
+        for s in self.cur_sentences(k):
+            if not any(u['t']==s['t'] and u['round']<s['round'] and any(lo<=p<s['place'][0] for p in u['names']+u['place']) for u in self.t):continue
+            out[s['t']]=sum(1 for p in P if self.t[own[p]]['pair']==s['pair'] and self.t[own[p]]['t']!=s['t'])
+        return out
+    def half_person(self,pair):
+        """E47 k3h: the one triple (person) of the pair whose K3 share is masked; fixed per (world seed, pair) for the whole run and the same in worlds A and B (chosen by triple id): random.Random(f'{seed}|k3h|{pair}').choice(sorted triple ids of the pair in the table)."""
+        if getattr(self,'_hp',None) is None:self._hp={}
+        if pair not in self._hp:self._hp[pair]=half_person_of(self.seed,pair,{u['t'] for u in self.t if u['pair']==pair})
+        return self._hp[pair]
+    def _k3half(self,k,comp):
+        """K3 share of one person per pair: comp=False -> the masked person of k3h (half_person), comp=True -> the OTHER triple of each pair (the complement cell k3hc). For every fact sentence s of the chunk whose triple is the chosen person of its pair: the tokens of the earlier-round same-triple sentences inside [window start, s's place token), in-chunk ones included, the current round excluded. Chunks without O mask nothing. k3h and k3hc are disjoint (tokens are owned by one sentence) and their union is K3 (sentencecover) exactly."""
+        if not self.oracle(k):return []
+        lo=max(0,k*CH-W);S=set()
+        for s in self.cur_sentences(k):
+            if (s['t']==self.half_person(s['pair']))==comp:continue
+            lim=s['place'][0]
+            for u in self.t:
+                if u['t']==s['t'] and u['round']<s['round']:S|={p for p in u['toks'] if lo<=p<lim}
+        return sorted(S)
+    def k3hmask(self,k):
+        """E47 k3h: K3 restricted to the fact sentences of the masked person of each pair (see _k3half). The partner's earlier exposures stay visible; a chunk that holds only the unmasked person's fact sentence of a pair masks nothing for that pair."""
+        return self._k3half(k,False)
+    def k3hcmask(self,k):
+        """E47 k3hc: the complement of k3h: the K3 share of the OTHER person of each pair (the one half_person_of did not choose)."""
+        return self._k3half(k,True)
+    def k3r_chunks(self):
+        """E47 k3r: the chunks that get K3: round(n/2) of the n chunks with O, drawn without replacement (seeded by (seed, pass, 'k3r')); the other O chunks mask nothing."""
+        if getattr(self,'_k3r',None) is None:
+            oc=[k for k in range(63) if self.oracle(k)];n=int(round(len(oc)/2));self._k3r=set(random.Random(f'{self.seed}|{self.passno}|k3r').sample(oc,n))
+        return self._k3r
+    def k3rmask(self,k):return self.sentencecover(k) if k in self.k3r_chunks() else []
+    def k3all_parts(self,k):
+        """E47 k3all: (S, stats). Chunks WITH an oracle set: for every fact sentence s of the chunk, EVERY token of every EARLIER-round sentence (round < the round of s) of BOTH persons of the pair of s, wherever it lies: the whole chunk included (no cut at s's place token), partner inside or outside the chunk; the current round (the sentence s itself and the other person's sentence of the same round, written / measured now) is excluded. Only positions >= the window start (k*1024 - 8192) are returned (the write forward cannot attend to earlier keys, masking them changes nothing); stats counts what lies outside: out_window (tokens before the window start of those sentences), partner_not_in_chunk (partner triple has no fact sentence in the chunk: tokens kept in S), same_round_partner_excluded (tokens of the other person's same-round sentences inside the window that are NOT masked here although K3b may mask them). Chunks without O: ([], zeros)."""
+        z={'out_window':0,'partner_not_in_chunk':0,'same_round_partner_excluded':0}
+        if not self.oracle(k):return [],z
+        lo=max(0,k*CH-W);cur=self.cur_sentences(k);ts={s['t'] for s in cur};S=set();out=set();pnc=set();sr=set()
+        for s in cur:
+            for u in self.t:
+                if u['pair']!=s['pair']:continue
+                if u['round']<s['round']:
+                    for p in u['toks']:
+                        if p>=lo:
+                            S.add(p)
+                            if u['t']!=s['t'] and u['t'] not in ts:pnc.add(p)
+                        else:out.add(p)
+                elif u['round']==s['round'] and u['t']!=s['t'] and u['idx']!=s['idx']:sr|={p for p in u['toks'] if lo<=p<k*CH+CH}
+        sr-=S;return sorted(S),{'out_window':len(out),'partner_not_in_chunk':len(pnc),'same_round_partner_excluded':len(sr)}
+    def k3allmask(self,k):return self.k3all_parts(k)[0]
     def kxmask(self,k):return self._k3_plus(k,self.pxsplit(k)[1])
     def kpumask(self,k):return self._k3_plus(k,self.pxsplit(k)[0],True)
     def kxumask(self,k):return self._k3_plus(k,self.pxsplit(k)[1],True)
@@ -289,6 +348,11 @@ class Sets:
         if cell=='sent':return self.sentmask(k),1.0
         if cell=='bg':return self.bgmask(k),1.0
         if cell=='noo':return self.noomask(k),1.0
+        if cell=='op':return self.opmask(k),1.0
+        if cell=='k3h':return self.k3hmask(k),1.0
+        if cell=='k3hc':return self.k3hcmask(k),1.0
+        if cell=='k3r':return self.k3rmask(k),1.0
+        if cell=='k3all':return self.k3allmask(k),1.0
         if cell=='kp':return self.kpmask(k),1.0
         if cell=='kx':return self.kxmask(k),1.0
         if cell=='kp_u':return self.kpumask(k),1.0
