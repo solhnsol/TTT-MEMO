@@ -13,6 +13,7 @@ import os,sys,json,time,argparse,hashlib
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import ladder as LD
+import margins_split as MS
 from ladder import *
 sys.path.insert(0,str(LD.ROOT/'scripts/exp04_what_ttt_retains'))
 import suppress as SP
@@ -210,7 +211,7 @@ def unit_diag(L,world_seed):
     return res
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['native0','native3','oracle','othent','randdist','recency','prefixall','oraclesub','othentsub','oraclefill','randfill','k6','k6p','k3','k3b','k3f','k6ctx','k6ctxq','occ','frm','unif_occ','k3all','k3h','k3hc','k3r','op','kp','kx','kp_u','kx_u','kx_s','kx_o','sent','bg','noo'],default='oracle');ap.add_argument('--world-seed',type=int,default=101)
-    ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],default='save');ap.add_argument('--tag',default='');ap.add_argument('--passes',type=int,default=4);ap.add_argument('--keep',action='store_true')
+    ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],default='save');ap.add_argument('--tag',default='');ap.add_argument('--passes',type=int,default=4);ap.add_argument('--keep',action='store_true');ap.add_argument('--regold',action='store_true',help='E47: --mode eval only: re-score the saved states with the current ladder.evaluate (gold / foil span log-probs stored), keep the states, write <result>.regold.json next to the untouched original and compare the margins with it')
     ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true');ap.add_argument('--unit-diag',action='store_true');ap.add_argument('--fill-size-from',default=None,help='E41 U49: oraclefill total per chunk = n_masked of OUT/S3_<TAG>_s<seed>_<world>.saved.json (e.g. attnsel_p4), instead of fill-frac x window');ap.add_argument('--fill-no-o',action='store_true',help='oraclefill: chunks WITHOUT an oracle set are also filled uniformly (total = fill-size-from n_masked of that chunk, else fill-frac x window); needed to pair with attn-sel, which masks 40-50% in every chunk');ap.add_argument('--fill-attn-cands',action='store_true',help='oraclefill: draw the fill only from the attention cells candidate set (positions >= 4 and < chunk start - 128)');ap.add_argument('--fill-frac',type=float,default=0.25,help='E39: oraclefill/randfill target masked fraction of the write window');ap.add_argument('--lr-scale',type=float,default=1.0,help='E38: multiply the inner step size (after ilr multiplier, clip untouched); 1.0 = bit-identical to the old code')
     ap.add_argument('--ctx-frac',type=float,default=0.30,help='k6ctxq: the fraction of chunks 1..62 with the lowest delta that are masked whole (n = round(frac x 62), ties -> lower chunk index)');ap.add_argument('--ctx-tau',type=float,default=-0.38,help='k6ctx: a chunk is masked whole (prefix-all, as K6\') when its window context gain delta (mean NLL with the 8K window - mean NLL alone, read at W0 on the pass stream) is below tau');a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True);assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     rt=Runtime()
@@ -224,6 +225,8 @@ def main():
     if not a.smoke_chunks:json.dump({'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'lr_scale':a.lr_scale,'fill_frac':a.fill_frac,'clip':L.clip,'cell':a.cell,'passes':a.passes,'xla_flags':os.environ.get('XLA_FLAGS')},open(OUT/f'meta_{lev}_{tag}_s{a.world_seed}.json','w'),indent=1)
     for w in a.worlds:
         f=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.json';fs=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.saved.json'
+        if a.regold:
+            assert a.mode=='eval','--regold needs --mode eval';f_orig=f;f=f.with_name(f.stem+'.regold.json')   # E47: re-score saved states (never removed)
         if f.exists():print('exists',f);continue
         if a.mode=='eval':
             d=json.load(open(fs));t0=time.monotonic()
@@ -231,7 +234,9 @@ def main():
                 if isinstance(e.get('margins'),dict) and '_file' in e['margins']:
                     fn=e['margins']['_file'];h=e['margins']['_hash'];mm=L.load_state(fn)
                     assert reuse._hash_pytree(mm.inner_parameters())[0]==h;e['margins']=L.evaluate(mm);e['hash']=h
-                    if not a.keep:os.remove(fn)
+                    if not (a.keep or a.regold):os.remove(fn)
+            if a.regold:
+                d['regold_check']=MS.regold_check(json.load(open(f_orig))['log'],d['log']) if f_orig.exists() else None;print('regold check vs the original result (max |diff| of the margins per epoch):',d['regold_check'],flush=True)
             d['sec_eval']=time.monotonic()-t0;json.dump(d,open(f,'w'));print('scored',f,round(d['sec_eval']),'s',flush=True);continue
         L.save_dir=SD/w;L._nsave=0;(SD/w).mkdir(parents=True,exist_ok=True)
         if fs.exists():print('exists',fs);continue

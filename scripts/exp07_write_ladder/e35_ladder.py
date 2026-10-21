@@ -20,6 +20,7 @@ import os,sys,json,time,argparse,hashlib,random,re,copy
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import ladder as LD
+import margins_split as MS
 from ladder import *
 sys.path.insert(0,str(LD.ROOT/'scripts/exp04_what_ttt_retains'))
 import s3_sets as SETS
@@ -269,7 +270,7 @@ def u56(L,world_seed,ks=(1,5,20)):
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L1fillfresh','L1smallbatch','L0reset','L0iso']);ap.add_argument('--reset-period',type=int,default=64);ap.add_argument('--passes',type=int,default=4);ap.add_argument('--epochs',type=int,default=4)
     ap.add_argument('--worlds',default='AB');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='e35');ap.add_argument('--mode',choices=['full','save','eval'],default='full')
-    ap.add_argument('--keep',action='store_true');ap.add_argument('--log-clip',action='store_true');ap.add_argument('--cpu-checks',action='store_true');ap.add_argument('--u56',action='store_true');ap.add_argument('--compare-hash',default=None);ap.add_argument('--iso',choices=['rows','none'],default='rows',help='L0iso: rows = attention blocked between rows (R2-iso); none = control through the same step path without isolation');ap.add_argument('--iso-cross-loss',action='store_true',help='L0iso rows: also score the targets that cross a row boundary');ap.add_argument('--iso-check',action='store_true');a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
+    ap.add_argument('--keep',action='store_true');ap.add_argument('--regold',action='store_true',help='E47: --mode eval only: re-score the saved states with the current ladder.evaluate (gold / foil span log-probs stored), keep the states, write <result>.regold.json next to the untouched original and compare the margins with it');ap.add_argument('--log-clip',action='store_true');ap.add_argument('--cpu-checks',action='store_true');ap.add_argument('--u56',action='store_true');ap.add_argument('--compare-hash',default=None);ap.add_argument('--iso',choices=['rows','none'],default='rows',help='L0iso: rows = attention blocked between rows (R2-iso); none = control through the same step path without isolation');ap.add_argument('--iso-cross-loss',action='store_true',help='L0iso rows: also score the targets that cross a row boundary');ap.add_argument('--iso-check',action='store_true');a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
     if a.cpu_checks:cpu_checks(a.world_seed);return
     if a.iso_check:sys.exit(0 if iso_check(a.world_seed,a.passes)['all_ok'] else 3)
     if a.u56:
@@ -282,6 +283,8 @@ def main():
     json.dump({'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'clip':L.clip,'level':lev,'epochs':a.epochs,'passes':a.passes,'seed':a.seed,'xla_flags':os.environ.get('XLA_FLAGS')},open(OUT/f'meta_{lev}_{a.tag}_s{a.world_seed}.json','w'),indent=1)
     for w in a.worlds:
         f=OUT/f'{lev}_{a.tag}_s{a.world_seed}_{w}.json';fs=OUT/f'{lev}_{a.tag}_s{a.world_seed}_{w}.saved.json'
+        if a.regold:
+            assert a.mode=='eval','--regold needs --mode eval';f_orig=f;f=f.with_name(f.stem+'.regold.json')   # E47: re-score saved states (never removed)
         if f.exists():print('exists',f);continue
         if a.mode=='eval':
             d=json.load(open(fs));t0=time.monotonic()
@@ -289,7 +292,9 @@ def main():
                 if isinstance(e.get('margins'),dict) and '_file' in e['margins']:
                     fn=e['margins']['_file'];h=e['margins']['_hash'];mm=L.load_state(fn);assert reuse._hash_pytree(mm.inner_parameters())[0]==h,'loaded weights differ from the streamed weights'
                     e['margins']=L.evaluate(mm);e['hash']=h
-                    if not a.keep:os.remove(fn)
+                    if not (a.keep or a.regold):os.remove(fn)
+            if a.regold:
+                d['regold_check']=MS.regold_check(json.load(open(f_orig))['log'],d['log']) if f_orig.exists() else None;print('regold check vs the original result (max |diff| of the margins per epoch):',d['regold_check'],flush=True)
             d['sec_eval']=time.monotonic()-t0;json.dump(d,open(f,'w'));print('scored',f,round(d['sec_eval']),'s',flush=True);continue
         if a.mode=='save':
             L.save_dir=SD/w;L._nsave=0;(SD/w).mkdir(parents=True,exist_ok=True)

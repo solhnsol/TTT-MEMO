@@ -34,7 +34,17 @@ def effects(T):
     for p,d in T.items():
         t={k:(v['A']-v['B'])/2 for k,v in d.items()};xp=t['xg']-t['xf'];t['D_a(a)']=t['s(Pa|a)']-t['s(Pb|a)']-xp;t['D_a(b)']=t['s(Pb|b)']-t['s(Pa|b)']-xp;R[p]=t
     return R
-def analyse(od,cells,seed,epochs,ref):
+def beta_table(T):
+    """per pair: place preference beta_w = ([s(Pa|a)+s(Pa|b)] - [s(Pb|a)+s(Pb|b)])/2 in world w (how much more the readout favours place P_a over P_b over the two prompts, whatever the binding), and the identities (assert): D_a + D_b = {[t(Pa|a)-t(Pa|b)] + [t(Pb|b)-t(Pb|a)]} - 2 (t(xg)-t(xf)) (beta cancels in the pair sum), D_a - D_b = beta_A - beta_B (the beta part of the individual D_a that a world average does not remove); t = (A-B)/2."""
+    R={};E=effects(T)
+    for p,d in T.items():
+        b={w:((d['s(Pa|a)'][w]+d['s(Pa|b)'][w])-(d['s(Pb|a)'][w]+d['s(Pb|b)'][w]))/2 for w in 'AB'};t={k:(v['A']-v['B'])/2 for k,v in d.items()};xp=t['xg']-t['xf']
+        ident=(t['s(Pa|a)']-t['s(Pa|b)'])+(t['s(Pb|b)']-t['s(Pb|a)'])-2*xp
+        assert abs(E[p]['D_a(a)']+E[p]['D_a(b)']-ident)<1e-9,(p,E[p],ident)
+        assert abs(E[p]['D_a(a)']-E[p]['D_a(b)']-(b['A']-b['B']))<1e-9,(p,E[p],b)
+        R[p]={'beta_A':b['A'],'beta_B':b['B'],'D_sum':ident,'D_diff':b['A']-b['B']}
+    return R
+def analyse(od,cells,seed,epochs,ref,compare=()):
     rng=np.random.default_rng(54);md=['# E47 log-prob terms behind the binding margin (CPU)\n','t(term) = (term in world A - term in world B)/2 of the SUMMED log-prob of the answer span; a = k3h masked person, b = partner; D_a(a) = [t(Pa|a)-t(Pb|a)] - [t(xg)-t(xf)], D_a(b) = [t(Pb|b)-t(Pa|b)] - [t(xg)-t(xf)] (pair D_alt = their mean). 15 pairs, bootstrap 95% CI over pairs.\n'];res={'seed':seed,'epochs':{}};cols=list(TERMS)+['D_a(a)','D_a(b)']
     for ep in epochs:
         eff={};raw={};md.append(f'\n## epoch {ep}\n')
@@ -48,13 +58,22 @@ def analyse(od,cells,seed,epochs,ref):
             except FileNotFoundError as e:md.append(f'- {c}: missing ({Path(str(e.filename)).name})')
             except KeyError as e:md.append(f'- {c}: {e.args[0]}')
             except ValueError as e:md.append(f'- {c}: {e}')
-        R={'cells':{},'change':{}}
+        R={'cells':{},'change':{},'beta':{}}
         md+=['| cell | '+' | '.join(cols)+' |','|---|'+'---|'*len(cols)]
         for c,e in eff.items():
             ps=sorted(e,key=lambda p:TD._num(p,'p'));R['cells'][c]={k:TD.boot([e[p][k] for p in ps],rng) for k in cols};md.append(f'| {c} | '+' | '.join(f"{R['cells'][c][k][0]:+.3f}" for k in cols)+' |')
         md+=['\nRaw terms per world (mean of the 15 pairs; A / B):\n','| cell | '+' | '.join(TERMS)+' |','|---|'+'---|'*len(TERMS)]
         for c,T in raw.items():
             R['cells'][c]['raw']={k:{w:float(np.mean([T[p][k][w] for p in T])) for w in 'AB'} for k in TERMS};md.append(f'| {c} | '+' | '.join(f"{R['cells'][c]['raw'][k]['A']:+.2f} / {R['cells'][c]['raw'][k]['B']:+.2f}" for k in TERMS)+' |')
+        md+=['\nPlace preference beta_w = ([s(Pa|a)+s(Pa|b)] - [s(Pb|a)+s(Pb|b)])/2 per world (the same for both persons of a pair); identities asserted: D_a + D_b = [t(Pa|a)-t(Pa|b)] + [t(Pb|b)-t(Pb|a)] - 2(t(xg)-t(xf)) (beta cancels), D_a - D_b = beta_A - beta_B. Signs of beta are arbitrary (P_a = the world-A place of the k3h masked person), so |beta| is the size; "before" = per world, "after" = after the (A-B)/2 average.\n','| cell | mean beta_A | mean beta_B | mean abs beta_A | mean abs beta_B (before) | mean (D_a - D_b) | mean abs (D_a - D_b) (after) | mean D_a + D_b |','|---|---|---|---|---|---|---|---|']
+        for c,T in raw.items():
+            bt=beta_table(T);ps=sorted(bt,key=lambda p:TD._num(p,'p'));v=lambda k:np.asarray([bt[p][k] for p in ps]);R['beta'][c]={'beta_A':float(v('beta_A').mean()),'beta_B':float(v('beta_B').mean()),'abs_beta_A':float(np.abs(v('beta_A')).mean()),'abs_beta_B':float(np.abs(v('beta_B')).mean()),'D_diff':float(v('D_diff').mean()),'abs_D_diff':float(np.abs(v('D_diff')).mean()),'D_sum':float(v('D_sum').mean()),'per_pair':bt}
+            x=R['beta'][c];md.append(f"| {c} | {x['beta_A']:+.3f} | {x['beta_B']:+.3f} | {x['abs_beta_A']:.3f} | {x['abs_beta_B']:.3f} | {x['D_diff']:+.3f} | {x['abs_D_diff']:.3f} | {x['D_sum']:+.3f} |")
+        for pair in compare:
+            c1,c2=pair.split('=')
+            try:
+                E1,f1=TD.load(od,c1,seed,ep,True);E2,f2=TD.load(od,c2,seed,ep,True);dm=max(float(np.max(np.abs(np.asarray(E1[w]['margins']['_alt'][f])-np.asarray(E2[w]['margins']['_alt'][f])))) for w in 'AB' for f in ('L3','XP'));R.setdefault('compare',{})[pair]=dm;md.append(f'\nCompare {c1} vs {c2} (epoch {ep}): max |alt margin difference| over L3 and XP items, worlds A and B = {dm:.3g}')
+            except (FileNotFoundError,KeyError,ValueError) as e:md.append(f'\nCompare {pair}: not possible ({e})')
         if ref in eff:
             md+=[f'\nChange of every term from `{ref}` to the cell (cell - {ref}; mean [95% CI] over pairs):\n','| cell | '+' | '.join(cols)+' |','|---|'+'---|'*len(cols)]
             for c,e in eff.items():
@@ -85,8 +104,11 @@ def selftest():
     c=R['cells']['k3'];assert abs(c['s(Pa|a)'][0]-0.5)<1e-9 and abs(c['s(Pb|a)'][0]+0.5)<1e-9 and abs(c['D_a(a)'][0]-1.0)<1e-9 and abs(c['xg'][0])<1e-9,c
     ch=R['change']['k3h'];assert abs(ch['s(Pa|a)'][0]-0.25)<1e-9 and abs(ch['s(Pb|a)'][0])<1e-9 and abs(ch['D_a(a)'][0]-0.25)<1e-9 and abs(ch['s(Pb|b)'][0]+0.15)<1e-9 and abs(ch['D_a(b)'][0]+0.15)<1e-9,ch   # sa=-0.5 raises t(Pa|a) by 0.25, sb=+0.3 lowers t(Pb|b) by 0.15
     assert 'old: no gold/foil stored' in md and 'nofile: missing' in md
+    import shutil
+    for w in 'AB':shutil.copy(td/f'S3_k3_s{seed}_{w}.json',td/f'S3_k3_s{seed}_{w}.regold.json')
+    md4,res4=analyse(td,['k3@regold'],seed,[4],'k3@regold',['k3@regold=k3']);assert res4['epochs'][4]['compare']['k3@regold=k3']==0.0 and abs(res4['epochs'][4]['cells']['k3@regold']['D_a(a)'][0]-1.0)<1e-9   # the .regold file naming works and the compare check reports 0
     print('e47_terms SELFTEST OK (terms, effects, D_a reproduces the margin based triple_da, change K3 -> k3h, old file and missing file reported)');print(md)
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--cells',default='L0fs:main,k3,k3h,k3hc');ap.add_argument('--seeds',default='101');ap.add_argument('--epochs',default='4');ap.add_argument('--ref',default='k3');ap.add_argument('--out-dir',default=None);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--cells',default='L0fs:main,k3,k3h,k3hc');ap.add_argument('--seeds',default='101');ap.add_argument('--epochs',default='4');ap.add_argument('--ref',default='k3');ap.add_argument('--compare',default='',help='comma list of cellA=cellB: max |alt margin difference| between two result files (e.g. k3@regold=k3 to check the re-scoring, L0fs:fskeep@regold=L0fs:main for the native)');ap.add_argument('--out-dir',default=None);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();sys.exit(0)
-    md,res=analyse(OUT,a.cells.split(','),int(a.seeds.split(',')[0]),[int(x) for x in a.epochs.split(',')],a.ref);od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_terms.md').write_text(md);json.dump(res,open(od/'e47_terms.json','w'),indent=1);print(md)
+    md,res=analyse(OUT,a.cells.split(','),int(a.seeds.split(',')[0]),[int(x) for x in a.epochs.split(',')],a.ref,[x for x in a.compare.split(',') if x]);od=Path(a.out_dir) if a.out_dir else OUT;od.mkdir(parents=True,exist_ok=True);(od/'e47_terms.md').write_text(md);json.dump(res,open(od/'e47_terms.json','w'),indent=1);print(md)

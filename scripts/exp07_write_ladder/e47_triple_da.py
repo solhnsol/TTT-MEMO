@@ -15,10 +15,12 @@ import s3_sets as SETS
 ROOT=HERE.parents[1];OUT=Path(os.environ.get('EXP07_OUT',ROOT/'experiments/exp07_write_ladder'));NB=5000
 def load(od,cell,seed,epoch,strict=False):
     """cell 'k3' -> S3_k3_s<seed>_{A,B}.json + meta_S3_k3_s<seed>.json; cell 'L0fs:main' -> L0fs_main_s<seed>_..., meta_L0fs_main_s<seed>.json. epoch missing: falls back to the last epoch unless strict (then ValueError)."""
+    sfx='';
+    if cell.endswith('@regold'):cell=cell[:-7];sfx='.regold'   # E47: the re-scored result files <result>.regold.json (the meta file is the original one)
     pre=cell.replace(':','_',1) if ':' in cell else f'S3_{cell}'
     meta=json.load(open(od/f'meta_{pre}_s{seed}.json'));E={}
     for w in 'AB':
-        ent={e['epoch']:e for e in json.load(open(od/f'{pre}_s{seed}_{w}.json'))['log'] if isinstance(e.get('margins'),dict) and 'epoch' in e}
+        ent={e['epoch']:e for e in json.load(open(od/f'{pre}_s{seed}_{w}{sfx}.json'))['log'] if isinstance(e.get('margins'),dict) and 'epoch' in e}
         if strict and epoch not in ent:raise ValueError(f'{pre} s{seed} world {w}: epoch {epoch} not in the log (epochs {sorted(ent)})')
         E[w]=ent[epoch if epoch in ent else max(ent)]
     items=meta['items'];fam={};i=0
