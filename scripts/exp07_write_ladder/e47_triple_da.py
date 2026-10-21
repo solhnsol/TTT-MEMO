@@ -18,24 +18,37 @@ def load(od,cell,seed,epoch):
     items=meta['items'];fam={};i=0
     for f,n in meta['fam_sizes'].items():fam[f]=items[i:i+n];i+=n
     return E,fam
+def _num(pair,prefix):
+    if not (isinstance(pair,str) and pair.startswith(prefix) and pair[len(prefix):].isdigit()):raise ValueError(f'pair id {pair!r} is not of the form {prefix}<n>')
+    return int(pair[len(prefix):])
 def triple_da(E,fam,seed):
-    """-> dict with per-triple D_a for 'AB' (= (A-B)/2 form), 'A' and 'B' world parts, masked person flag and pair."""
+    """-> dict triple id -> {'pair', 'A', 'B', 'AB' (= (A-B)/2 form), 'masked'}. The XP (control) items carry pair ids 'x<n>' and the L3 items 'p<n>' (as in the real meta files); the control pair x<n> is the reference of pair p<n> (the same alignment by sorted pair number as analyze_e35.D_alt); a missing x<n> or another id form is an explicit error. Self-check (assert): the mean over the two triples of a pair of D_a (AB) equals the pair's D_alt computed independently with the analyze_e35 formula."""
     a={w:np.asarray(E[w]['margins']['_alt']['L3']) for w in 'AB'};x={w:np.asarray(E[w]['margins']['_alt']['XP']) for w in 'AB'}
     part={'A':lambda m:m/2,'B':lambda m:-m/2}
     xp={}
     for k,it in enumerate(fam['XP']):
-        for w in 'AB':xp.setdefault((it['pair'],w),[]).append(part[w](x[w][k]))
+        n=_num(it['pair'],'x')
+        for w in 'AB':xp.setdefault((n,w),[]).append(part[w](x[w][k]))
     xp={k:float(np.mean(v)) for k,v in xp.items()}
     l3={};pairs={}
     for k,it in enumerate(fam['L3']):
         if 'tid' not in it:raise ValueError('items have no triple id (tid)')
-        pairs[it['tid']]=it['pair']
+        pairs[it['tid']]=it['pair'];_num(it['pair'],'p')
         for w in 'AB':l3.setdefault((it['tid'],w),[]).append(part[w](a[w][k]))
-    l3={k:float(np.mean(v)) for k,v in l3.items()};tri={}
-    bypair={}
+    l3={k:float(np.mean(v)) for k,v in l3.items()};tri={};bypair={}
     for t,p in pairs.items():bypair.setdefault(p,[]).append(t)
     for t,p in pairs.items():
-        da={w:l3[(t,w)]-xp[(p,w)] for w in 'AB'};tri[t]={'pair':p,'A':da['A'],'B':da['B'],'AB':da['A']+da['B'],'masked':t==SETS.half_person_of(seed,p,bypair[p])}
+        n=_num(p,'p')
+        if (n,'A') not in xp:raise ValueError(f'no XP (control) items for pair x{n} (reference of {p}); XP pairs: {sorted({k[0] for k in xp})}')
+        da={w:l3[(t,w)]-xp[(n,w)] for w in 'AB'};tri[t]={'pair':p,'A':da['A'],'B':da['B'],'AB':da['A']+da['B'],'masked':t==SETS.half_person_of(seed,p,bypair[p])}
+    # self-check against the pair-level D_alt (analyze_e35.D_alt: per pair mean of (A-B)/2 over its items, L3 minus XP, aligned by sorted pair number)
+    def Mv(f,pre):
+        d={};arr=a if f=='L3' else x
+        for k,it in enumerate(fam[f]):d.setdefault(_num(it['pair'],pre),[]).append((arr['A'][k]-arr['B'][k])/2)
+        return {n:float(np.mean(v)) for n,v in d.items()}
+    l3p,xpp=Mv('L3','p'),Mv('XP','x');assert sorted(l3p)==sorted(xpp),(sorted(l3p),sorted(xpp))
+    for p,ts in bypair.items():
+        n=_num(p,'p');assert abs(np.mean([tri[t]['AB'] for t in ts])-(l3p[n]-xpp[n]))<1e-9,(p,ts)   # pair mean of D_a == pair D_alt
     return tri
 def boot(v,rng,n=NB):
     v=np.asarray(v,float);b=np.asarray([v[rng.integers(0,len(v),len(v))].mean() for _ in range(n)]);return float(v.mean()),float(np.percentile(b,2.5)),float(np.percentile(b,97.5))
@@ -68,7 +81,7 @@ def mode_k3h(od,cell,ref,seed,epoch):
 def selftest():
     td=Path(tempfile.mkdtemp());tid=list(range(30));seed=101;items=[];fs={}
     for f in ('L3','XP'):
-        its=[{'pair':f'p{i//2}','tid':tid[i]} for i in range(30)];items+=its;fs[f]=30
+        its=[{'pair':(f'p{i//2}' if f=='L3' else f'x{i//2}'),'tid':tid[i]} for i in range(30)];items+=its;fs[f]=30
     mk=lambda p:SETS.half_person_of(seed,p,[2*int(p[1:]),2*int(p[1:])+1])
     for cell,extra in (('k3',0.0),('k3h',0.4)):
         for w,sg in (('A',1),('B',-1)):
@@ -79,8 +92,12 @@ def selftest():
         json.dump({'items':items,'fam_sizes':fs},open(td/f'meta_S3_{cell}_s{seed}.json','w'))
     md,res=mode_k3h(td,'k3h','k3',seed,4);r=res['worlds']['AB'];assert abs(r['dD_masked'][0]-0.4*2)<1e-9 and abs(r['dD_partner'][0])<1e-9 and abs(r['contrast'][0]-0.8)<1e-9,r   # D_a = L3 part(A)+L3 part(B) - XP parts = 2*(base+gain) - 0.2
     E,fam=load(td,'k3',seed,4);tri=triple_da(E,fam,seed);assert sum(v['masked'] for v in tri.values())==15 and len(tri)==30 and all(sum(1 for v in tri.values() if v['pair']==p and v['masked'])==1 for p in {v['pair'] for v in tri.values()})
+    bad=[dict(i,pair='q'+i['pair'][1:]) if k>=30 else i for k,i in enumerate(items)];json.dump({'items':bad,'fam_sizes':fs},open(td/'meta_S3_bad_s101.json','w'))
+    for w in 'AB':(td/f'S3_bad_s101_{w}.json').write_text((td/f'S3_k3_s101_{w}.json').read_text())
+    try:load_and_fail=triple_da(*load(td,'bad',seed,4),seed);raise SystemExit('expected an error for XP pair ids of another form')
+    except ValueError:pass
     md2,res2=mode_k3(td,[101,102,103],4);assert 'missing' in md2 and res2['seeds'][101]['n']==[15,15]
-    print('e47_triple_da SELFTEST OK: masked person rule, 15+15 triples, dD_a of masked persons recovered (+0.8 in this synthetic scale), partner 0, missing seeds reported');print(md);print(md2)
+    print('e47_triple_da SELFTEST OK: XP pair ids x<n> aligned to p<n>, pair mean of D_a == D_alt (assert), masked person rule, 15+15 triples, dD_a of masked persons recovered (+0.8 in this synthetic scale), partner 0, missing seeds reported');print(md);print(md2)
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('mode',nargs='?',choices=['k3','k3h']);ap.add_argument('--cells',default=None);ap.add_argument('--ref',default='k3');ap.add_argument('--seeds',default='101,102,103');ap.add_argument('--epoch',type=int,default=4);ap.add_argument('--out-dir',default=None);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
