@@ -25,6 +25,12 @@ def sentence_table(w,swap,tok,gw,SP):
         toks=sorted(set(j for j in SP._ptoks(offs,s['start'],s['start']+len(s['text'])) if j>0))   # E43: every token of the sentence (the sentence-cover cells k3 / k3b)
         out.append(dict(idx=s['idx'],t=s['t'],pair=tri[s['t']]['pair'],round=s['round'],place=sorted(set(place)),names=sorted(set(names)),spans=spans,text=s['text'],toks=toks))
     return out
+def select_by_ctx(delta,tau):
+    """E (label-free K6'): chunk k is masked whole when its window context gain delta[k] < tau (strict); chunk 0 (no context) is never selected. Pure function."""
+    return [bool(k>0 and d<tau) for k,d in enumerate(delta)]
+def select_by_ctx_quantile(delta,frac):
+    """label-free K6' (quantile version): the n = round(frac x (number of chunks 1..N-1)) chunks with the lowest delta are masked whole; chunk 0 never; ties -> lower chunk index. Pure function."""
+    n=int(round(frac*(len(delta)-1)));order=sorted(range(1,len(delta)),key=lambda k:(delta[k],k));pick=set(order[:n]);return [k in pick for k in range(len(delta))]
 def attn_fill(A,cand,O,base,nF):
     """E41 attnfill: the nF highest-score window positions that are candidates and not in O (score A[i] for position base+i; ties -> lower index). Pure function (CPU testable)."""
     A=np.asarray(A,np.float64);cand=np.asarray(cand,bool);Oset=set(O);ok=cand.copy()
@@ -128,6 +134,43 @@ class Sets:
         k0=k*CH;lo=max(0,k0-W);bs=set(base);nF=max(0,(self.fill_total[k] if self.fill_total and k in self.fill_total else self._target(k,self.frac))-len(base))
         cand=[p for p in range(lo,k0) if p not in bs and not(self.fill_attn_cands and (p<4 or p>=k0-128))];n=min(nF,len(cand))
         return sorted(bs|set(self._rng('k3f',k).sample(cand,n))) if n else base
+    def _owner(self):
+        """position -> index into self.t of the exposure sentence that contains it (needs the 'toks' field of sentence_table); cached"""
+        if getattr(self,'_own',None) is None:
+            o={}
+            for i,u in enumerate(self.t):
+                for p in u['toks']:o[p]=i
+            self._own=o
+        return self._own
+    def _sent_window_tokens(self,k):
+        lo=max(0,k*CH-W);k0=k*CH;return {p for u in self.t for p in u['toks'] if lo<=p<k0}
+    def sentmask(self,k):
+        """E44 SENT: chunks WITH an oracle set -> O plus every token of every exposure sentence (B, P, X: any triple, any pair) inside the window before the chunk, plus the earlier same-triple sentence tokens of K3 that lie inside the chunk (so oracle <= K3 <= SENT); background (G) stays visible."""
+        O=self.oracle(k)
+        if not O:return []
+        return sorted(set(O)|self._sent_window_tokens(k)|set(self.sentencecover(k)))
+    def bgmask(self,k):
+        """E44 BG: chunks with an oracle set -> the window before the chunk minus the tokens of the exposure sentences that are not O (B, P, X stay visible), plus the whole O (also its in-chunk part): O + G."""
+        O=self.oracle(k)
+        if not O:return []
+        k0=k*CH;lo=max(0,k0-W);sent=self._sent_window_tokens(k);Oset=set(O)
+        return sorted(Oset|{p for p in range(lo,k0) if p not in sent})
+    def noomask(self,k):
+        """E44 NOO: chunks with an oracle set -> the whole window before the chunk except the O tokens (only the answer tokens stay visible); chunks without O mask nothing."""
+        O=self.oracle(k)
+        if not O:return []
+        Oset=set(O);return [p for p in self.window_before(k) if p not in Oset]
+    def type_counts(self,k,S):
+        """token types of a masked set S for chunk k: O (oracle), B (other tokens of sentences of the same triple as a fact sentence of the chunk), P (sentences of the same pair, another triple), X (sentences of other pairs), G (window background), chunk (>= chunk start, not typed)"""
+        k0=k*CH;lo=max(0,k0-W);cur=self.cur_sentences(k);ts={s['t'] for s in cur};ps={s['pair'] for s in cur};Oset=set(self.oracle(k));own=self._owner();c={'O':0,'B':0,'P':0,'X':0,'G':0,'chunk':0}
+        for p in S:
+            if p>=k0:c['chunk']+=1
+            elif p<lo:c['G']+=1
+            elif p in Oset:c['O']+=1
+            elif p in own:
+                u=self.t[own[p]];c['B' if u['t'] in ts else 'P' if u['pair'] in ps else 'X']+=1
+            else:c['G']+=1
+        return c
     def sub_sets(self,k):
         """oracle-sub / oth-ent-sub (professor 17:03 ruling): distance bins as in rand-dist (256 tokens from the chunk start); per bin b, m_b = min(|O_b|, |P_b|) tokens (O_b: O span tokens in the bin,
         P_b: tokens of other pairs' name/place spans in the bin, window before the chunk); whole spans, token total within +-10% of m_b (greedy over a seeded shuffle); oracle-sub draws from O, oth-ent-sub from P.
@@ -183,4 +226,7 @@ class Sets:
         if cell=='k3':return self.sentencecover(k),1.0
         if cell=='k3b':return self.sentencecover(k,True),1.0
         if cell=='k3f':return self.sentencecover_fill(k),1.0
+        if cell=='sent':return self.sentmask(k),1.0
+        if cell=='bg':return self.bgmask(k),1.0
+        if cell=='noo':return self.noomask(k),1.0
         raise ValueError(cell)
