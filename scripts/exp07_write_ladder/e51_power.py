@@ -17,11 +17,22 @@ def table(reps,rng):
     for sd in (0.15,0.25,0.40,0.60):
         for N in (10,15,20,30):out.append(f'| {N} | {sd} | {power(N,sd,0.10,reps,rng):.2f} | {power(N,sd,0.25,reps,rng):.2f} | {power(N,sd,0.0,reps,rng):.3f} | {mde80(N,sd):.2f} |')
     return out
+def power_pairs(Np,sd,rho,true,reps,rng,alpha=0.05):
+    """E52: Np pairs, two persons per pair with person-level Delta ~ N(true, sd^2) and within-pair correlation rho; the pair mean (variance sd^2 (1+rho)/2) is the analysis unit (= pair-clustered SE): one-sided t over the Np pair means"""
+    return power(Np,sd*sqrt((1+rho)/2),true,reps,rng,alpha)
+def table_pairs(reps,rng):
+    out=['| pairs (persons) | sd of person Delta | rho within pair | power @ true 0.10 | power @ true 0.25 | true Delta for 80% power |','|---|---|---|---|---|---|']
+    for Np in (30,20,15):
+        for sd in (0.25,0.40):
+            for rho in (0.3,0.5,0.7):
+                se=sd*sqrt((1+rho)/2);out.append(f'| {Np} ({2*Np}) | {sd} | {rho} | {power_pairs(Np,sd,rho,0.10,reps,rng):.2f} | {power_pairs(Np,sd,rho,0.25,reps,rng):.2f} | {mde80(Np,se):.2f} |')
+    return out
 def selftest():
     rng=np.random.default_rng(1);p0=power(20,0.25,0.0,4000,rng);assert abs(p0-0.05)<0.02,p0
+    assert abs(power_pairs(20,0.25,0.5,0.0,4000,rng)-0.05)<0.02 and power_pairs(30,0.25,0.3,0.25,2000,rng)>0.99
     assert power(30,0.15,0.25,2000,rng)>0.99 and power(10,0.6,0.1,2000,rng)<0.3;print('e51_power SELFTEST OK')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--n',type=int,default=4000);ap.add_argument('--seed',type=int,default=7);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--n',type=int,default=4000);ap.add_argument('--seed',type=int,default=7);ap.add_argument('--selftest',action='store_true');ap.add_argument('--pairs',action='store_true',help='E52: pair-clustered table (30/20/15 pairs, rho 0.3/0.5/0.7)');a=ap.parse_args()
     if a.selftest:selftest();return
-    print('\n'.join(table(a.n,np.random.default_rng(a.seed))))
+    print('\n'.join(table_pairs(a.n,np.random.default_rng(a.seed)) if a.pairs else table(a.n,np.random.default_rng(a.seed))))
 if __name__=='__main__':main()
