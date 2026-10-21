@@ -30,7 +30,7 @@ MANIFEST
   echo "installed code verified against the manifest"
 fi
 [ -f $ROOT/e2e/ttt/model/loss.py ] || { echo "official e2e checkout missing (git submodule update --init e2e)"; exit 6; }
-$PY $D/outer_mask_test.py --e2e $ROOT/e2e
+JAX_PLATFORMS=cpu $PY $D/outer_mask_test.py --e2e $ROOT/e2e
 echo "checkpoint: $CK $([ -d $CK ] && echo present || echo MISSING); output: $OUTD"
 [ -n "$CPU_ONLY" ] && exit 0
 [ -d $CK ] || { echo "checkpoint missing: exit 7"; exit 7; }
