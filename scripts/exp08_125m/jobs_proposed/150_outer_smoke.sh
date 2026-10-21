@@ -11,7 +11,7 @@ COMMIT=bb211c88307848c0c7f2be31d77262189cb874ab
 FILES="$D/outer_mask.py $D/outer_mask_test.py $D/outer_smoke.py"
 ACCUM="${ACCUM:-4}"
 CK=$ROOT/checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc
-OUTD="${OUT:-$ROOT/experiments/exp08_125m}/outer_smoke"
+OUTD="${OUTD:-$ROOT/experiments/exp08_125m/outer_smoke}"   # own folder; the runner exports OUT=exp07_write_ladder, which is NOT used here
 if [ -z "$NO_INSTALL" ]; then
   git cat-file -e $COMMIT^{commit} || { echo "commit $COMMIT not in the local clone: git fetch origin claude/project-thread-rwhdac first"; exit 4; }
   git checkout $COMMIT -- $FILES
