@@ -170,6 +170,18 @@ class Sets:
         k0=k*CH;lo=max(0,k0-W);ex=set(K3)|set(add);cand=[p for p in range(lo,k0) if p not in ex];n=min(len(add),len(cand))
         return sorted(set(K3)|set(self._rng('kpxu%d'%len(add),k).sample(cand,n)))
     def kpmask(self,k):return self._k3_plus(k,self.pxsplit(k)[0])
+    def opmask(self,k):
+        """E47 op: O + P (no other tokens of the earlier same-triple sentences, i.e. K3 without its B part); chunks without O mask nothing."""
+        O=self.oracle(k)
+        return sorted(set(O)|set(self.pxsplit(k)[0])) if O else []
+    def p_by_fact(self,k):
+        """E47 analysis: {triple id: number of P tokens (of the other triple of its pair) masked in chunk k on behalf of that triple}; a triple is counted when one of its sentences in the chunk has an earlier same-triple exposure inside the window (it contributes O) and the other triple of its pair is not itself a triple of a fact sentence of the chunk (else its sentences are B, not P)."""
+        if not self.oracle(k):return {}
+        P=set(self.pxsplit(k)[0]);own=self._owner();lo=max(0,k*CH-W);out={}
+        for s in self.cur_sentences(k):
+            if not any(u['t']==s['t'] and u['round']<s['round'] and any(lo<=p<s['place'][0] for p in u['names']+u['place']) for u in self.t):continue
+            out[s['t']]=sum(1 for p in P if self.t[own[p]]['pair']==s['pair'] and self.t[own[p]]['t']!=s['t'])
+        return out
     def kxmask(self,k):return self._k3_plus(k,self.pxsplit(k)[1])
     def kpumask(self,k):return self._k3_plus(k,self.pxsplit(k)[0],True)
     def kxumask(self,k):return self._k3_plus(k,self.pxsplit(k)[1],True)
@@ -289,6 +301,7 @@ class Sets:
         if cell=='sent':return self.sentmask(k),1.0
         if cell=='bg':return self.bgmask(k),1.0
         if cell=='noo':return self.noomask(k),1.0
+        if cell=='op':return self.opmask(k),1.0
         if cell=='kp':return self.kpmask(k),1.0
         if cell=='kx':return self.kxmask(k),1.0
         if cell=='kp_u':return self.kpumask(k),1.0
