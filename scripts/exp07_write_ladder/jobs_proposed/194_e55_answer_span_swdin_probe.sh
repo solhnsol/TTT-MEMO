@@ -15,7 +15,7 @@ case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=f0d976b2795258cfe35910b46699b54dde2101e5
+COMMIT=87b73152ceffc28e6ba83215018541d8566ee72b
 FILES="$D/e55_run.py $D/e55_core.py $D/e55_gpu.py $D/e55_swap.py $D/e55_read.py $D/e55_analyze.py $D/e55_metrics.py $D/e55_ic_report.py $D/e55_iso.py $D/e55_diag.py $D/s3.py $D4/gen_facts.py $D4/gen_world_ctl.py $D4/frame_bank.py $D/e55_gates.py $D4/frames300.txt"
 LADDER_OK="714b08ea3b90"
 S3_OLD="f261120d0f03"   # lab s3.py after job 189 (2-D mask version); the pre-189 version a16e6dd0d4c9 is accepted too
@@ -34,7 +34,7 @@ if [ -z "$SKIP_VERIFY" ]; then
     G=$(sha256sum $D/$F | cut -c1-12)
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH (exit 5)"; exit 5; }
   done <<'MANIFEST'
-19f8062462b2 e55_run.py
+13a1fbdedc2a e55_run.py
 8422d0ae3278 e55_core.py
 9827e34dcde6 e55_gpu.py
 f240fac19f43 e55_swap.py
@@ -43,8 +43,8 @@ a6d506949071 e55_read.py
 30769e241d5e e55_metrics.py
 4c8679add232 e55_ic_report.py
 c4c8a0d4e386 e55_iso.py
-a6ceb1237d78 e55_diag.py
-8111393db79e s3.py
+725d18d16b65 e55_diag.py
+558d7974f051 s3.py
 f14491a9ddf7 ../exp04_what_ttt_retains/gen_facts.py
 1cf0caa82553 ../exp04_what_ttt_retains/gen_world_ctl.py
 eeaaa9135907 ../exp04_what_ttt_retains/frame_bank.py
