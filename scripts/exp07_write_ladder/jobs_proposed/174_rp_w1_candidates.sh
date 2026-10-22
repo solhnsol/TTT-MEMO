@@ -7,7 +7,7 @@ set -e
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=0ab15fe2cf9038ed26d0f67013db8125823ea002
+COMMIT=c92e4b36e07af112e4c4101d816d6d4a70873a5c
 FILES="scripts/exp07_write_ladder/e49_stats.py scripts/exp07_write_ladder/e49_candidates.py scripts/exp07_write_ladder/e49_test.py scripts/exp07_write_ladder/e48_world_test.py scripts/exp07_write_ladder/ladder.py scripts/exp07_write_ladder/suppress.py scripts/exp07_write_ladder/margins_split.py scripts/exp04_what_ttt_retains/gen_world.py scripts/exp04_what_ttt_retains/frame_bank.py"
 : "${PY:=python3}"; : "${S:=$D}"; : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}}"; export EXP07_OUT="$OUT"
 JOB=174_rp_w1_candidates
@@ -40,7 +40,7 @@ export E48_FRAMES=pair
 # environment checks (no GPU work): deterministic ops flag, GPU visible, checkpoint, tokenizer, free disk
 case "$XLA_FLAGS" in *deterministic_ops=true*) ;; *) echo "XLA_FLAGS must contain --xla_gpu_deterministic_ops=true (ladder.py asserts it): exit 3"; exit 3;; esac
 if [ -z "$CPU_ONLY" ]; then nvidia-smi -L || { echo "no GPU visible: exit 3"; exit 3; }; fi
-[ -d checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc ] || { echo "checkpoint checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc missing: exit 3"; exit 3; }
+[ -d checkpoints/3b_ttt_e2e_finetune_books_128k_3x_cc/1949 ] || { echo "checkpoint checkpoints/3b_ttt_e2e_finetune_books_128k_3x_cc/1949 (the 3B TTT-E2E 128K Books checkpoint, step 1949, about 11 GB; baseline_config.CHECKPOINT_DIR) missing: exit 3"; exit 3; }
 [ -f data/tokenizer/llama3/tokenizer.json ] || { echo "tokenizer data/tokenizer/llama3/tokenizer.json missing: exit 3"; exit 3; }
 mkdir -p "$OUT/states"
 AV=$(df -P --block-size=1G "$OUT" | awk 'NR==2{print $4}'); echo "free disk at $OUT: $AV GB (need >= 10)"
