@@ -13,7 +13,7 @@ case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=4acb3184c8aae606aa0544dc9577a8527ee7bab5
+COMMIT=8104bd87c6e5e855196f6aaf53c7f78955fb3c85
 FILES="$D/e55_run.py $D/e55_core.py $D/e55_gpu.py $D/e55_swap.py $D/e55_read.py $D/e55_analyze.py $D/e55_metrics.py $D/e55_ic_report.py $D/e55_iso.py $D/s3.py $D4/gen_facts.py $D4/gen_world_ctl.py $D4/frame_bank.py $D/e55_gates.py $D4/frames300.txt"
 LADDER_OK="714b08ea3b90"
 S3_OLD="a16e6dd0d4c9"
@@ -39,7 +39,7 @@ ca9f3280f5d6 e55_core.py
 a6d506949071 e55_read.py
 4a811650bcd8 e55_analyze.py
 30769e241d5e e55_metrics.py
-62e2bb699fe3 e55_ic_report.py
+77154d115c29 e55_ic_report.py
 5723bbc93aa9 e55_iso.py
 f261120d0f03 s3.py
 1746ce4c159c ../exp04_what_ttt_retains/gen_facts.py
