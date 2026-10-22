@@ -282,7 +282,13 @@ def u19():
         w=G.cell_world(61,'v3_4_8',enc,pool,decoys=('names','nofact'));R_,t,ok=GT.check(w,enc,pool,refs);assert ok,t
     finally:G._clean_paragraphs=orig;G._POOL_CACHE.clear()
     RES['U19']=f"pool filter: injected shared-13-gram (one of the pair) and reference-overlapping paragraphs dropped ({len(paras)-len(pool)} dropped of {len(paras)}), seed-specific order, gates pass on the filtered pool"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19}
+def u20():
+    """Ladder55.record (in-place fill, no list + np.stack) equals s3.Ladder3.record bit for bit (tiny model, 3 chunks)"""
+    with rt.mesh:
+        K1,V1,h1=L.record(REAL[:3*CH]);K0,V0,h0=s3.Ladder3.record(L,REAL[:3*CH])
+    assert K1.dtype==K0.dtype and K1.shape==K0.shape and np.array_equal(K1,K0) and np.array_equal(V1,V0) and np.array_equal(np.asarray(h1),np.asarray(h0))
+    RES['U20']=f'Ladder55.record == s3.Ladder3.record bitwise: K,V {K1.shape} {K1.dtype}, last hidden state equal'
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
