@@ -77,7 +77,7 @@ $PY $S/rp_native_check.py --new L0fs:w1rp $REF --tol ${RP_TOL:-0.05} --marker "$
 echo "native check exit code $? (0 PASS, 1 FAIL): $(cat $OUT/rp_native_check_PASS.txt)"
 set -e
 # provenance: pod environment and sha256 (first 64 hex) of every result file this job wrote (states: sizes + sha256 of the pass-4 states)
-{ echo "job $JOB commit $COMMIT"; date -u; hostname; nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader; $PY -c "import jax;print('jax',jax.__version__,jax.devices())"; echo "XLA_FLAGS=$XLA_FLAGS"; } > "$OUT/rp_env_$JOB.txt" 2>&1 || true
+{ echo "job $JOB commit $COMMIT"; date -u; hostname; nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader; $PY -c "import jax;print('jax',jax.__version__,jax.devices())"; echo "XLA_FLAGS=$XLA_FLAGS"; nvidia-smi | head -4; (nvcc --version 2>/dev/null | tail -2) || true; echo "--- pip freeze"; ($PY -m pip freeze 2>/dev/null || uv pip freeze --python $PY 2>/dev/null) || true; echo "--- masked tokens per saved log (world pass n_masked_total)"; for F in "$OUT"/*_s101_[AB].saved.json; do [ "$F" -nt "$MARK" ] && $PY -c "import json,sys;L=json.load(open(sys.argv[1]))['log'];print(sys.argv[1].split('/')[-1],[(e.get('epoch'),e.get('n_masked_total')) for e in L])" "$F"; done; } > "$OUT/rp_env_$JOB.txt" 2>&1 || true
 (cd "$OUT" && find . -maxdepth 1 -type f -newer "$MARK" ! -name 'rp_sha_*' -exec sha256sum {} +) > "$OUT/rp_sha_$JOB.txt"
 for T in L0fs_w1rp; do for W in A B; do F="$OUT/states/${T}_s101/$W/state_004.npz"; [ -f "$F" ] && { ls -l "$F"; sha256sum "$F"; }; done; done >> "$OUT/rp_sha_$JOB.txt" 2>&1 || true
 echo "provenance: $OUT/rp_env_$JOB.txt, $OUT/rp_sha_$JOB.txt"
