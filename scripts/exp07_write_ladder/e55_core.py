@@ -57,6 +57,16 @@ class Ladder55(s3.Ladder3):
             Kw,_=E.compose_window(src_k,k,pl,CH,axis=1);Vw,_=E.compose_window(src_v,k,pl,CH,axis=1);Kc,Vc=jnp.asarray(Kw),jnp.asarray(Vw)
             st=compose_state({'real':sts['real'],'decoy':sts.get('decoy',sts['real']),'bg':sts.get('bg',sts['real'])},pl,counter)
         return Kc,Vc,keep,st,pl
+    def record(self,ids,progress=None):
+        """same result as s3.Ladder3.record (bitwise: the same per-layer arrays), but the host arrays [layers, T, nh, d] are allocated once and filled layer by layer: the base version collects two lists and then np.stack()s them, which holds TWICE the memory (60 GiB for one 128-chunk stream, 30 + 30 for K, V) and copies it once more single-threaded. Prints progress every 4 layers (flush) so that a slow recording is visible."""
+        rt=self.rt;m=rt.base;ids_=jnp.asarray(ids,dtype=jnp.int32);blocks=m.language_model.model.h.prefix_blocks;nl=jax.tree_util.tree_leaves(blocks)[0].shape[0]
+        h=self.embed(m,ids_);Kh=Vh=None;t0=time.monotonic()
+        for l in range(nl):
+            blk=jax.tree.map(lambda a:a[l] if eqx.is_array(a) else a,blocks);h,K,V=self.layer_rec(blk,h,ids_);K=np.asarray(jax.device_get(K));V=np.asarray(jax.device_get(V))
+            if Kh is None:Kh=np.empty((nl,)+K.shape,K.dtype);Vh=np.empty((nl,)+V.shape,V.dtype)
+            Kh[l]=K;Vh[l]=V;del K,V
+            if len(ids)>=32*CH and (l%4==3 or l==nl-1):print(f'    record layer {l+1}/{nl}: {time.monotonic()-t0:.0f}s',flush=True)
+        return Kh,Vh,h
     def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None,read_hook=None,hook_chunks=(),norm_targets=None):
         """-> {'log': per-chunk dicts, 'reads': {chunk: {...state file / hash / canary}}, 'stream_hash', 'clip_bind_frac'}"""
         assert arm in E.ARMS,arm
