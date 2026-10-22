@@ -11,7 +11,8 @@ import e55_swap as E
 import s3
 jax,jnp,eqx=s3.jax,s3.jnp,s3.eqx
 CH=1024;WIN=8192;NW=E.NW
-IMPLEMENTED=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ')
+IMPLEMENTED=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT')
+CHUNK_META_ARMS=E.MASK_ARMS+tuple(E.MIX)+('ALT',)
 def compose_state(chains,pl,counter=None):
     """suffix-layer SWA state with the slot blocks taken from the chain that plan `pl` names ('real' | 'decoy' | 'bg'; 'mask' and absent slots keep the real chain's block, the mask is applied through the key mask). Every other leaf (chunk index) is the real chain's. counter (list) collects the number of KV leaves composed (must be 2: K and V)."""
     def f(*ls):
@@ -36,7 +37,33 @@ class Ladder55(s3.Ladder3):
         """no Readouts / old world: only what build3 and the step functions need"""
         from ttt.model.data import Batch
         self.rt=rt;cfg=rt.cfg.training.optimizer_inner;self.lr=float(cfg.lr);self.clip=float(cfg.clip_gradient);self.lr_scale=1.0;self.Batch=Batch
-        self.f=s3.reuse.get_filter_spec(rt.base,rt.cfg.training.spec_inner,'inner parameters');self.save_dir=save_dir;self._nsave=0;self.canary=canary;self.build3()
+        self.f=s3.reuse.get_filter_spec(rt.base,rt.cfg.training.spec_inner,'inner parameters');self.save_dir=save_dir;self._nsave=0;self.canary=canary;self.build3();self.build_mix()
+        self.n_masked_keys=0;self.n_masked_pairs=0
+    def build_mix(self):
+        """E55 27.5: one write step on the SUM of two forward/backward passes of the same chunk (unmasked window and masked window), loss = sum_i w_i nll_i with per-token weights ws[pass] (already divided by the number of valid targets, so that w = valid / N in one pass is exactly lm_loss); one clip and one inner SGD step as in write_step. Returns (new inner params, pre-clip gnorm, clip coef, per-pass mean CE over all valid tokens)."""
+        lr,clip=self.lr,self.clip;optax=s3.optax;S3SUF=s3.S3SUF
+        @eqx.filter_jit
+        def write_step_mix(m,st_all,st_suf,c,prefs,kmasks,ws):
+            def total(mm):
+                tot=0.0;nlls=[]
+                for pref_,kmask,w in zip(prefs,kmasks,ws):
+                    S3SUF['kmask']=kmask
+                    try:out=mm.language_model.suffix_call(prefix_outputs=pref_,state=st_suf,seq=c)
+                    finally:S3SUF.clear()
+                    lp=jax.nn.log_softmax(out.logits.astype(jnp.float32),axis=-1);nll=-jnp.take_along_axis(lp,c.target_tokens[:,None],axis=-1)[:,0];tot=tot+jnp.sum(w*nll);nlls.append(nll)
+                return tot,tuple(nlls)
+            (_l,nlls),grads=eqx.filter_value_and_grad(total,has_aux=True)(m)
+            g=grads.inner_parameters();gn=optax.global_norm(g);coef=jnp.where(gn<clip,1.0,clip/jnp.maximum(gn,1e-30));s=lr*m.get_ilr_multiplier(st_all.get(m.step_index))
+            newp=jax.tree.map(lambda p,x:(p+(-s*coef*x).astype(p.dtype)).astype(p.dtype),m.inner_parameters(),g)
+            valid=c.loss_masks.astype(jnp.float32);ces=tuple(jnp.sum(valid*n_)/jnp.maximum(jnp.sum(valid),1e-10) for n_ in nlls)
+            return newp,gn,coef,ces
+        self.write_step_mix=write_step_mix
+    @staticmethod
+    def mix_weights(sents,loss_masks,lam):
+        """per-position weights of the two passes of the mix (numpy, [CH]): fact positions = the loss positions that predict a token of a fact sentence (position i predicts token i+1, i.e. i in [start-1, end-1)); unmasked pass: background weight 1, fact weight 1-lam; masked pass: fact weight lam, background 0; both divided by the number of valid targets"""
+        valid=np.asarray(loss_masks,np.float32);f=np.zeros(CH,bool)
+        for x in sents:f[max(x['start']-1,0):max(x['end']-1,0)]=True
+        n=max(float(valid.sum()),1e-10);return (valid*np.where(f,1.0-lam,1.0)/n).astype(np.float32),(valid*np.where(f,lam,0.0)/n).astype(np.float32),int(f.sum())
     def set_inner(self,m,newp):
         inner,outer=eqx.partition(m,self.f);assert jax.tree_util.tree_structure(inner)==jax.tree_util.tree_structure(newp);return eqx.combine(newp,outer)
     def save_state(self,m,name=None):
@@ -50,9 +77,9 @@ class Ladder55(s3.Ladder3):
     def window_inputs(self,arm,k,p,recs,sts,counter=None):
         """what the write forward of chunk k gets: (Kc,Vc,keep,st_suffix,plan). recs[name] = (Kh,Vh) numpy [layers,T,nh,d]; sts[name] = suffix chain state."""
         pl=E.plan(arm,k,p);keep=keep_vector(pl)
-        if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO','SENTPQ'):
+        if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','SENTP25','SENTP50','SENTP75'):
             Kc,Vc=self.ctx_kv(*recs['real'],k);st=sts['real']
-            if arm in ('SENT','KMASK','SENTO','SENTPQ'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW)
+            if arm in ('SENT','KMASK','SENTO','SENTPQ','OSPAN','SENTP25','SENTP50','SENTP75'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW);self.n_masked_pairs=int((~keep).sum()) if keep.ndim==2 else int((~keep).sum())*CH
         else:
             src_k={n:recs[n][0] for n in recs};src_v={n:recs[n][1] for n in recs}
             Kw,_=E.compose_window(src_k,k,pl,CH,axis=1);Vw,_=E.compose_window(src_v,k,pl,CH,axis=1);Kc,Vc=jnp.asarray(Kw),jnp.asarray(Vw)
@@ -73,7 +100,7 @@ class Ladder55(s3.Ladder3):
         assert arm in E.ARMS,arm
         if arm not in IMPLEMENTED:raise NotImplementedError(f'arm {arm} is not implemented')
         self.chunks_meta=chunks_meta;self.n_masked_keys=0
-        if arm in ('SENT','KMASK','SENTO','SENTPQ'):assert chunks_meta is not None and len(chunks_meta)>=(nch or len(real_ids)//CH),'SENT / KMASK need the sentence table of the world (chunks_meta)'
+        if arm in CHUNK_META_ARMS:assert chunks_meta is not None and len(chunks_meta)>=(nch or len(real_ids)//CH),'SENT / KMASK need the sentence table of the world (chunks_meta)'
         rt=self.rt;n=len(real_ids)//CH;nch=nch or n;assert nch<=n and len(real_ids)%CH==0
         names=['real']+(['decoy'] if arm in ('SWD','SWDS','SWDO') else [])+(['bg'] if arm=='SWB' else [])
         ids_={'real':np.asarray(real_ids),'decoy':None if decoy_ids is None else np.asarray(decoy_ids),'bg':None if bg_ids is None else np.asarray(bg_ids)}
@@ -89,10 +116,21 @@ class Ladder55(s3.Ladder3):
             if self.canary:out['canary_w0']=self.canary(m)
             for k in range(nch):
                 t0=time.monotonic();old=m;c=rt.chunk(seqs['real'],k);cnt=[]
-                Kc,Vc,keep,st_w,pl=self.window_inputs(arm,k,p,recs,sts,cnt)
-                if cnt:assert len(cnt)==2,('expected exactly the K and V leaves of the suffix SWA state, got',len(cnt))
-                pref_w=self.prefix_masked(m,jnp.asarray(ids_['real'][k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep))
-                newp,gn,coef,ce=self.write_step(m,st_all,st_w,c,pref_w,jnp.asarray(keep))
+                self.n_masked_keys=0;self.n_masked_pairs=0;extra_log={}
+                if arm in E.MIX:
+                    # E55 27.5 two-loss mix: forward/backward twice on the same chunk (unmasked = NAT window, masked = SENTPQ window), gradients summed, ONE clip / step
+                    lam=E.MIX[arm];ids_k=jnp.asarray(ids_['real'][k*CH:(k+1)*CH],dtype=jnp.int32)
+                    Kc,Vc,keep_u,st_w,pl=self.window_inputs('NAT',k,p,recs,sts,cnt);_,_,keep_m,_,_=self.window_inputs('SENTPQ',k,p,recs,sts,cnt)
+                    pref_u=self.prefix_masked(m,ids_k,Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep_u));pref_m=self.prefix_masked(m,ids_k,Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep_m))
+                    w_u,w_m,nf=self.mix_weights(chunks_meta[k]['sents'],np.asarray(c.loss_masks),lam)
+                    newp,gn,coef,ces=self.write_step_mix(m,st_all,st_w,c,(pref_u,pref_m),(jnp.asarray(keep_u),jnp.asarray(keep_m)),(jnp.asarray(w_u),jnp.asarray(w_m)));ce=ces[0];extra_log={'ce_masked_pass':float(ces[1]),'mix_lambda':lam,'fact_loss_positions':nf}
+                else:
+                    arm_k=('SENTPQ' if k%2==0 else 'NAT') if arm=='ALT' else arm       # ALT: masked loss on the 1st, 3rd, ... chunk (k even), unmasked on the others, one forward each
+                    Kc,Vc,keep,st_w,pl=self.window_inputs(arm_k,k,p,recs,sts,cnt)
+                    if cnt:assert len(cnt)==2,('expected exactly the K and V leaves of the suffix SWA state, got',len(cnt))
+                    pref_w=self.prefix_masked(m,jnp.asarray(ids_['real'][k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep))
+                    newp,gn,coef,ce=self.write_step(m,st_all,st_w,c,pref_w,jnp.asarray(keep))
+                    if arm=='ALT':extra_log={'alt_masked_chunk':k%2==0}
                 for nm in names:sts[nm]=self.read_state(old,sts[nm],rt.chunk(seqs[nm],k),prefs[nm][k*CH:(k+1)*CH])   # same weights (start of the chunk) for every chain
                 scale=1.0
                 if arm=='NATM':          # size-matched NAT: the NAT update of chunk k is rescaled to the update norm norm_targets[k] (the per-chunk norm of arm SWD of the same seed); direction unchanged
@@ -102,7 +140,7 @@ class Ladder55(s3.Ladder3):
                     newp=jax.tree.map(lambda a,b:(b.astype(f32)+(a.astype(f32)-b.astype(f32))*scale).astype(a.dtype),newp,old.inner_parameters())
                 m=self.set_inner(m,newp)
                 un=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=un
-                ent={'scale':scale,'k':k,'gnorm':float(gn),'coef':float(coef),'update_norm':un,'ce':float(ce),'sec':time.monotonic()-t0,'n_swapped_slots':sum(1 for v in pl.values() if v not in ('real',)),'n_masked_slots':sum(1 for v in pl.values() if v=='mask'),'n_masked_keys':int(self.n_masked_keys)}
+                ent={'scale':scale,'k':k,'gnorm':float(gn),'coef':float(coef),'update_norm':un,'ce':float(ce),'sec':time.monotonic()-t0,'n_swapped_slots':sum(1 for v in pl.values() if v not in ('real',)),'n_masked_slots':sum(1 for v in pl.values() if v=='mask'),'n_masked_keys':int(self.n_masked_keys),'n_masked_pairs':int(getattr(self,'n_masked_pairs',0)) if arm in CHUNK_META_ARMS else 0,**extra_log}
                 out['log'].append(ent)
                 if read_hook is not None and k in hook_chunks:
                     t1=time.monotonic();out.setdefault('inline',{})[k]=read_hook(k,m);ent['sec_inline_read']=time.monotonic()-t1      # frozen-weight reads: m is only passed to pure scoring functions

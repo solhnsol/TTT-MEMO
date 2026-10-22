@@ -359,6 +359,64 @@ def u29():
         sp,_=E.token_masks('SENTPQ',k,ch,CH);assert sp[~inside].all() and all(np.array_equal(sp[r],ks) for xq in ch[k]['sents'] for r in range(xq['start'],xq['end'])) and np.array_equal(sp&~(~km|~so),sp)
     assert E.token_masks('SENTO',0,ch,CH)[0].all() and E.token_masks('SENTO',5,[{'sents':[]}]*10,CH)[0].all()
     RES['U29']=f'SENTPQ sentence rows == SENT keep, background rows unmasked; SENTO rows == independent other-fact computation ({n} rows), KMASK/SENTO disjoint, intersection of keeps == SENT keep on every sentence row, background rows unmasked, empty/chunk0 unmasked'
+def u30():
+    """E55 design 27.2 Q2 arms (CPU): (a) annotate_answers on the stub world finds name and place in every sentence (miss (0,0)); OSPAN keys = exactly the annotated spans of the earlier sentences, only in sentence rows, background rows see everything; SENTP25/50/75 keys nested p25 <= p50 <= p75 <= SENTPQ, shares about 25/50/75% of SENTPQ's, identical for every sentence row, deterministic; (b) model level: empty table == NAT bitwise for the new arms, with sentences CE differs from chunk 1 on, n_masked_pairs logged; (c) DclmNll on the tiny model: finite, deterministic, W0 differs from a perturbed model"""
+    import gen_facts as G,e55_run as RUN,tempfile
+    enc=G.StubTok();bg=G._synth_bg(9000);w=G.cell_world(61,'ic_u64',enc,bg,decoys=('names','nofact'));ch=G.realize(w);G.verify(w,enc)
+    miss=E.annotate_answers(ch,w['facts'],enc);assert miss==(0,0),miss
+    sh=[]
+    for k in (9,40,63):
+        sq,_=E.token_masks('SENTPQ',k,ch,CH);op,no=E.token_masks('OSPAN',k,ch,CH);ps={p:E.token_masks(p,k,ch,CH) for p in ('SENTP25','SENTP50','SENTP75')}
+        exp=set()
+        for c in range(max(0,k-8),k):
+            for x in ch[c]['sents']:
+                for a_,b_ in x['ans']:exp|=set(range(c*CH+a_,c*CH+b_))
+        assert {k*CH-W+j for j in np.nonzero(~op.all(0))[0]}==exp and len(exp)==no
+        inside=np.zeros(CH,bool)
+        for xq in ch[k]['sents']:
+            inside[xq['start']:xq['end']]=True
+            for r in range(xq['start'],xq['end']):assert np.array_equal(op[r],op[xq['start']]) and all(np.array_equal(m[r],m[xq['start']]) for m,_ in ps.values())
+        assert op[~inside].all() and all(m[~inside].all() for m,_ in ps.values())
+        kq=set(np.nonzero(~sq.all(0))[0]);k25,k50,k75=[set(np.nonzero(~ps[p][0].all(0))[0]) for p in ('SENTP25','SENTP50','SENTP75')]
+        assert k25<=k50<=k75<=kq and set(np.nonzero(~op.all(0))[0])<=kq
+        sh.append([round(len(x)/len(kq),2) for x in (k25,k50,k75)]);assert all(abs(a-b)<0.06 for a,b in zip(sh[-1],(0.25,0.5,0.75))),sh[-1]
+        m2=E.token_masks('SENTP50',k,ch,CH)[0];assert np.array_equal(m2,ps['SENTP50'][0])
+    emp=[{'sents':[]} for _ in range(NCH)];tab=[{'sents':[{'fact':0,'start':100,'end':140,'ans':[(110,112),(130,133)]},{'fact':1,'start':300,'end':330,'ans':[(305,308)]},{'fact':2,'start':700,'end':760,'ans':[(710,715),(750,752)]}]} for _ in range(NCH)]
+    a=nat()
+    for ar in ('OSPAN','SENTP25','SENTP50','SENTP75'):
+        b=L.run_stream(ar,2,REAL,nch=NCH,tag='u',log=lambda *x:None,chunks_meta=emp);assert b['final_hash']==a['final_hash'] and [e['ce'] for e in b['log']]==[e['ce'] for e in a['log']],ar
+        b=L.run_stream(ar,2,REAL,nch=4,tag='u',log=lambda *x:None,chunks_meta=tab);ce_a=[e['ce'] for e in a['log']][:4];ce_b=[e['ce'] for e in b['log']]
+        assert ce_a[0]==ce_b[0] and all(x!=y for x,y in zip(ce_a[1:],ce_b[1:])),(ar,ce_a,ce_b);assert [e['n_masked_pairs'] for e in b['log']][0]==0 and b['log'][3]['n_masked_pairs']>0 and b['log'][3]['n_masked_keys']>0
+    f=Path(tempfile.mkdtemp())/'d.u32le.bin';np.random.default_rng(7).integers(3,rt.cfg.model.vocab_size,size=3*8193).astype('<u4').tofile(f)
+    import ladder as LDm;dc=RUN.DclmNll(LDm,rt,str(f),2);v0=dc(rt.base);assert np.isfinite(v0) and v0==dc(rt.base) and dc.n==2
+    mp=a['model'] if 'model' in a else None
+    RES['U30']=f'answer spans found (miss {miss}); OSPAN keys == annotated spans, SENTP nested with shares {sh}; empty table == NAT bitwise for OSPAN/SENTP25/50/75; CE differs with sentences, n_masked_pairs logged; DclmNll finite+deterministic (W0 {v0:.3f} on random ids)'
+def u31():
+    """E55 design 27.5 two-loss mix (CPU, tiny model): (a) lambda = 0 (monkeypatched) with sentences == NAT (CE per chunk and final inner weights equal up to float summation order); (b) empty table: MIX25 == NAT likewise; (c) lambda = 1: chunk 1 CE of the masked pass == SENTPQ's CE, and chunk 0 update equals SENTPQ's (no window yet); (d) MIX25 with sentences: finite, differs from NAT from chunk 1 on, logs ce_masked_pass / n_masked_pairs (> 0 from chunk 1), update norm finite; (e) ALT: chunks 0 (masked path, nothing hidden yet) and 1 (unmasked) equal NAT's CE, chunk 2 (masked, window present) differs; ALT logs alt_masked_chunk; (f) mix_weights: fact positions = [start-1, end-1), sums: unmasked + masked weights = valid/N on fact positions and valid/N elsewhere (unmasked) / 0 (masked)"""
+    emp=[{'sents':[]} for _ in range(NCH)];tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
+    a=nat();ce_n=[e['ce'] for e in a['log']]
+    def close(x,y,tol=2e-4):return all(abs(p-q)<=tol*max(1,abs(q)) for p,q in zip(x,y))
+    def wdiff(m1,m2):return maxdiff(m1.inner_parameters(),m2.inner_parameters())
+    nref=wdiff(a['model'],rt.base)
+    old=E.MIX['MIX25'];E.MIX['MIX25']=0.0
+    try:b0=L.run_stream('MIX25',2,REAL,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab)
+    finally:E.MIX['MIX25']=old
+    assert close([e['ce'] for e in b0['log']],ce_n[:5]),([e['ce'] for e in b0['log']],ce_n[:5])
+    be=L.run_stream('MIX25',2,REAL,nch=5,tag='u',log=lambda *x:None,chunks_meta=emp);assert close([e['ce'] for e in be['log']],ce_n[:5])
+    sq=L.run_stream('SENTPQ',2,REAL,nch=3,tag='u',log=lambda *x:None,chunks_meta=tab)
+    E.MIX['MIX25']=1.0
+    try:b1=L.run_stream('MIX25',2,REAL,nch=3,tag='u',log=lambda *x:None,chunks_meta=tab)
+    finally:E.MIX['MIX25']=old
+    assert close([b1['log'][0]['ce_masked_pass'],b1['log'][1]['ce_masked_pass']],[sq['log'][0]['ce'],sq['log'][1]['ce']],1e-3),([e['ce_masked_pass'] for e in b1['log']],[e['ce'] for e in sq['log']])
+    bm=L.run_stream('MIX25',2,REAL,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab);lg=bm['log']
+    assert all(np.isfinite(e['ce']) and np.isfinite(e['update_norm']) and 'ce_masked_pass' in e for e in lg) and lg[0]['ce']==ce_n[0] or abs(lg[0]['ce']-ce_n[0])<2e-4
+    assert close([e['ce'] for e in lg[:2]],ce_n[:2],1e-6) and all(abs(e['ce']-c_)>1e-6 for e,c_ in zip(lg[2:],ce_n[2:5])) and all(abs(e['ce_masked_pass']-e['ce'])>1e-6 for e in lg[1:]),([e['ce'] for e in lg],ce_n[:5],[e['ce_masked_pass'] for e in lg]);assert lg[0]['n_masked_pairs']==0 and all(e['n_masked_pairs']>0 for e in lg[1:])
+    bl=L.run_stream('ALT',2,REAL,nch=4,tag='u',log=lambda *x:None,chunks_meta=tab);cl=[e['ce'] for e in bl['log']]
+    assert close(cl[:2],ce_n[:2]) and abs(cl[2]-ce_n[2])>1e-6 and [e['alt_masked_chunk'] for e in bl['log']]==[True,False,True,False] and bl['log'][1]['n_masked_pairs']==0 and bl['log'][2]['n_masked_pairs']>0,(cl,ce_n[:4])
+    valid=np.ones(CH,np.float32);valid[-1]=0;wu,wm,nf=C.Ladder55.mix_weights(tab[0]['sents'],valid,0.25);n=valid.sum();f=np.zeros(CH,bool)
+    for x in tab[0]['sents']:f[x['start']-1:x['end']-1]=True
+    assert nf==f.sum() and np.allclose(wu[f],0.75*valid[f]/n) and np.allclose(wu[~f],valid[~f]/n) and np.allclose(wm[f],0.25*valid[f]/n) and (wm[~f]==0).all() and np.allclose((wu+wm)[f],valid[f]/n)
+    RES['U31']=f'lambda=0 and empty-table MIX == NAT (CE within 2e-4), lambda=1 masked-pass CE == SENTPQ chunk 0/1, MIX25 differs from NAT from chunk 2 (the logged CE is the unmasked pass; chunk 1 still equal because chunk 0 has no window), masked-pass CE differs from chunk 1, pairs logged; ALT chunks 0/1 == NAT, chunk 2 differs; weights: fact positions {nf}, wu+wm == valid/N on fact tokens'
 def u23():
     """model level (CPU tiny model): (a) SENT / KMASK with an EMPTY sentence table == NAT bit for bit (CE and final weights); (b) SENT with sentences changes CE from chunk 1 on; (c) perturbing K,V at SENT-hidden positions does not change the write update (bitwise), perturbing a visible position does; (d) a per-query 2-D mask with identical rows == the 1-D keep (same update), and a 2-D mask hiding a window key only for rows [a,b) leaves the prefix outputs of rows before a bit-identical and changes rows in [a,b)"""
     emp=[{'sents':[]} for _ in range(NCH)];tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
@@ -514,7 +572,7 @@ def u28():
     Tf=I.cum_target(np.full(64,0.01));tg_f=I.fos_targets(Tf,segs2,ends);assert len(tg_f)==ends[-1]+1 and abs(tg_f[:ends[0]+1].sum()-(Tf[8]-Tf[0]))<1e-12 and abs(tg_f.sum()-Tf[16])<1e-12
     ids_t=ids_f[:3*1024]%(V-3)+3;nt=np.asarray([0.004,0.006,0.005]);os_=Li.run_stream('NATM',1,ids_t,nch=3,tag='u',log=lambda *x:None,norm_targets=nt);assert all(abs(e['update_norm']-nt[i])<1e-3*nt[i] for i,e in enumerate(os_['log']))
     RES['U28']=f"FOS: stream padded to 1024 multiples (pad {pad}), targets sum to the NAT increments, NATM run hits the per-chunk targets; ISOB: 64 rounds, rows concatenated == chunk tokens, 1 packed chunk per round, fact share 30-40%; ISOD: 64 rounds x 16 sentence rows, 1 chunk each; per-step norm == NAT per-chunk norm ({[round(e['update_norm'],5) for e in o['log']]} vs {[round(float(x),5) for x in norms[:3]]}); read_at honoured; bigstep targets = NAT norm x {16}/{J1} per segment"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29}
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

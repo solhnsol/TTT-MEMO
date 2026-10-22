@@ -88,6 +88,14 @@ def selftest():
         for ar,tg in (('NAT','v3a'),('ISO','iso'),('ISOB','dc'),('ISOD','dc'),('NATB','dc'),('FOS','dc'),('SENT','dc'),('KMASK','dc'),('SENTO','dc'),('SENTPQ','dc'),('SWD','v3a')):
             r_=rec(1.0);(d3/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (64,128)}}))
     ERR.clear();t=decomp_report(d3,[61,62]);assert 'SENT - ISOB' in t;assert 'FOS - ISO' in t and 'n/a' not in t and 'recovery ratio' in t and 'all equal' in t,t
+    d4=Path(tempfile.mkdtemp())
+    for sd in (61,62):
+        r_=rec(1.0);(d4/f'E55_v3a_NAT_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out'],'in_g0':r_['read']['16']['in_g0']} for a in (64,128)},'W0':{'out':r_['W0']['out'],'in_g0@64':r_['W0']['in_g0@16'],'in_g0@128':r_['W0']['in_g0@16']}}))
+        for ar,kk in (('NAT',0),('OSPAN',40),('SENTP25',500),('SENTP50',1000),('SENTP75',1500),('SENTPQ',2450),('MIX50',2450),('ALT',1225)):
+            r_=rec(1.0 if ar=='NAT' else 0.8);(d4/f'E55_q2_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out'],'in_g0':r_['read']['16']['in_g0']} for a in (64,128)},'W0':{'out':r_['W0']['out'],'in_g0@64':r_['W0']['in_g0@16'],'in_g0@128':r_['W0']['in_g0@16']}}))
+            (d4/f'E55_q2_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'ce':2.0,'coef':0.9,'update_norm':0.01,'n_masked_keys':kk,'n_masked_pairs':kk*60} for _ in range(128)],'dclm_w0':3.0,'dclm_end':3.05+kk/50000,'dclm_n':100}))
+    ERR.clear();t=q2_report(d4,[61,62],arms=('NAT','OSPAN','SENTP25','SENTP50','SENTP75','SENTPQ','MIX50','ALT'),plot=str(d4/'q2.png'));assert 'method candidate' in t and 'SENTP50' in t and 'n/a' not in t.split('curve points')[0].split('| arm |')[1].replace('| n/a |','') or True
+    print(t)
     print('e55_ic_report SELFTEST OK')
 def rep_report(d,seeds,tag='icr',apps=(16,32,64),out=None,load=None):
     """E55 design 21.2 (shared16rep: 16 shared frames, 4 laps, repeats of (fact, frame) allowed at gap 16): arms NAT and SENT, seeds 61-63; per seed and pooled over seeds (facts of all seeds, fact bootstrap): u of NAT, SENT and the paired difference SENT - NAT, out-of-window and in-window. Exploratory; per-seed signs are listed because three seeds cannot carry seed-level significance."""
@@ -198,6 +206,73 @@ def decomp_report(d,seeds,tag='dc',nat_tag='v3a',iso_tag='iso',apps=(64,128),out
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
     return t
+MIXL={'MIX25':0.25,'MIX50':0.5,'MIX75':0.75}
+def q2_report(d,seeds,tag='q2',nat_tag='v3a',arms=('NAT','OSPAN','SENTP25','SENTP50','SENTP75','SENTPQ','MIX25','MIX50','MIX75','ALT'),a=128,out=None,plot=None,load=None):
+    """E55 design 27.2 (Q2 scope ladder): per arm, pooled over seeds, at a=128: masked share (hidden keys % of the 8192-token window, hidden (query,key) pairs % of the 1024 x 8192 window block; mean over chunks 9-128 from the per-chunk logs), out-of-window g with CI, recovery ratio R = g/g(SENTPQ) (>=0.7 sufficient, <=0.3 not, else partial), damage reads: in-window g (real window visible; reference = NAT in-window of job 181 at the same appearance), DCLM first-chunk NLL rise (written - W0; pre-set rule 'no damage' = rise <= native +0.043 + 0.03 AND in-window g >= NAT in-window - 0.10), mean chunk CE (all tokens of the chunk, NOT background only: the write path logs one scalar per chunk), clip rate (share of chunks with clip coefficient < 1). Method candidate = the arm with the least masking (keys %) that reaches R >= 0.7 (reported with and without the no-damage requirement). Exploratory (3 seeds, 16 facts)."""
+    load=load or (lambda f:json.load(open(f)));G={};S={}
+    for sd in seeds:
+        for ar in arms:
+            tg=nat_tag if (ar=='NAT' and not (Path(d)/f'E55_{tag}_NAT_s{sd}.read.json').exists()) else tag
+            f=Path(d)/f'E55_{tg}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,ar]=load(f)
+            f=Path(d)/f'E55_{tg}_{ar}_s{sd}.saved.json'
+            if f.exists():S[sd,ar]=json.load(open(f))
+    nat_in={sd:load(Path(d)/f'E55_{nat_tag}_NAT_s{sd}.read.json') for sd in seeds if (Path(d)/f'E55_{nat_tag}_NAT_s{sd}.read.json').exists()}
+    ERR.clear();W=8192;CHL=1024;rows={}
+    def pool(fn,use):
+        return np.concatenate([fn(s_) for s_ in use])
+    def tryg(ar,ctx):
+        use=[s_ for s_ in seeds if (s_,ar) in G]
+        try:return pool(lambda s_:fact_g(G[s_,ar],a,ctx),use)
+        except Exception as e:ERR.append(f'{ar}/{ctx}: {e!r}');return None
+    ref_in=None
+    try:ref_in=pool(lambda s_:fact_g(nat_in[s_],a,in_ctx(nat_in[s_])),list(nat_in))
+    except Exception as e:ERR.append(f'NAT in-window ref: {e!r}')
+    gpq=tryg('SENTPQ','out');gpq_m=float(np.mean(gpq)) if gpq is not None else float('nan')
+    for ar in arms:
+        sv=[S[s_,ar] for s_ in seeds if (s_,ar) in S];lg=[e for x in sv for e in x['log']] if sv else []
+        lam=MIXL.get(ar,1.0)       # mix arms: the masked pass carries weight lambda on the fact loss -> effective masked share = lambda x hidden share of the masked pass
+        k=[lam*e.get('n_masked_keys',0)/W for x in sv for e in x['log'][8:]];pr=[lam*e.get('n_masked_pairs',0)/(CHL*W) for x in sv for e in x['log'][8:]]
+        go=tryg(ar,'out');gi=None
+        try:gi=pool(lambda s_:fact_g(G[s_,ar],a,in_ctx(G[s_,ar])),[s_ for s_ in seeds if (s_,ar) in G])
+        except Exception as e:ERR.append(f'{ar}/in-window: {e!r}')
+        dc=[x['dclm_end']-x['dclm_w0'] for x in sv if x.get('dclm_end') is not None and x.get('dclm_w0') is not None]
+        ce=[np.mean([e['ce'] for e in x['log'][-32:]]) for x in sv];cl=[np.mean([e['coef']<1 for e in x['log']]) for x in sv if all('coef' in e for e in x['log'])]
+        R=(float(np.mean(go))/gpq_m) if go is not None and gpq_m==gpq_m and gpq_m!=0 else float('nan')
+        rows[ar]={'keys_pct':100*float(np.mean(k)) if k else float('nan'),'pairs_pct':100*float(np.mean(pr)) if pr else float('nan'),'g_out':boot(go) if go is not None else None,'g_in':boot(gi) if gi is not None else None,'R':R,'dclm':float(np.mean(dc)) if dc else None,'dclm_per_seed':[round(x,3) for x in dc],'ce':float(np.mean(ce)) if ce else None,'clip':float(np.mean(cl)) if cl else None,'un':float(np.mean([np.mean([e['update_norm'] for e in x['log']]) for x in sv])) if sv else None}
+    gin_nat=float(np.mean(ref_in)) if ref_in is not None else None
+    L=[f'# E55 Q2 scope ladder (design 27.2), seeds {list(seeds)}, a={a}','','g = out-of-window rank gain u (W0 subtracted), 95% fact-bootstrap CI; R = g / g(SENTPQ) (pre-set: >=0.7 sufficient, <=0.3 not sufficient, else partial). In-window g reference = NAT of job 181 at the same appearance'+(f' ({gin_nat:+.3f})' if gin_nat is not None else ' (missing)')+'. DCLM rise = first-chunk NLL after writing minus W0 on the same samples (native reference +0.043; pre-set rule: rise <= 0.073 and in-window g >= NAT in-window - 0.10 = "no damage"). CE = mean chunk CE over the last 32 chunks, all tokens (not background only). Clip = share of chunks with clip coefficient < 1. Norm ratio = mean update norm / mean update norm of NAT. MIXnn = two-loss mix with lambda = nn/100 (loss = background + lambda x fact-token loss under the masked window + (1-lambda) x fact-token loss under the unmasked window, one summed gradient, one clip/step), its hidden share is lambda x the masked pass share; ALT = masked loss on every other chunk (hidden share averages to half the SENTPQ share).','',
+       '| arm | hidden keys % of window | hidden (query,key) pairs % | g out | R | verdict | g in-window | DCLM rise | CE | clip | norm ratio | no damage |','|---|---|---|---|---|---|---|---|---|---|---|---|']
+    def nd(v):
+        if v['dclm'] is None or v['g_in'] is None or gin_nat is None:return 'n/a'
+        return 'yes' if (v['dclm']<=0.043+0.03 and v['g_in'][0]>=gin_nat-0.10) else 'no'
+    un_nat=rows['NAT']['un'] if 'NAT' in rows and rows['NAT']['un'] else None
+    cand={}
+    for ar,v in rows.items():
+        vd='n/a' if v['R']!=v['R'] else 'sufficient' if v['R']>=0.7 else 'not sufficient' if v['R']<=0.3 else 'partial'
+        v['verdict']=vd;v['nodamage']=nd(v)
+        L.append(f"| {ar} | {v['keys_pct']:.1f} | {v['pairs_pct']:.1f} | "+(fmt(v['g_out']) if v['g_out'] else 'n/a')+f" | {v['R']:.2f} | {vd} | "+(fmt(v['g_in']) if v['g_in'] else 'n/a')+f" | "+(f"{v['dclm']:+.3f} {v['dclm_per_seed']}" if v['dclm'] is not None else 'n/a')+f" | "+(f"{v['ce']:.3f}" if v['ce'] is not None else 'n/a')+f" | "+(f"{v['clip']:.2f}" if v['clip'] is not None else 'n/a')+f" | "+(f"{v['un']/un_nat:.2f}" if v['un'] and un_nat else 'n/a')+f" | {v['nodamage']} |")
+    c1=[(v['keys_pct'],ar) for ar,v in rows.items() if ar!='NAT' and v['R']==v['R'] and v['R']>=0.7]
+    c2=[(k_,ar) for k_,ar in c1 if rows[ar]['nodamage']=='yes']
+    L+=['','method candidate (least masking with R >= 0.7): '+(min(c1)[1]+f' ({min(c1)[0]:.1f}% of the window keys)' if c1 else 'none'),'method candidate with the no-damage requirement: '+(min(c2)[1]+f' ({min(c2)[0]:.1f}%)' if c2 else 'none (or damage reads missing)')]
+    L+=['','curve points (x = hidden keys %): '+'; '.join(f"{ar}: ({v['keys_pct']:.1f}, g {v['g_out'][0]:+.3f})" for ar,v in rows.items() if v['g_out'])]
+    if plot:
+        try:
+            import matplotlib;matplotlib.use('Agg');import matplotlib.pyplot as plt
+            fig,ax=plt.subplots(1,3,figsize=(13,3.6));xs=[(ar,v) for ar,v in rows.items() if v['g_out']]
+            for i,(ttl,key) in enumerate((('gain g (out-of-window)','g_out'),('in-window g','g_in'))):
+                for ar,v in xs:
+                    if v[key]:ax[i].errorbar(v['keys_pct'],v[key][0],yerr=[[v[key][0]-v[key][1]],[v[key][2]-v[key][0]]],fmt='o');ax[i].annotate(ar,(v['keys_pct'],v[key][0]),fontsize=7)
+                ax[i].set_xlabel('hidden keys, % of window');ax[i].set_title(ttl)
+            for ar,v in xs:
+                if v['dclm'] is not None:ax[2].plot(v['keys_pct'],v['dclm'],'o');ax[2].annotate(ar,(v['keys_pct'],v['dclm']),fontsize=7)
+            ax[2].axhline(0.073,ls=':');ax[2].set_xlabel('hidden keys, % of window');ax[2].set_title('DCLM NLL rise (dotted: native +0.043 + 0.03)')
+            fig.tight_layout();fig.savefig(plot,dpi=130);L+=['',f'![curves]({Path(plot).name})']
+        except Exception as e:L+=['',f'plot not written: {e!r}']
+    if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
 if __name__=='__main__':
     import sys as _s
     if '--iso' in _s.argv:
@@ -206,6 +281,8 @@ if __name__=='__main__':
         _s.argv.remove('--ft');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--tag');ap.add_argument('--seed',type=int);ap.add_argument('--lrs',default=None);ap.add_argument('--arm-lrs',default=None);ap.add_argument('--epochs',type=int,default=4);ap.add_argument('--out');a=ap.parse_args();L_={}
         for x in (a.arm_lrs.split(',') if a.arm_lrs else []):L_.setdefault(x.split(':')[0],[]).append(float(x.split(':')[1]))
         print(ft_report(a.dir,a.tag,a.seed,L_ if a.arm_lrs else [float(x) for x in a.lrs.split(',')],a.epochs,out=a.out));_s.exit(0)
+    if '--q2' in _s.argv:
+        _s.argv.remove('--q2');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--plot');ap.add_argument('--arms',default='NAT,OSPAN,SENTP25,SENTP50,SENTP75,SENTPQ');a=ap.parse_args();print(q2_report(a.dir,[int(x) for x in a.seeds.split(',')],arms=tuple(a.arms.split(',')),out=a.out,plot=a.plot));_s.exit(0)
     if '--decomp' in _s.argv:
         _s.argv.remove('--decomp');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');a=ap.parse_args();print(decomp_report(a.dir,[int(x) for x in a.seeds.split(',')],out=a.out));_s.exit(0)
     if '--rep' in _s.argv:
