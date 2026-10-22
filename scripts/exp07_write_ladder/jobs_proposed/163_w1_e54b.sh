@@ -10,8 +10,8 @@ set -e
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=ff496f37760ab2a71b5b1578db69aeba5b021ac3
-FILES="$D/e54b.py $D/e49_stats.py"
+COMMIT=3ccc6e502467a27010630ba071ef93866f8afe22
+FILES="$D/e54b.py $D/e49_stats.py $D4/frame_pools_hold.py"
 LADDER_OK="714b08ea3b90"
 GW_OK="c1ae126eadda"
 FB_OK="1927a9ee330b eeaaa9135907"
@@ -29,8 +29,9 @@ if [ -z "$SKIP_VERIFY" ]; then
     G=$(sha256sum $D/$F | cut -c1-12)
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH"; exit 5; }
   done <<'MANIFEST'
-2d855c064df9 e54b.py
+a7ac6e65af48 e54b.py
 794ae88a9baf e49_stats.py
+0aa17d06bfd7 ../exp04_what_ttt_retains/frame_pools_hold.py
 
 MANIFEST
   echo "installed code verified against the manifest"
