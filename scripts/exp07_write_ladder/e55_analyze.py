@@ -90,9 +90,9 @@ def _boot_one(x,nb=NB_V,seed=12):
     x=np.asarray(x,float);rng=np.random.default_rng(seed);b=x[rng.integers(0,len(x),(nb,len(x)))].mean(1);return float(x.mean()),*np.percentile(b,[2.5,97.5]).tolist()
 def _saved_stats(f):
     r=json.load(open(f));lg=r['log'];g=lambda k:np.asarray([e[k] for e in lg],float);o={'upd':float(g('update_norm').mean()),'gn':float(g('gnorm').mean()),'clip':float(np.mean(g('coef')<1)),'coef':float(g('coef').mean())}
-    cw=r.get('canary_w0');cm=None
+    cw=r.get('canary_w0');cm=None            # e55_run: canary at W0 = r['canary_w0']; later points in r['reads'][chunk]['canary'] (keys _gen_nll, _tail_nll)
     if cw:
-        d=[max(e['canary'][k]-cw[k] for k in cw if k in e['canary']) for e in lg if 'canary' in e and e['canary']];cm=float(max(d)) if d else None
+        d=[max(e['canary'][k]-cw[k] for k in cw if k in e['canary']) for e in r.get('reads',{}).values() if isinstance(e,dict) and e.get('canary')];cm=float(max(d)) if d else None
     o['canary_max_over_W0']=cm;return o
 def _seed_of_saved(f):
     import re;m=re.search(r'_s(\d+)',Path(f).name);return int(m.group(1)) if m else None
