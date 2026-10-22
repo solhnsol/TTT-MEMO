@@ -355,6 +355,10 @@ def decomp(a):
             json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{sd}.read.json','w'));lgs=r['log']
             r.update({'reads':{str(k):'in read.json' for k in r.get('reads',{})},'stream_sha':sha,'canary_w0':cw0,'canary_end':can_,'dclm_w0':dcl_w0,'dclm_end':dcl_end,'dclm_n':(dcl.n if dcl else 0),'sec_total':time.monotonic()-t0,'code':git_rev(),'cell':a.cell,'world_seed':sd,'extra':extra,'summary':{'mean_update_norm':float(np.mean([e['update_norm'] for e in lgs])),'steps':len(lgs),'mean_ce':float(np.mean([e['ce'] for e in lgs]))}})
             json.dump(r,open(OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json','w'),default=float);print('wrote',OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json',f'{time.monotonic()-t0:.0f}s',flush=True)
+            # E55 29.5: drop the arm's buffers before the next arm and print the device memory (job 195: peak 55 GB earlier, 63.5 GB at the failing read)
+            r=L=got=None;import gc;gc.collect()
+            try:ms=LD.jax.devices()[0].memory_stats();print(f'  [mem] after {ar} seed {sd}: in use {ms["bytes_in_use"]/2**30:.1f} GiB, peak {ms["peak_bytes_in_use"]/2**30:.1f} GiB',flush=True)
+            except Exception:pass
 def forbid_list(w):return [x['X'] for x in w['facts']+w['ctrl']]+[x['P'] for x in w['facts']]+list(w['unexposed'])+[x['X'] for k_ in ('names','decoy') if k_ in w for x in w[k_]['facts']]+[x['P'] for k_ in ('names','decoy') if k_ in w for x in w[k_]['facts']]
 def run(a):
     """stream the world ONCE per arm and seed; inline frozen-weight reads (design 11c) after the chunks of the seed's plan, states saved only at --save-apps. Weights, optimizer, carried KV window are never touched by a read (U15 checks bit-identity)."""
@@ -418,6 +422,10 @@ def run(a):
                     if fr.exists() and not a.rerun:print('exists, not overwritten:',fr)
                     else:json.dump(rec,open(fr,'w'));print('wrote',fr)
                 json.dump(r,open(fn,'w'));print('wrote',fn,f'{time.monotonic()-t0:.0f}s',flush=True)
+                # E55 29.5: drop the arm's buffers before the next arm and print the device memory (job 195: peak 55 GB earlier, 63.5 GB at the failing read)
+                import gc;gc.collect()
+                try:ms=LD.jax.devices()[0].memory_stats();print(f'  [mem] after {ar} seed {sd}: in use {ms["bytes_in_use"]/2**30:.1f} GiB, peak {ms["peak_bytes_in_use"]/2**30:.1f} GiB',flush=True)
+                except Exception:pass
             us={}
             for ar in my:
                 f_=OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json'
