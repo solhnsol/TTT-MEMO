@@ -3,10 +3,12 @@
 #   KMASK: a query token inside the sentence of fact f hides only the EARLIER sentences of the SAME fact f in the 8-chunk window (about 1.8% of SENT's hidden (query,key) pairs); all other queries see everything.
 #   SENTO: a query token inside the sentence of fact f hides only the earlier sentences of the OTHER facts (the complement of KMASK inside the sentence rows); own earlier sentences stay visible; background rows see everything.
 #   (a per-query 2-D mask is needed: with 16 facts per chunk a 1-D same-fact or other-fact key set would equal SENT. KMASK and SENTO together hide exactly SENT's keys on the sentence rows, but SENT also hides them from background rows, which neither arm does.)
+#   SENTPQ (design 26.5 convention control): per-query SENT: fact-sentence queries hide ALL earlier fact sentences in the window, background queries see everything (job 189's SENT hides the keys from every query). If SENTPQ ~ SENT the convention is harmless.
+# Report adds the recovery ratio R = g(arm)/g(SENTPQ) at a=128 pooled over the 3 seeds (rule fixed beforehand: R>=0.7 sufficient, R<=0.3 not sufficient, else partial; R_KMASK+R_SENTO far from 1 = interaction) and a stream_sha table per seed/arm (SWD of job 181 is reusable only if its hash equals the others'; the job prints SWD_HASH per seed; on a mismatch the SWD arm must be re-run, not done here).
 # Comparison columns are REUSED from files that already exist, nothing is recomputed: NAT (job 181, E55_v3a_NAT), SENT (job 189, E55_dc_SENT), ISOB (jobs 188/189, E55_dc_ISOB). The report needs those files; a missing file shows n/a (the run itself only needs the NAT files for norm bookkeeping, exit 7 otherwise).
 # (c) SWD with fake places from outside the 16-candidate pool: NOT built here, see the note to design: the existing SWD of job 181 (seeds 61-63, done) already draws its fake places outside the 16 candidates (_alloc real/fake pairs), so its numbers are the (c) column.
 # Report: $OUT/e55_dc3_report.md (NEW name): u per arm and seed + pooled, paired contrasts KMASK-NAT, SENTO-NAT, SENT-KMASK, SENT-SENTO, KMASK-ISOB, SENTO-ISOB on top of the older ones (ISOB-ISO, ISOD-ISO, NATB-NAT, FOS-ISO, ISOB-NAT, ISO-NAT, SENT-NAT, SENT-ISOB, SENT-ISO).
-# EXPECTED RUN TIME (Hans confirms before it runs): ESTIMATE ONLY, unmeasured. About 0.7-1.2 h: CPU part 5-10 min; model + fp32 reader load 7-20 min once; each (arm, seed) = 128 chunks + 30 GiB K,V recording + 2 reads, about 6-10 min; 2 arms x 3 seeds = 6 runs. (Job 188 seed 61 took 19 min for 4 arms including load; job 189 SENT per seed was the reference.)
+# EXPECTED RUN TIME (Hans confirms before it runs): ESTIMATE ONLY, unmeasured. About 1-1.5 h: CPU part 5-10 min; model + fp32 reader load 7-20 min once; each (arm, seed) = 128 chunks + 30 GiB K,V recording + 2 reads, about 6-10 min (design estimate 1-1.5 h); 3 arms x 3 seeds = 9 runs. (Job 188 seed 61 took 19 min for 4 arms including load; job 189 SENT per seed was the reference.)
 # No GPU unit check (the write path is job 183/189's; U22/U23/U24/U29 on CPU: SENTO vs independent computation, KMASK/SENTO disjoint, intersection == SENT on sentence rows).
 # Outputs: $OUT/E55_dc_KMASK_s<seed>.saved.json / .read.json, E55_dc_SENTO_s<seed>.*, e55_dc3_report.md. NO OVERWRITE (the run skips existing saved.json); exit 8 if e55_dc3_report.md exists unless RERUN=1.
 # CPU-only dry run: git fetch origin claude/project-thread-rwhdac && git worktree add --detach /tmp/dry_dc3 FETCH_HEAD && ln -s "$(pwd)/data" /tmp/dry_dc3/data && cd /tmp/dry_dc3 && PY=/abs/path/python CPU_ONLY=1 bash scripts/exp07_write_ladder/jobs_proposed/190_e55_decomp_kmask_sento.sh   (then git worktree remove --force /tmp/dry_dc3)
@@ -18,7 +20,7 @@ case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=312d01ff80d406f25850c4604f0c29a68d6c3f8f
+COMMIT=90c427568c3bcd51b549d41c5a5757dec4da4021
 FILES="$D/e55_run.py $D/e55_core.py $D/e55_gpu.py $D/e55_swap.py $D/e55_read.py $D/e55_analyze.py $D/e55_metrics.py $D/e55_ic_report.py $D/e55_iso.py $D/s3.py $D4/gen_facts.py $D4/gen_world_ctl.py $D4/frame_bank.py $D/e55_gates.py $D4/frames300.txt"
 LADDER_OK="714b08ea3b90"
 S3_OLD="a16e6dd0d4c9"
@@ -37,14 +39,14 @@ if [ -z "$SKIP_VERIFY" ]; then
     G=$(sha256sum $D/$F | cut -c1-12)
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH (exit 5)"; exit 5; }
   done <<'MANIFEST'
-dd5a90a4be18 e55_run.py
-1e76a8c65586 e55_core.py
+12f9637d7740 e55_run.py
+8d2e5eb5ff3c e55_core.py
 9827e34dcde6 e55_gpu.py
-dad8a995c3c0 e55_swap.py
+f242a0f24d5c e55_swap.py
 a6d506949071 e55_read.py
 4a811650bcd8 e55_analyze.py
 30769e241d5e e55_metrics.py
-5a85324dfa17 e55_ic_report.py
+917cad33aefc e55_ic_report.py
 5723bbc93aa9 e55_iso.py
 f261120d0f03 s3.py
 1746ce4c159c ../exp04_what_ttt_retains/gen_facts.py
@@ -67,10 +69,17 @@ for SD in $(echo $SEEDS | tr ',' ' '); do
   tail -4 $OUT/e55_gates_dc3_s$SD.md
   [ -f $OUT/E55_v3a_NAT_s$SD.saved.json ] || [ -n "$CPU_ONLY" ] || { echo "NAT file of job 181 missing for seed $SD (exit 7)"; exit 7; }
 done
+for SD in $(echo $SEEDS | tr ',' ' '); do
+  $PY - "$OUT" "$SD" <<'PYEOF'
+import json,sys,os
+o,sd=sys.argv[1:3];g=lambda a:json.load(open(f'{o}/E55_v3a_{a}_s{sd}.saved.json')).get('stream_sha') if os.path.exists(f'{o}/E55_v3a_{a}_s{sd}.saved.json') else None
+n,w=g('NAT'),g('SWD');print(f'SWD_HASH seed {sd}: NAT={str(n)[:20]} SWD={str(w)[:20]} match={n==w and n is not None}')
+PYEOF
+done
 $PY $S/e55_run.py dry --cell v3_16_1 --seed 61 --bg pool --arms NAT | tail -3
 [ -n "$CPU_ONLY" ] && { echo "CPU_ONLY: done before any GPU step"; exit 0; }
 REP=$OUT/e55_dc3_report.md
 if [ -f $REP ] && [ -z "$RERUN" ]; then echo "report $REP exists: not redone (exit 8; RERUN=1 to redo)"; exit 8; fi
-$PY $S/e55_run.py decomp --cell v3_16_1 --tag dc --bg pool --out $OUT --seeds $SEEDS --arms KMASK,SENTO --norm-files "$OUT/E55_v3a_NAT_s{seed}.saved.json"
+$PY $S/e55_run.py decomp --cell v3_16_1 --tag dc --bg pool --out $OUT --seeds $SEEDS --arms KMASK,SENTO,SENTPQ --norm-files "$OUT/E55_v3a_NAT_s{seed}.saved.json"
 $PY $S/e55_ic_report.py --decomp --dir $OUT --seeds $SEEDS --out $REP
 tail -50 $REP
