@@ -33,4 +33,4 @@ export LD_LIBRARY_PATH="$NVRTC\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
 export HF_HOME="\${HF_HOME:-/workspace/hf}"
 ENVEOF
 echo "wrote $RP_ENV:"; cat "$RP_ENV"
-for P in checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc data/tokenizer/llama3/tokenizer.json data/dclm_val_subset/val_c0_200x8193.u32le.bin; do [ -e "$P" ] && echo "ok   $P" || echo "MISSING $P (copy it from the lab bundle)"; done
+for P in checkpoints/3b_ttt_e2e_finetune_books_128k_3x_cc/1949 data/tokenizer/llama3/tokenizer.json data/dclm_val_subset/val_c0_200x8193.u32le.bin; do [ -e "$P" ] && echo "ok   $P" || echo "MISSING $P (copy it from the lab bundle)"; done

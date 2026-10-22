@@ -3,7 +3,7 @@ import sys,hashlib,subprocess
 from pathlib import Path
 C=sys.argv[1];HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[2]
 D='scripts/exp07_write_ladder';D4='scripts/exp04_what_ttt_retains'
-TRAIN=[f'{D}/{x}' for x in 's3.py s3_sets.py e43_sets_test.py e44_sets_test.py e46_sets_test.py e47_sets_test.py e42_k2_tokens.py k3_counts.py suppress.py ladder.py margins_split.py margins_split_test.py e48_world_test.py e48_world_stats.py e47_native_da.py rp_native_check.py'.split()]+[f'{D4}/gen_world.py',f'{D4}/frame_bank.py']
+TRAIN=[f'{D}/{x}' for x in 's3.py s3_sets.py e43_sets_test.py e44_sets_test.py e46_sets_test.py e47_sets_test.py e42_k2_tokens.py k3_counts.py suppress.py ladder.py margins_split.py margins_split_test.py e48_world_test.py e48_world_stats.py e47_native_da.py rp_native_check.py rp_unifg_check.py'.split()]+[f'{D4}/gen_world.py',f'{D4}/frame_bank.py']
 E49=[f'{D}/e49_stats.py',f'{D}/e49_candidates.py',f'{D}/e49_test.py',f'{D}/e48_world_test.py',f'{D}/ladder.py',f'{D}/suppress.py',f'{D}/margins_split.py',f'{D4}/gen_world.py',f'{D4}/frame_bank.py']
 NLL=[f'{D}/e37_firstchunk_nll.py',f'{D}/e37_nll_table.py',f'{D}/ladder.py',f'{D}/suppress.py',f'{D}/margins_split.py',f'{D4}/gen_world.py',f'{D4}/frame_bank.py',f'{D}/e47_native_da.py']
 def sh(f):
@@ -39,7 +39,7 @@ export E48_FRAMES=pair
 # environment checks (no GPU work): deterministic ops flag, GPU visible, checkpoint, tokenizer, free disk
 case "$XLA_FLAGS" in *deterministic_ops=true*) ;; *) echo "XLA_FLAGS must contain --xla_gpu_deterministic_ops=true (ladder.py asserts it): exit 3"; exit 3;; esac
 if [ -z "$CPU_ONLY" ]; then nvidia-smi -L || {{ echo "no GPU visible: exit 3"; exit 3; }}; fi
-[ -d checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc ] || {{ echo "checkpoint checkpoints/125m_ttt_e2e_pretrain_dclm_8k_1x_cc missing: exit 3"; exit 3; }}
+[ -d checkpoints/3b_ttt_e2e_finetune_books_128k_3x_cc/1949 ] || {{ echo "checkpoint checkpoints/3b_ttt_e2e_finetune_books_128k_3x_cc/1949 (the 3B TTT-E2E 128K Books checkpoint, step 1949, about 11 GB; baseline_config.CHECKPOINT_DIR) missing: exit 3"; exit 3; }}
 [ -f data/tokenizer/llama3/tokenizer.json ] || {{ echo "tokenizer data/tokenizer/llama3/tokenizer.json missing: exit 3"; exit 3; }}
 mkdir -p "$OUT/states"
 AV=$(df -P --block-size=1G "$OUT" | awk 'NR==2{{print $4}}'); echo "free disk at $OUT: $AV GB (need >= {need_gb})"
@@ -55,7 +55,7 @@ echo "provenance: $OUT/rp_env_$JOB.txt, $OUT/rp_sha_$JOB.txt"
 '''
 def hdr(t,body):return f'#!/bin/bash\n# {t}\n'+body
 COMMON_DRY='CPU-only dry run (checks the commit, the manifest, the CPU unit tests, the environment and the output names; no GPU, no model): git fetch origin claude/project-thread-rwhdac && git worktree add --detach /tmp/dry_rp FETCH_HEAD && ln -s "$(pwd)/data" /tmp/dry_rp/data && ln -s "$(pwd)/checkpoints" /tmp/dry_rp/checkpoints && cd /tmp/dry_rp && PY=python3 CPU_ONLY=1 NO_INSTALL=1 bash scripts/exp07_write_ladder/jobs_proposed/{job}.sh   (then: git worktree remove --force /tmp/dry_rp; with NO_INSTALL=1 the checkout step is skipped because the worktree is already at the pinned commit; the manifest check still runs)'
-TESTS='$PY $S/e43_sets_test.py\n$PY $S/e44_sets_test.py\n$PY $S/e47_sets_test.py\n$PY $S/margins_split_test.py\n$PY $S/e48_world_test.py\n$PY $S/rp_native_check.py --selftest | tail -1\n'
+TESTS='$PY $S/e43_sets_test.py\n$PY $S/e44_sets_test.py\n$PY $S/e47_sets_test.py\n$PY $S/margins_split_test.py\n$PY $S/e48_world_test.py\n$PY $S/rp_native_check.py --selftest | tail -1\n$PY $S/rp_unifg_check.py --selftest | tail -1\n'
 def w(name,txt):(HERE/name).write_text(txt);(HERE/name).chmod(0o755);print(name,len(txt))
 # ---- 170 native reproduction check
 job='170_rp_w1_native_check'
@@ -84,18 +84,20 @@ done
 $PY $S/e47_native_da.py --seed 101 --cells S3:w1_bg,S3:w1_noo --out-dir "$OUT/rp_bg_noo"'''+post(job,'S3_w1_bg S3_w1_noo')))
 # ---- 172 UNIF-G
 job='172_rp_w1_unifg'
-w(job+'.sh',hdr('EXPECTED RUN TIME (Hans confirms before it runs): about 75 min on the RunPod A100, with slack about 1.6 h (design thread E53 section 8: 53 min + about 20 min overhead; NOT measured on the pod).\n# E53 UNIF-G on W1: O + uniformly random positions, the number per chunk equal to the per-chunk number of masked tokens of BG (s3.py --cell oraclefill --fill-size-from w1_bg, as job 88 did in the old world). Tag w1_unifg (results S3_w1_unifg_s101_*). Reads $OUT/S3_w1_bg_s101_{A,B}.saved.json written by job 171: it must run on the same volume AFTER job 171 (exit 3 if missing). Known limit (E53 section 8): the random positions may include exposure-sentence tokens and BOS.\n# NO OVERWRITE: exit 8 if S3_w1_unifg_s101_A.saved.json exists.\n# '+COMMON_DRY.format(job=job)+'\n',
+w(job+'.sh',hdr('EXPECTED RUN TIME (Hans confirms before it runs): about 75 min on the RunPod A100, with slack about 1.6 h (design thread E53 section 8: 53 min + about 20 min overhead; NOT measured on the pod).\n# E53 UNIF-G on W1: O + uniformly random positions, the number per chunk equal to the per-chunk number of masked tokens of BG (s3.py --cell oraclefill --fill-size-from w1_bg --fill-no-o: O-free chunks are filled too, because BG masks the background there; the total O + fill per chunk is BG's n_masked, asserted after the run by rp_unifg_check.py; job 88 did this in the old world without --fill-no-o). Tag w1_unifg (results S3_w1_unifg_s101_*). Reads $OUT/S3_w1_bg_s101_{A,B}.saved.json written by job 171: it must run on the same volume AFTER job 171 (exit 3 if missing). Known limit (E53 section 8): the random positions may include exposure-sentence tokens and BOS.\n# NO OVERWRITE: exit 8 if S3_w1_unifg_s101_A.saved.json exists.\n# '+COMMON_DRY.format(job=job)+'\n',
  pre(TRAIN,40,job)+'MARK=$(mktemp)\n'+TESTS.replace('\\n','\n')+'''for W in A B; do [ -f "$OUT/S3_w1_bg_s101_$W.saved.json" ] || { echo "$OUT/S3_w1_bg_s101_$W.saved.json missing (job 171 must run first on this volume): exit 3"; exit 3; }; done
 [ -f "$OUT/S3_w1_unifg_s101_A.saved.json" ] && { echo "S3_w1_unifg_s101_A.saved.json exists: not overwritten (exit 8)"; exit 8; }
 [ -n "$CPU_ONLY" ] && { echo "would write S3_w1_unifg_s101_* (+ states)"; exit 0; }
 for M in save eval; do
-  $PY $S/s3.py --cell oraclefill --fill-size-from w1_bg --world-seed 101 --passes 4 --worlds AB --keep --tag w1_unifg --mode $M
+  $PY $S/s3.py --cell oraclefill --fill-size-from w1_bg --fill-no-o --world-seed 101 --passes 4 --worlds AB --keep --tag w1_unifg --mode $M
 done
-$PY $S/e47_native_da.py --seed 101 --cells S3:w1_unifg --out-dir "$OUT/rp_unifg"'''+post(job,'S3_w1_unifg')))
+$PY $S/e47_native_da.py --seed 101 --cells S3:w1_unifg --out-dir "$OUT/rp_unifg"
+# size assertion: the TOTAL masked tokens (O + fill) per world, pass and chunk equal BG's n_masked
+$PY $S/rp_unifg_check.py --bg w1_bg --unifg w1_unifg | tee "$OUT/rp_unifg_check.txt"'''+post(job,'S3_w1_unifg')))
 # ---- 173 DCLM first-chunk read
 job='173_rp_w1_dclm_nll'
 w(job+'.sh',hdr('EXPECTED RUN TIME (Hans confirms before it runs): about 25-30 min on the RunPod A100, with slack about 40 min (same basis as job 160_w1_nll_dclm: 8 states + W0 + W0 repeat = 10 reads of 200 samples at about 1.1-2.3 min plus about 5 min load; NOT measured). NO training, NO weights written.\n# DCLM first-chunk damage read (E37c method) of the PASS-4 states of the RunPod decomposition cells, worlds A and B: re-run native (L0fs_w1rp), BG (S3_w1_bg), NOO (S3_w1_noo), UNIF-G (S3_w1_unifg), plus W0 and a W0 repeat (max |diff| must be 0). It must run BEFORE any state of these cells is deleted or the pod is terminated; run it right after job 172 on the same volume. Needs data/dclm_val_subset/val_c0_200x8193.u32le.bin on the pod. Output (tag e37w1dec): $OUT/e37_firstchunk_e37w1dec.{json,csv} and the table $OUT/e37_w1dec_nll_table.md. NO OVERWRITE: exit 8 if the json exists. Cells whose pass-4 states are absent are listed and the job stops (exit 3).\n# '+COMMON_DRY.format(job=job)+'\n',
- pre(NLL,10,job).replace('[ -d checkpoints/125m','[ -d checkpoints/125m')+'''MARK=$(mktemp)
+ pre(NLL,10,job)+'''MARK=$(mktemp)
 IDS=data/dclm_val_subset/val_c0_200x8193.u32le.bin
 [ -f "$IDS" ] || { echo "$IDS missing: exit 3"; exit 3; }
 ARGS=""
