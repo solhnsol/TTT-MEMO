@@ -167,11 +167,18 @@ def gpu_main(a):
                     S[w]=read(m);G[w]={'alt':greedy(m,L.ctx_alt)};print(name,w,'read + generated',f'{time.monotonic()-t0:.0f}s',flush=True)
             json.dump({'cell':name,'places':places,'n_world':nw,'tl':tl,'gi':gi.tolist(),'fi':fi.tolist(),'pairs':list(pairs),'S':{w:{ro:np.asarray(v).tolist() for ro,v in d.items()} for w,d in S.items()},'gen':G,'distractor_report':drep,'epoch':a.epoch if name!=w0n else 0,'sec_total':time.monotonic()-t0},open(fn(name),'w'))
     return OUT,fn,names
+def count_main(a):
+    sys.path.insert(0,str(HERE.parents[0]/'exp04_what_ttt_retains'));import gen_world as gw,frame_pools_hold as H
+    w=gw.build_world(a.seed);ntok=lambda s:len(gw.TOK.encode(' '+s,add_special_tokens=False).ids)
+    used=[t['P'] for t in w['triples']]+list(w.get('ctrl_places',[]))+list(w.get('pseudo_places',[]))
+    dis,rep=pick_distractors([x+y for x in gw.PL_PRE for y in gw.PL_SUF],used,[x+y for x in H.HOLD_PRE for y in H.HOLD_SUF],gw.realize(w,False)[0],[t['P'] for t in w['triples']],a.extra,a.seed,ntok)
+    print('E48_FRAMES=',os.environ.get('E48_FRAMES'),'extra wanted',a.extra);print(json.dumps(rep,indent=1))
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int,default=101);ap.add_argument('--epoch',type=int,default=4);ap.add_argument('--extra',type=int,default=150,help='number of distractor places (default 150); the shortfall of the world length class is reported');ap.add_argument('--min-extra',type=int,default=0,help='abort if fewer distractors are available')
-    ap.add_argument('--cell',action='append',default=[]);ap.add_argument('--w0',action='store_true');ap.add_argument('--w0-name',default='W0');ap.add_argument('--strict',action='store_true');ap.add_argument('--no-r1',action='store_true',help='skip the R1 (pg1342 tail) candidate readout, alt only (about half the scoring time); generation always uses the alt readout');ap.add_argument('--analyze',action='store_true');ap.add_argument('--selftest',action='store_true');ap.add_argument('--out',default=None);ap.add_argument('--tag',default='');ap.add_argument('--nboot',type=int,default=4000)
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int,default=101);ap.add_argument('--epoch',type=int,default=4);ap.add_argument('--extra',type=int,default=120,help='number of distractor places (default 120); the shortfall of the world length class is reported');ap.add_argument('--min-extra',type=int,default=0,help='abort if fewer distractors are available')
+    ap.add_argument('--cell',action='append',default=[]);ap.add_argument('--w0',action='store_true');ap.add_argument('--w0-name',default='W0');ap.add_argument('--strict',action='store_true');ap.add_argument('--no-r1',action='store_true',help='skip the R1 (pg1342 tail) candidate readout, alt only (about half the scoring time); generation always uses the alt readout');ap.add_argument('--analyze',action='store_true');ap.add_argument('--selftest',action='store_true');ap.add_argument('--count',action='store_true',help='CPU only (needs tokenizers + gen_world, no model): print the distractor pool report (available places per token length, shortfall) and exit');ap.add_argument('--out',default=None);ap.add_argument('--tag',default='');ap.add_argument('--nboot',type=int,default=4000)
     a=ap.parse_args()
     if a.selftest:selftest();return
+    if a.count:count_main(a);return
     if a.analyze:
         OUT=Path(a.out or os.environ.get('EXP07_OUT',HERE.parents[1]/'experiments/exp07_write_ladder'));fn=lambda n:OUT/f'e54b_s{a.seed}_{n}.json';names=[n for n,_ in (c.split('=',1) for c in a.cell)]+([a.w0_name] if a.w0 else [])
     else:OUT,fn,names=gpu_main(a)
