@@ -5,12 +5,13 @@ Slots that do not exist (k - j < 0) are left as the zero padding of ladder.ctx_k
 GPU integration (NOT in this file, NOT done): the plan must be applied to (a) the prefix layers' context K,V of Ladder3.prefix_masked (ctx_kv slices of three recordings) and (b) the carried suffix-layer KV state used by write_step / read_state (needs a decoy / bg chain of read_state and a window composed from the three chains); (b) needs the state layout of the ttt SWA state, which is not in this repository checkout (e2e submodule)."""
 import numpy as np
 NW=8
-ARMS=['NAT','SWD','SWB','MSK','SWDS','SWDO','NATM','SENT','KMASK','SENTO','SENTPQ']
+ARMS=['NAT','SWD','SWB','MSK','SWDS','SWDO','NATM','SENT','KMASK','SENTO','SENTPQ','OSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT']
+MIX={'MIX25':0.25,'MIX50':0.50,'MIX75':0.75}   # E55 27.5 two-loss mix: lambda = weight of the loss of the fact-sentence tokens under the masked (SENTPQ) forward; ALT = masked loss on even chunk indices (1st, 3rd, ... chunk), unmasked on odd indices, one forward each
 def plan(arm,k,p):
     assert arm in ARMS and p>=1 and k>=0;out={}
     for j in range(1,NW+1):
         if k-j<0:continue
-        if arm in ('NAT','NATM','SENT','KMASK','SENTO','SENTPQ'):src='real'      # SENT / KMASK: real window K,V; only the attention mask changes (token_masks)
+        if arm in ('NAT','NATM','SENT','KMASK','SENTO','SENTPQ','OSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT'):src='real'      # SENT / KMASK: real window K,V; only the attention mask changes (token_masks)
         elif arm=='SWD':src='decoy'
         elif arm=='SWB':src='bg'
         elif arm=='MSK':src='mask'
@@ -31,6 +32,26 @@ def compose_window(src,k,pl,CH,seqlen=None,axis=0):
         if s=='mask':parts.append(sl(ref,c));keep.append(np.zeros(CH,bool));continue
         a=src[s];assert a.shape==ref.shape,('recording shape differs',s);parts.append(sl(a,c));keep.append(np.ones(CH,bool))
     return np.concatenate(parts,axis),np.concatenate(keep)
+MASK_ARMS=('SENT','KMASK','SENTO','SENTPQ','OSPAN','SENTP25','SENTP50','SENTP75')
+SENTP={'SENTP25':0.25,'SENTP50':0.50,'SENTP75':0.75};MASK_SEED=55027
+def annotate_answers(chunks,facts,enc):
+    """E55 27.2 O-span: adds x['ans'] = [(start,end),...] (token offsets inside the chunk) to every sentence of the table: the first occurrence of the place tokens and of the name tokens of the sentence's fact inside the sentence span (enc(text) -> ids, tried with and without the leading space). Returns the number of sentences without a hit (place, name); callers assert 0."""
+    miss=[0,0]
+    for c in chunks:
+        ids=list(c['ids'])
+        for x in c['sents']:
+            seg=ids[x['start']:x['end']];spans=[]
+            for j,key in enumerate(('P','X')):
+                hit=None
+                for v in (' '+facts[x['fact']][key],facts[x['fact']][key]):
+                    pl=list(enc(v));L=len(pl)
+                    for i in range(len(seg)-L+1):
+                        if seg[i:i+L]==pl:hit=(x['start']+i,x['start']+i+L);break
+                    if hit:break
+                if hit is None:miss[j]+=1
+                else:spans.append(hit)
+            x['ans']=sorted(spans)
+    return tuple(miss)
 def token_masks(arm,k,chunks,CH,nw=NW):
     """E55 design 19.2: attention-only masks of the sentence-level arms. chunks[c]['sents'] = [{'fact','start','end'}] (token positions inside chunk c). Key index j <-> absolute position k*CH-nw*CH+j (the window, nw*CH keys, then the current chunk, CH keys), as keep_vector.
     SENT : 1-D keep, every token of every fact sentence of the nw chunks BEFORE chunk k is hidden from every query; background and the sentences of the chunk being written stay visible.
@@ -38,7 +59,7 @@ def token_masks(arm,k,chunks,CH,nw=NW):
     SENTO: 2-D keep, the complement of KMASK inside the sentence rows: a query token inside the sentence of fact f hides the earlier sentences of every OTHER fact in the window (its own earlier sentences stay visible); all other queries see everything (E55 design 26.4 (b)).
     KMASK: 2-D keep [CH, nw*CH+CH]; a query token inside the sentence of fact f of chunk k does not see the tokens of the EARLIER sentences of the same fact f inside the window; all other queries (background, other facts' sentences) see everything.
     -> (keep, n_masked_keys): n_masked_keys = hidden window tokens for SENT, hidden (query, key) fact pairs / query tokens for KMASK is reported as the number of distinct hidden key tokens"""
-    assert arm in ('SENT','KMASK','SENTO','SENTPQ');W=nw*CH;lo=max(0,k-nw);hid=np.zeros(W+CH,bool)
+    assert arm in MASK_ARMS;W=nw*CH;lo=max(0,k-nw);hid=np.zeros(W+CH,bool)
     if arm=='SENT':
         keep=np.ones(W+CH,bool)
         for c in range(lo,k):
@@ -46,6 +67,20 @@ def token_masks(arm,k,chunks,CH,nw=NW):
             for x in chunks[c]['sents']:keep[off+x['start']:off+x['end']]=False
         return keep,int((~keep).sum())
     keep=np.ones((CH,W+CH),bool)
+    if arm=='OSPAN' or arm in SENTP:
+        # E55 27.2 scope ladder, per-query convention (as SENTPQ): only fact-sentence queries lose keys, background queries see everything.
+        # OSPAN: hidden keys = the answer tokens (name and place) of every earlier fact sentence; SENTPnn: a token-wise random nn% of the tokens of every earlier fact sentence
+        # (u[c] ~ U(0,1) per token of source chunk c from a fixed seed, hidden when u < nn/100: the sets are nested p25 < p50 < p75 < SENTPQ and the same for every query)
+        for c in range(lo,k):
+            off=(c-k+nw)*CH;u=np.random.default_rng([MASK_SEED,c]).random(CH) if arm in SENTP else None
+            for x in chunks[c]['sents']:
+                if arm=='OSPAN':
+                    assert 'ans' in x,'OSPAN needs the answer spans (e55_swap.annotate_answers) in the sentence table'
+                    for a_,b_ in x['ans']:hid[off+a_:off+b_]=True
+                else:
+                    sl=slice(off+x['start'],off+x['end']);hid[sl]=u[x['start']:x['end']]<SENTP[arm]
+        for xq in chunks[k]['sents']:keep[xq['start']:xq['end'],:]=~hid
+        return keep,int(hid.sum())
     for xq in chunks[k]['sents']:
         for c in range(lo,k):
             off=(c-k+nw)*CH

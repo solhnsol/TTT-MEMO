@@ -34,6 +34,35 @@ class Iso55(C.Ladder55):
             gn=optax.global_norm(g);coef=jnp.where(gn<clip,1.0,clip/jnp.maximum(gn,1e-30));s=lr*m.get_ilr_multiplier(st_all.get(m.step_index))
             return jax.tree.map(lambda p,x:(p+(-s*coef*x).astype(p.dtype)).astype(p.dtype),m.inner_parameters(),g),gn,coef
         self.prefix_iso=prefix_iso;self.iso_grad=iso_grad;self.sgd_apply=sgd_apply
+        f32=jnp.float32
+        @eqx.filter_jit
+        def iso_grad_w(m,ids_,tg_,mk_,pref_,seg_,loc_,power):
+            """E55 27.8 surprise-weighted loss: per-token weight = stop-grad(CE)^power, normalised to mean 1 over the chunk's loss tokens, capped at 5 (the cap is applied after the normalisation); loss = sum(w nll)/n. -> (inner grads, unweighted mean CE, mean weight after the cap)"""
+            packing.PACK_SUF['seg']=seg_;packing.PACK_SUF['loc']=loc_
+            try:
+                seq=Batch(input_ids=ids_,target_tokens=tg_,loss_masks=mk_)
+                def loss(mm):
+                    out=mm.language_model.suffix_call(prefix_outputs=pref_,state=clone_state(rt.state_suffix),seq=seq)
+                    lp=jax.nn.log_softmax(out.logits.astype(f32),axis=-1);nll=-jnp.take_along_axis(lp,tg_[:,None],axis=-1)[:,0];valid=mk_.astype(f32);n=jnp.maximum(jnp.sum(valid),1e-10)
+                    raw=jnp.power(jax.lax.stop_gradient(nll)+1e-6,power)*valid;w=jnp.minimum(raw/jnp.maximum(jnp.sum(raw)/n,1e-10),5.0)*valid
+                    return jnp.sum(w*nll)/n,(jnp.sum(valid*nll)/n,jnp.sum(w)/n)
+                (_l,(ce,wm)),grads=eqx.filter_value_and_grad(loss,has_aux=True)(m)
+            finally:packing.PACK_SUF.clear()
+            return grads.inner_parameters(),ce,wm
+        B1,B2,EPS=0.9,0.999,1e-8
+        def make_dir(mode):
+            @eqx.filter_jit
+            def dir_apply(g,mu,nu,t):
+                """inner-state optimisers of E55 27.8 on the clipped gradient (clip as the inner rule): adam = bias-corrected m / (sqrt(v) + eps), mom = heavy-ball sum (0.9); -> (fp32 direction, mu, nu, grad norm, clip coef); the step SIZE is set by the caller (cumulative-norm matching)"""
+                g=jax.tree.map(lambda x:x.astype(f32),g);gn=jnp.sqrt(sum(jnp.sum(x*x) for x in jax.tree.leaves(g)));coef=jnp.where(gn<clip,1.0,clip/jnp.maximum(gn,1e-30));g=jax.tree.map(lambda x:x*coef,g)
+                if mode=='ADAM':
+                    mu=jax.tree.map(lambda a,x:B1*a+(1-B1)*x,mu,g);nu=jax.tree.map(lambda a,x:B2*a+(1-B2)*x*x,nu,g);t1=t+1.0;c1=1-B1**t1;c2=1-B2**t1
+                    d=jax.tree.map(lambda a,b:(a/c1)/(jnp.sqrt(b/c2)+EPS),mu,nu)
+                else:
+                    mu=jax.tree.map(lambda a,x:0.9*a+x,mu,g);d=mu
+                return d,mu,nu,gn,coef
+            return dir_apply
+        self.iso_grad_w=iso_grad_w;self.dir_adam=make_dir('ADAM');self.dir_mom=make_dir('MOM')
     @staticmethod
     def norm_between(newp,old):
         f32=jnp.float32;return sum(float(jnp.sum((a.astype(f32)-b.astype(f32))**2)) for a,b in zip(jax.tree.leaves(newp),jax.tree.leaves(old.inner_parameters())))**0.5
@@ -52,9 +81,11 @@ def iso_rows(world,enc,seed,apps):
 def cum_target(norms):
     """T[a] = sum of the first a per-chunk update norms of the NAT run (T[0] = 0)"""
     return np.concatenate([[0.0],np.cumsum(np.asarray(norms,float))])
-def iso_run(L,rt,segs,T=None,read=None,eos=None,log=print,smoke_steps=None,weights0=None,read_at=None):
+VARIANTS=('STD','SUR1','SUR2','ADAM','MOM')
+def iso_run(L,rt,segs,T=None,read=None,eos=None,log=print,smoke_steps=None,weights0=None,read_at=None,variant='STD'):
     """-> {'log': per step dicts, 'reads': {a1: read(a1, m) result}, 'cum_update_norm': {a1: ...}, 'model': final weights}. T = cum_target of the NAT run (None: no matching, raw SGD steps)."""
-    packing=LD.packing;clone_state=LD.clone_state;W=int(rt.cfg.model.sliding_window_size);m=weights0 if weights0 is not None else rt.base;st_all=clone_state(rt.state_all);out={'log':[],'reads':{},'cum_update_norm':{}};cum=0.0;eos=rt.eos if eos is None else eos
+    assert variant in VARIANTS and (variant in ('STD','SUR1','SUR2') or T is not None),'ADAM / MOM need the cumulative-norm matching (T): their step size is set by it'
+    packing=LD.packing;clone_state=LD.clone_state;W=int(rt.cfg.model.sliding_window_size);m=weights0 if weights0 is not None else rt.base;st_all=clone_state(rt.state_all);out={'log':[],'reads':{},'cum_update_norm':{}};cum=0.0;opt=None;f32=jnp.float32;eos=rt.eos if eos is None else eos
     with rt.mesh:
         for a0,a1,rows,texts in segs:
             chunks,where=packing.pack_rows(rows);mks=[np.zeros(1024,bool) for _ in chunks]
@@ -64,11 +95,20 @@ def iso_run(L,rt,segs,T=None,read=None,eos=None,log=print,smoke_steps=None,weigh
                 if smoke_steps is not None and j>=smoke_steps:break
                 tg=np.concatenate([ids[1:],[eos]]).astype(np.int32);t0=time.monotonic()
                 pref=L.prefix_iso(rt.base,jnp.asarray(ids),jnp.asarray(loc),jnp.asarray(packing.prefix_mask(seg,W)))
-                g,ce=L.iso_grad(m,jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc));newp,gn,coef=L.sgd_apply(m,st_all,g)
-                raw=L.norm_between(newp,m);s=1.0 if inc is None else (inc/raw if raw>0 else 1.0)
-                if inc is not None:newp=L.rescale(newp,m,s)
+                wm=None
+                if variant in ('SUR1','SUR2'):g,ce,wm=L.iso_grad_w(m,jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc),jnp.asarray(1.0 if variant=='SUR1' else 2.0,f32))
+                else:g,ce=L.iso_grad(m,jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc))
+                if variant in ('ADAM','MOM'):
+                    if opt is None:z=jax.tree.map(lambda x:jnp.zeros(x.shape,f32),m.inner_parameters());opt={'mu':z,'nu':jax.tree.map(jnp.zeros_like,z),'t':jnp.asarray(0.0,f32)}
+                    d,mu_,nu_,gn,coef=(L.dir_adam if variant=='ADAM' else L.dir_mom)(g,opt['mu'],opt['nu'],opt['t']);opt={'mu':mu_,'nu':nu_,'t':opt['t']+1.0}
+                    dn=float(jnp.sqrt(sum(jnp.sum(x*x) for x in jax.tree.leaves(d))));raw=dn;s=(inc/dn if dn>0 else 1.0)
+                    newp=jax.tree.map(lambda p,x:(p.astype(f32)-s*x).astype(p.dtype),m.inner_parameters(),d)       # fp32 direction, size = the NAT cumulative increment of the segment / steps
+                else:
+                    newp,gn,coef=L.sgd_apply(m,st_all,g)
+                    raw=L.norm_between(newp,m);s=1.0 if inc is None else (inc/raw if raw>0 else 1.0)
+                    if inc is not None:newp=L.rescale(newp,m,s)
                 un=L.norm_between(newp,m);m=L.set_inner(m,newp);cum+=un;seg_cum+=un
-                out['log'].append({'a0':a0,'a1':a1,'step':j,'rows_in_chunk':int(seg.max())+1,'grad_norm':float(gn),'clip_coef':float(coef),'ce':float(ce),'raw_update_norm':raw,'scale':s,'update_norm':un,'cum_update_norm':cum,'sec':time.monotonic()-t0})
+                out['log'].append({'a0':a0,'a1':a1,'step':j,'rows_in_chunk':int(seg.max())+1,'grad_norm':float(gn),'clip_coef':float(coef),'ce':float(ce),**({'mean_weight':float(wm)} if wm is not None else {}),'raw_update_norm':raw,'scale':s,'update_norm':un,'cum_update_norm':cum,'sec':time.monotonic()-t0})
             out['cum_update_norm'][a1]=cum;log(f'  ISO segment ({a0},{a1}]: {J} packed chunks, {len(rows)} rows, update norm {seg_cum:.4g}'+('' if T is None else f' (NAT target {T[a1]-T[a0]:.4g})'))
             if read is not None and (read_at is None or a1 in read_at):out['reads'][a1]=read(a1,m)
     out['model']=m;return out
