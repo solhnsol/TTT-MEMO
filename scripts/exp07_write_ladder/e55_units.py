@@ -224,7 +224,39 @@ def u15():
         msg.append(f"{arm} hash {base['final_hash']}")
     assert set(R_.W0)=={'out','in_g0@1','in_g0@8'} and np.array_equal(R_.W0['out'],rd.score(R_.P_out,rt.base,n,NC))
     RES['U15']=f"reads at appearances 1, 2, 8 (out) and 1, 8 (in-window, window shorter than 8 chunks at a=1): per-chunk CE and final weight hash identical with and without reads ({'; '.join(msg)}); reads differ between chunk 1 and 8; W0 stored once ({time.monotonic()-t0:.0f}s, tiny model, random rows)"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15}
+def u16():
+    """NATM (size-matched NAT): target = NAT's own per-chunk update norms -> NAT bit for bit; target = 0.5 x NAT's -> the logged update norm of every chunk equals the target, the direction is NAT's (cosine of the chunk-0 update with NAT's = 1, later chunks differ only through the weights), the written ids are the real chunk"""
+    n8=8;nat_=L.run_stream('NAT',1,REAL,nch=n8,tag='u16n',log=lambda *a:None);t1=[e['update_norm'] for e in nat_['log']]
+    same=L.run_stream('NATM',1,REAL,nch=n8,tag='u16a',log=lambda *a:None,norm_targets=t1)
+    assert same['final_hash']==nat_['final_hash'] and [e['ce'] for e in same['log']]==[e['ce'] for e in nat_['log']] and all(abs(e['scale']-1.0)<1e-6 for e in same['log'])
+    t2=[0.5*x for x in t1];half=L.run_stream('NATM',1,REAL,nch=n8,tag='u16b',log=lambda *a:None,norm_targets=t2)
+    assert all(abs(e['update_norm']-t)<=1e-4*t for e,t in zip(half['log'],t2)) and half['final_hash']!=nat_['final_hash'] and abs(half['log'][0]['scale']-0.5)<1e-4 and abs(half['log'][0]['ce']-nat_['log'][0]['ce'])<1e-6
+    seen=[];orig=L.prefix_masked
+    def spy(m_,ids_,*a,**kw):seen.append(np.asarray(ids_).copy());return orig(m_,ids_,*a,**kw)
+    L.prefix_masked=spy;L.run_stream('NATM',1,REAL,nch=4,tag='u16c',log=lambda *a:None,norm_targets=t2);L.prefix_masked=orig;assert all(np.array_equal(seen[i],REAL[i*CH:(i+1)*CH]) for i in range(4))
+    try:L.run_stream('NATM',1,REAL,nch=2,tag='u16d',log=lambda *a:None);ok=False
+    except AssertionError:ok=True
+    assert ok
+    RES['U16']=f"NATM p=1, 8 chunks: target = NAT's norms -> hash {same['final_hash']} == NAT bitwise (all rescale factors 1); target = 0.5 x NAT's -> every logged update norm equals the target (max rel dev {max(abs(e['update_norm']-t)/t for e,t in zip(half['log'],t2)):.1e}), chunk-0 rescale factor {half['log'][0]['scale']:.4f}, CE of chunk 0 equal to NAT's (same start weights), the written ids are the real chunk, no target -> refused"
+# reference values produced by the code of commit 50cf2de (job 180a) in this same tiny setup; U17 shows that the NAT / SWD paths and the readout path did not change
+REF_180A={'NAT':'828ef3cad315e149','SWD':'7194ea8a98b29eac','reads':'e58c4dbd9dba1d03'}
+def u17():
+    """the paths of job 180a are unchanged under the code of job 180b: NAT / SWD final weights (8 chunks, p = 1, read hook inserted) and the a = 1 / 8 read scores hash to the values recorded with the 180a commit; reads inserted change nothing (bit-identical, as U15)"""
+    import e55_gpu as RG
+    V=rt.cfg.model.vocab_size;rng=np.random.default_rng(15);NC=16;n=3;cand=rng.integers(3,V,size=(NC,3));pre=rng.integers(3,V,size=(n,9))
+    raw=[(list(map(int,pre[i]))+list(map(int,cand[c])),(8,11)) for i in range(n) for c in range(NC)];out_tail=[int(x) for x in rng.integers(3,V,size=8192)]
+    plan={a:{'ctx':{'in_g0':{'group':0,'items':list(range(n)),'d':[1]*n,'tail':[int(x) for x in rng.integers(3,V,size=min(a,8)*CH)],'window_chunks':min(a,8)}}} for a in (1,2,8)}
+    rd=RG.Reader55(rt,rt,s3.packing if hasattr(s3,'packing') else sys.modules['packing'],H.TailCtx,reuse.get_filter_spec,reuse._hash_pytree,jax,H.eqx,jnp)
+    R_=RG.Reads(rd,raw,n,NC,plan,out_tail,rt.base,{1,2,8},{1,8});got={};hs={}
+    def hook(k,m):got[k+1]=R_.at(k+1,m)
+    for arm in ('NAT','SWD'):
+        r=L.run_stream(arm,1,REAL,decoy_ids=DEC,nch=8,tag='u17'+arm,log=lambda *a:None,read_hook=hook,hook_chunks=[0,1,7]);hs[arm]=r['final_hash']
+        if arm=='NAT':hh=hashlib.sha256(b''.join(np.ascontiguousarray(np.asarray(got[a][c],np.float64)).tobytes() for a in (1,2,8) for c in sorted(got[a]))+np.asarray(R_.W0['out'],np.float64).tobytes()).hexdigest()[:16]
+    print('U17 values:',hs,hh,flush=True)
+    assert hs['NAT']==REF_180A['NAT'] and hs['SWD']==REF_180A['SWD'],(hs,REF_180A)
+    assert hh==REF_180A['reads'],(hh,REF_180A)
+    RES['U17']=f"180a paths under this code: NAT hash {hs['NAT']} and SWD hash {hs['SWD']} equal the values of commit 50cf2de (8 chunks, p=1, reads at appearance 1, 2, 8 inserted); read-score hash {hh} equals the 50cf2de value"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

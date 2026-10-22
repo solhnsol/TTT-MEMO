@@ -35,7 +35,7 @@ class TinyRuntime:
     def __init__(self,layers=4,suffix=2,hidden=64,heads=2,inter=128,vocab=512,seed=0):
         register_configs()
         ov=["+deploy=interactive","+experiment=3b/extension/ext-3b-e2e-128K","training.dummy_dataset=true","deploy_paths.data.dclm_filter_8k=unused","deploy_paths.data.books3=unused","checkpoint.resume_checkpoint_dir=/tmp/none","training.load_part=params",
-            f"model.num_hidden_layers={layers}",f"model.suffix_len={suffix}",f"model.hidden_size={hidden}",f"model.num_attention_heads={heads}",f"model.intermediate_size={inter}",f"model.vocab_size={vocab}","model.bos_token_id=1","model.eos_token_id=2","model.compute_dtype=fp32","model.state_dtype=fp32","backend.num_devices=1","model.seq_len=16384","training.seq_length=16384",f"training.model_seed={seed}"]
+            f"model.num_hidden_layers={layers}",f"model.suffix_len={suffix}",f"model.hidden_size={hidden}",f"model.num_attention_heads={heads}",f"model.intermediate_size={inter}",f"model.vocab_size={vocab}","model.bos_token_id=1","model.eos_token_id=2",f"model.compute_dtype={os.environ.get('E55_DTYPE','fp32')}","model.state_dtype=fp32","backend.num_devices=1","model.seq_len=16384","training.seq_length=16384",f"training.model_seed={seed}"]
         with initialize_config_dir(version_base=None,config_dir=str(Path(E2E)/'configs')):cfg=compose(config_name='config',overrides=ov)
         cfg.model.seq_len=cfg.training.seq_length;key=set_random_seed(cfg.training.model_seed);self.mesh=ModelSharding(cfg).mesh
         m,s=eqx.nn.make_with_state(MetaModel)(cfg,key=key);s=s.set(m.step_index,jnp.asarray(1000,dtype=jnp.int32))

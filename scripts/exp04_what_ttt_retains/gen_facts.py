@@ -28,6 +28,16 @@ def _contexts(bank,slot):
         pre,post=f.split(slot,1);pre=' '.join(pre.split(' ')[-4:]) if pre and pre.strip() else pre;post=' '.join(post.split(' ')[:4])
         out.add(re.sub(r'\{\w+\}','Aldmere',pre)+'{N}'+re.sub(r'\{\w+\}','Aldmere',post))
     return sorted(out)
+def default_bg_all(n=40000):
+    """background paragraphs of ALL four narrative books of the E35 source (same cleaning as gen_world.background, which uses one random book): about 4x more units, needed for the largest worlds (p = 9: 144 chunks). NOT the default of the 180a / 180b runs (they use gen_world_ctl.default_bg, whose streams are pinned by their stream hashes)."""
+    import gen_world as gw
+    out=[];
+    for f in sorted((gw.ROOT/'data/narrative_gutenberg').glob('pg*.txt')):
+        if f.name not in ('pg98.txt','pg1260.txt','pg768.txt','pg766.txt'):continue
+        t=f.read_text(errors='ignore');t=t[t.find('CHAPTER'):] if 'CHAPTER' in t else t;t=t[len(t)//5:];t=re.sub(r'\r','',t)
+        for p in [p for p in re.split(r'\n\s*\n',t) if 200<len(p)<900 and not re.search(r'CHAPTER|\bVol|\[|\]|\*',p)]:
+            p=re.sub(r'(?<=[a-z,;] )(?:[A-Z][a-z]+)(?: [A-Z][a-z]+)*','someone',p);p=re.sub(r"\b(?:Mr|Mrs|Miss|Dr|Sir|Lady|Lord)\.? \w+",'the stranger',p);out.append(' '.join(p.split()))
+    random.Random(5500).shuffle(out);return out[:n]
 def _alloc(seed,k,enc,bank,decoy_world=True,nu=0):
     """names / places in the modal token-length class (leading space). The REAL names (places) are drawn in PAIRS (real_i, fake_i) with the same token length in every local context of the frame bank, so that the fake window ('names' decoy: same chunks, fake names / places) keeps every sentence length. Returns {'persons': (real k, fake k, ctrl NCTRL, decoy-world k), 'places': (real k, fake k, unexposed nu, decoy-world k)}"""
     nt=lambda s:len(enc(' '+s));res={}
@@ -260,7 +270,7 @@ if __name__=='__main__':
     else:
         tf=a.tokenizer_file or str(HERE.parents[1]/'data/tokenizer/llama3/tokenizer.json');enc=load_enc(tf);bg=None
     if a.pools:print(json.dumps(G0.pool_report(enc)));sys.exit(0)
-    bg=bg or default_bg()
+    bg=bg or default_bg_all()
     if a.sample:
         w=build_fact_world(a.seed,n_app=16,enc=enc,bg=bg,**CELLS['base']);out=[]
         for ch in w['chunks'][:3]:

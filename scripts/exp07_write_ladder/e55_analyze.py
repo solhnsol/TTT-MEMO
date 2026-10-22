@@ -77,15 +77,25 @@ def train_summary(saved_files):
         r=json.load(open(f));lg=r['log'];g=lambda k:np.asarray([e[k] for e in lg],float)
         L.append(f"| {Path(f).name.split('_')[2]} | {r.get('world_seed')} | {len(lg)} | {g('gnorm').mean():.4g} | {g('coef').mean():.3f} | {np.mean(g('coef')<1):.2f} | {g('update_norm').mean():.4g} | {g('update_norm').sum():.4g} | {g('ce').mean():.3f} |")
     return '\n'.join(L)+'\n'
-def stage0(nat_files,swd_files=None,a=16,out=None,swb_files=None,saved=None):
+def stage0(nat_files,swd_files=None,a=16,out=None,swb_files=None,saved=None,extra=None):
+    """extra: {'MSK': files, 'NATM': files, ...} further arms of the same seeds (contrasts vs NAT; for NATM also SWD - NATM, the size-matched control)"""
     if is_existence(nat_files):return existence(nat_files,swd_files,(4,16),out)
     load=lambda fs:[json.load(open(f)) for f in fs.split(',')]
-    t=MT.stage0(nat_files,swd_files,a,None)
-    if swb_files:
-        nat=load(nat_files);swb=load(swb_files);sh=[r for r in nat if r['meta']['seed'] in [x['meta']['seed'] for x in swb]];sb=[x for x in swb if x['meta']['seed'] in [r['meta']['seed'] for r in sh]]
-        s_=MT.shadowing(sh,sb,a);t+=f"\nSWD-B (fact sentences removed, background fill; seeds {[r['meta']['seed'] for r in sb]}) - NAT: G_rank {MT.fmt(s_['S']['G_rank'])}, PM2 {MT.fmt(s_['S']['PM2'])}, PM3 {MT.fmt(s_['S']['PM3'])} -> {s_['shadowing']}"+(' (METRIC MISMATCH)' if s_['metric_mismatch'] else '')+'\n'
-    t+=w0_report(load(nat_files),a)
-    t+=curve(load(nat_files),{**({'SWD-A':load(swd_files)} if swd_files else {}),**({'SWD-B':load(swb_files)} if swb_files else {})})
+    t=MT.stage0(nat_files,swd_files,a,None);nat=load(nat_files);alts={'SWD-A':load(swd_files)} if swd_files else {}
+    if swb_files:alts['SWD-B']=load(swb_files)
+    for k_,v_ in (extra or {}).items():alts[k_]=load(v_)
+    sd=lambda rs:[r['meta']['seed'] for r in rs]
+    def pair(x,y):
+        sh=set(sd(x))&set(sd(y));return [r for r in x if r['meta']['seed'] in sh],[r for r in y if r['meta']['seed'] in sh]
+    for nm,rs in alts.items():
+        if nm=='SWD-A':continue
+        nn,aa=pair(nat,rs)
+        if aa:s_=MT.shadowing(nn,aa,a);t+=f"\n{nm} - NAT (seeds {sd(aa)}): G_rank {MT.fmt(s_['S']['G_rank'])}, PM2 {MT.fmt(s_['S']['PM2'])}, PM3 {MT.fmt(s_['S']['PM3'])} -> {s_['shadowing']}"+(' (METRIC MISMATCH)' if s_['metric_mismatch'] else '')+'\n'
+    if 'NATM' in alts and 'SWD-A' in alts:
+        mm,aa=pair(alts['NATM'],alts['SWD-A'])
+        if aa:s_=MT.shadowing(mm,aa,a);t+=f"\nSWD-A - NATM (size-matched control, seeds {sd(aa)}): G_rank {MT.fmt(s_['S']['G_rank'])}, PM2 {MT.fmt(s_['S']['PM2'])}, PM3 {MT.fmt(s_['S']['PM3'])} -> {s_['shadowing']}\n"
+    t+=w0_report(nat,a)
+    t+=curve(nat,alts)
     if saved:t+=train_summary(saved)
     if out:Path(out).write_text(t)
     return t
@@ -102,6 +112,6 @@ def selftest():
     t=existence(','.join(fs),','.join(fs));assert 'shadowing contrast' in t and '| NAT | appearance 16 | out |' in t
     print(t.splitlines()[3]);print('e55_analyze SELFTEST OK (existence report on synthetic records)')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--nat');ap.add_argument('--swd',default=None);ap.add_argument('--swb',default=None);ap.add_argument('--saved',default=None,help='comma list of *.saved.json (training statistics table)');ap.add_argument('--a',type=int,default=16);ap.add_argument('--out',default=None);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--nat');ap.add_argument('--swd',default=None);ap.add_argument('--swb',default=None);ap.add_argument('--extra',default=None,help="further arms 'MSK=f1,f2;NATM=f3'");ap.add_argument('--saved',default=None,help='comma list of *.saved.json (training statistics table)');ap.add_argument('--a',type=int,default=16);ap.add_argument('--out',default=None);a=ap.parse_args()
     if a.selftest:selftest()
-    else:print(stage0(a.nat,a.swd,a.a,a.out,a.swb,a.saved))
+    else:print(stage0(a.nat,a.swd,a.a,a.out,a.swb,a.saved,dict(x.split('=') for x in a.extra.split(';')) if a.extra else None))
