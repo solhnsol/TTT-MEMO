@@ -256,7 +256,18 @@ def u17():
     assert hs['NAT']==REF_180A['NAT'] and hs['SWD']==REF_180A['SWD'],(hs,REF_180A)
     assert hh==REF_180A['reads'],(hh,REF_180A)
     RES['U17']=f"180a paths under this code: NAT hash {hs['NAT']} and SWD hash {hs['SWD']} equal the values of commit 50cf2de (8 chunks, p=1, reads at appearance 1, 2, 8 inserted); read-score hash {hh} equals the 50cf2de value"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17}
+def u18():
+    """design v3 cells (CPU, stub tokenizer, synthetic non-repeating background): v3_16_1 / v3_8_4 build with 300 frames, 128 (32) chunks, each fact uses distinct frames only (128 per fact), chunks exactly 1024 tokens, fake windows fact-free, read points at appearances 16/32/64/128 (4/8/16/32) = exposures 16/32/64/128, read plan builds; background gates (e55_gates.check) pass on the synthetic pool and catch an injected duplicate; pool builder ordering is seed-specific."""
+    import gen_facts as G,e55_gates as GT,e55_read as R,random
+    enc=G.StubTok();r=random.Random(7);vocab=[f'w{i}' for i in range(9000)];bg=[' '.join(r.choice(vocab) for _ in range(70))+'.' for _ in range(6000)];out=[]
+    for nm in ('v3_16_1','v3_8_4'):
+        w=G.cell_world(61,nm,enc,bg,decoys=('names','nofact'));v,A_=G.verify(w,enc);c=G.CELLS[nm];assert w['n_chunks']==c['n_app'] and w['bank_kind']=='300' and len(w['bank'])==300 and v['frame_repeats_per_fact']==0 and v['names_decoy_fact_free'] and v['nofact_fact_free']
+        exp=[a*c['n'] for a in w['read_apps']];assert exp==[16,32,64,128],exp
+        assert all(len(f['frames'])==c['n']*c['n_app'] and len(set(f['frames']))==c['n']*c['n_app']==128 for f in w['facts'])
+        pl=R.plan(w);assert sorted(pl['read'])==w['read_apps'];Rr,t,ok=GT.check(w,enc,bg);assert ok,t;out.append(f"{nm}: {w['n_chunks']} chunks, exposures at read points {exp}, 128 distinct frames per fact, gates pass (stream background ratio {Rr['e_ratio_real_half']:.1f})")
+    w=G.cell_world(61,'v3_8_4',enc,bg,decoys=('names','nofact'));bg2=bg[:];bg2[1]=bg2[0];w2=G.cell_world(61,'v3_8_4',enc,bg2,decoys=('names','nofact'));assert not GT.check(w2,enc,bg2)[2]
+    RES['U18']='; '.join(out)+'; an injected duplicate paragraph is caught by the gate'
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

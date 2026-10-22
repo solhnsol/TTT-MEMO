@@ -28,6 +28,20 @@ def _contexts(bank,slot):
         pre,post=f.split(slot,1);pre=' '.join(pre.split(' ')[-4:]) if pre and pre.strip() else pre;post=' '.join(post.split(' ')[:4])
         out.add(re.sub(r'\{\w+\}','Aldmere',pre)+'{N}'+re.sub(r'\{\w+\}','Aldmere',post))
     return sorted(out)
+def default_bg_pool(seed,books=('pg98.txt','pg1260.txt','pg768.txt','pg766.txt'),dedup=True):
+    """E55 v3 (design 13.3): the paragraph pool of the four narrative books, cleaned like default_bg_all (names stripped, 200-900 characters), exact duplicates removed (cross-book), shuffled with a SEED-SPECIFIC order. Every consumer takes paragraphs from the front of its own slice (no cycling, no reuse); the caller asserts the need / available ratio (e55_gates.py)."""
+    import gen_world as gw
+    out=[];seen=set()
+    for f in sorted((gw.ROOT/'data/narrative_gutenberg').glob('pg*.txt')):
+        if f.name not in books:continue
+        t=f.read_text(errors='ignore');t=t[t.find('CHAPTER'):] if 'CHAPTER' in t else t;t=t[len(t)//5:];t=re.sub(r'\r','',t)
+        for p in [p for p in re.split(r'\n\s*\n',t) if 200<len(p)<900 and not re.search(r'CHAPTER|\bVol|\[|\]|\*',p)]:
+            p=re.sub(r'(?<=[a-z,;] )(?:[A-Z][a-z]+)(?: [A-Z][a-z]+)*','someone',p);p=re.sub(r"\b(?:Mr|Mrs|Miss|Dr|Sir|Lady|Lord)\.? \w+",'the stranger',p);p=' '.join(p.split())
+            if dedup:
+                if p in seen:continue
+                seen.add(p)
+            out.append(p)
+    random.Random(f'E55bgpool|{seed}').shuffle(out);return out
 def default_bg_all(n=40000):
     """background paragraphs of ALL four narrative books of the E35 source (same cleaning as gen_world.background, which uses one random book): about 4x more units, needed for the largest worlds (p = 9: 144 chunks). NOT the default of the 180a / 180b runs (they use gen_world_ctl.default_bg, whose streams are pinned by their stream hashes)."""
     import gen_world as gw
@@ -196,7 +210,7 @@ def verify(world,enc):
     res['min_gap_between_appearances']=mn
     if p>=9:assert mn>=WIN+1,('appearance distance',mn)
     res['frame_repeats_per_fact']=max(len(f['frames'])-len(set(f['frames'])) for f in world['facts'])
-    if world['bank_kind'] in ('50','disjoint'):assert res['frame_repeats_per_fact']==0
+    if world['bank_kind'] in ('50','disjoint','300'):assert res['frame_repeats_per_fact']==0
     res['question_ngram_overlap']=question_overlap(world['bank']);assert res['question_ngram_overlap']==0
     names={x['X'] for x in world['facts']}|{x['X'] for x in world['ctrl']};pl={x['P'] for x in world['facts']};assert len(names)==k+NCTRL and len(pl)==k
     if 'decoy' in world:
@@ -246,7 +260,13 @@ def fmt_stats(rows_):
     L=['| k facts | n | p | bank | chunks | sentences / chunk | sentence tokens / chunk (share) | min background units / chunk | earlier appearances of a fact inside the 8-chunk window | share of window sentences of OTHER facts with the same frame | read after chunk index (appearances 2,4,8,16) |','|'+'---|'*11]
     for r in rows_:L.append(f"| {r['k']} | {r['n']} | {r['p']} | {r['bank']} | {r['n_chunks']} | {r['sent_per_chunk']} | {r['sent_tokens_per_chunk']:.0f} ({100*r['sent_share']:.1f}%) | {r['min_units_per_chunk']} | {r['earlier_appearances_in_window']:.2f} | {r['same_frame_share_window']:.3f} | {r['read_chunks']} |")
     return '\n'.join(L)
-CELLS={'base':dict(k=32,n=1,p=2,bank='50'),'p1':dict(k=16,n=1,p=1,bank='50'),'p4':dict(k=64,n=1,p=4,bank='50'),'p9':dict(k=144,n=1,p=9,bank='50'),'k16':dict(k=16,n=1,p=2,bank='50'),'k64':dict(k=64,n=1,p=2,bank='50'),'n2':dict(k=32,n=2,p=2,bank='50'),'n2k16':dict(k=16,n=2,p=2,bank='50'),'bank12':dict(k=32,n=1,p=2,bank='12'),'disjoint':dict(k=32,n=1,p=2,bank='disjoint'),'exist8':dict(k=8,n=1,p=1,bank='50')}
+CELLS={'base':dict(k=32,n=1,p=2,bank='50'),'p1':dict(k=16,n=1,p=1,bank='50'),'p4':dict(k=64,n=1,p=4,bank='50'),'p9':dict(k=144,n=1,p=9,bank='50'),'k16':dict(k=16,n=1,p=2,bank='50'),'k64':dict(k=64,n=1,p=2,bank='50'),'n2':dict(k=32,n=2,p=2,bank='50'),'n2k16':dict(k=16,n=2,p=2,bank='50'),'bank12':dict(k=32,n=1,p=2,bank='12'),'disjoint':dict(k=32,n=1,p=2,bank='disjoint'),'exist8':dict(k=8,n=1,p=1,bank='50'),
+       # design v3 (E55 section 13): 128 exposures per fact, bank of 300 frames, p = 1; read points in APPEARANCES = exposures / n (exposures 16, 32, 64, 128)
+       'v3_16_1':dict(k=16,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),'v3_8_1':dict(k=8,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),'v3_8_4':dict(k=8,n=4,p=1,bank='300',n_app=32,read_apps=(4,8,16,32)),
+       'v3_4_8':dict(k=4,n=8,p=1,bank='300',n_app=16,read_apps=(2,4,8,16)),'v3_4_1':dict(k=4,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128))}
+def cell_world(seed,name,enc,bg,**kw):
+    """build_fact_world for a named cell (a cell may carry its own n_app / read_apps; the older cells use n_app = 16)"""
+    return build_fact_world(seed,enc=enc,bg=bg,**{'n_app':16,**CELLS[name],**kw})
 CELLS_BGONLY=('p1',)
 def selftest():
     enc=StubTok();bg=_synth_bg(9000);rows_=[]
@@ -278,8 +298,8 @@ if __name__=='__main__':
         print('\n'.join(f'{i+1} {t}' for i,t in enumerate(out[:a.sample])));sys.exit(0)
     names=list(CELLS) if a.stats in (None,'all') else a.stats.split(',');rows_=[];reps={}
     for nm in names:
-        w=build_fact_world(a.seed,n_app=16,enc=enc,bg=bg,**CELLS[nm]);v,A_=verify(w,enc);rows_.append(stats(w,A_));reps[nm]=v
+        w=cell_world(a.seed,nm,enc,bg);v,A_=verify(w,enc);rows_.append(stats(w,A_));reps[nm]=v
         if a.check_repro:
-            w2=build_fact_world(a.seed,n_app=16,enc=enc,bg=bg,**CELLS[nm]);v2,_=verify(w2,enc);reps[nm]['repro_same_sha']=(v['sha_stream']==v2['sha_stream'])
+            w2=cell_world(a.seed,nm,enc,bg);v2,_=verify(w2,enc);reps[nm]['repro_same_sha']=(v['sha_stream']==v2['sha_stream'])
     md=fmt_stats(rows_)+'\n\n'+'\n'.join(f'- {k}: {json.dumps(v)}' for k,v in reps.items());print(md)
     if a.out:Path(a.out).write_text(md+'\n')
