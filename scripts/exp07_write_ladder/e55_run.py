@@ -51,6 +51,23 @@ def dry(a):
           'items':len(P['items']),'rows':len(P['rows']),'in_window_contexts':{str(k):sorted(v['ctx']) for k,v in P['read'].items()},'min_units_per_chunk':w['min_units_per_chunk'],
           'host_gib_per_stream_3B(24 prefix layers, hidden 2560, bf16)':round(host_gib(24,2560,w['n_chunks']*CH,1),1)}
     print(json.dumps(info,indent=1));return info
+def maskdump(a):
+    """CPU only (E55 design 19.2): the masks of the arms SENT / KMASK on the real world: hidden-key counts per chunk, KMASK keys subset of SENT keys, every hidden token lies inside a fact sentence (decoded text of a few spans), nothing of the current chunk and no background token hidden; also the frame statistics (frame repeats per fact, same-frame sentences in the 8-chunk window)."""
+    enc,w,tf=build(a,arms=['NAT']);A_=G.realize(w);ch=A_;W=8*CH;rows=[];ok=True;tok=None
+    for k in sorted({1,2,8,9,len(ch)//2,len(ch)-1}):
+        ks,ns=E.token_masks('SENT',k,ch,CH);km,nk=E.token_masks('KMASK',k,ch,CH);hid=set(np.nonzero(~ks)[0].tolist());hk=set(np.nonzero(~km.all(0))[0].tolist())
+        fact_tok=set()
+        for c in range(max(0,k-8),k):
+            off=(c-k+8)*CH;fact_tok|={off+t for x in ch[c]['sents'] for t in range(x['start'],x['end'])}
+        good=hk<=hid and hid==fact_tok and ks[W:].all() and nk==len(hk) and ns==len(hid);ok&=good
+        pairs=int((~km).sum());rows.append({'chunk':k,'SENT_hidden_keys':ns,'SENT_share_of_window':round(ns/W,4),'KMASK_distinct_keys':nk,'KMASK_hidden_query_key_pairs':pairs,'KMASK_pairs_over_SENT_pairs':round(pairs/(ns*CH),4) if ns else None,'KMASK_subset_of_SENT':hk<=hid,'SENT_only_fact_sentence_tokens':hid==fact_tok,'current_chunk_visible':bool(ks[W:].all()),'ok':bool(good)})
+    fr=[[x['frame'] for x in c['sents']] for c in ch];cnt=[]
+    for k in range(8,len(ch)):
+        win=[x['frame'] for c in ch[k-8:k] for x in c['sents']]
+        for x in ch[k]['sents']:cnt.append(sum(1 for y in win if y==x['frame']))
+    ex=[(c['k'],x['text']) for c in ch[9:10] for x in c['sents'][:3]]
+    info={'cell':a.cell,'seed':a.seed,'bank':w['bank_kind'],'rows':rows,'distinct_frames_per_chunk_min':min(len(set(r)) for r in fr),'frame_repeats_per_fact':max(len(f['frames'])-len(set(f['frames'])) for f in w['facts']),'mean_same_frame_other_sentences_in_window':float(np.mean(cnt)),'example_sentences_chunk9':ex,'ALL_OK':bool(ok)}
+    print(json.dumps(info,indent=1));assert ok,'mask dump check failed';return info
 def lab():
     """import the lab modules (server only)"""
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS',''),'XLA_FLAGS must contain --xla_gpu_deterministic_ops=true'
@@ -63,7 +80,7 @@ class Canary55:
         s.LD=LD;s.rt=rt;tail,_,_=RD.neutral_tail(rt.tok,rt.bos);s.T=types.SimpleNamespace(tok=rt.tok,tail_ids=tail)
     def _gen_setup(s):return s.LD.Ladder._gen_setup(s)
     def __call__(s,m):return {'_gen_nll':s.LD.Ladder.gen_nll(s,m),'_tail_nll':s.LD.Ladder.tail_nll(s,m)}
-def unit_checks(rt,L,s3,ids,dec,n,tol_ce,tol_upd):
+def unit_checks(rt,L,s3,ids,dec,n,tol_ce,tol_upd,meta=None):
     """GPU unit checks on the first n chunks of world A: U1 NAT write path vs native_step, U2 decoy := real stream -> SWD == NAT, U3 write ids are the real chunk, U4 a real decoy changes exactly the slots of each arm and moves CE / update, U5 p=9 plan -> SWDS == NAT. Mirrors e55_units.py (CPU, tiny model); also called by it (U12)."""
     import jax,jax.numpy as jnp
     res={}
@@ -102,9 +119,26 @@ def unit_checks(rt,L,s3,ids,dec,n,tol_ce,tol_upd):
       res['U2']={'final_hash_equal':nat['final_hash']==swd_same['final_hash'],'max_abs_ce_diff':max(abs(x['ce']-y['ce']) for x,y in zip(nat['log'],swd_same['log'])),'swapped_slots':sum(e['n_swapped_slots'] for e in swd_same['log'])}
       res['U5']={'final_hash_equal':nat['final_hash']==swds9['final_hash'],'max_abs_ce_diff':max(abs(x['ce']-y['ce']) for x,y in zip(nat['log'],swds9['log'])),'swapped_slots':sum(e['n_swapped_slots'] for e in swds9['log'])}
       res['timing_sec_per_chunk_NAT']=float(np.median([e['sec'] for e in nat['log']]))
+    def sec_c():
+      """U6 (E55 design 19.2, only when the sentence table `meta` is given): (i) SENT / KMASK with an EMPTY table == NAT (final hash equal or CE within the tolerance); (ii) SENT: perturbing K,V at hidden window positions leaves the write update unchanged, perturbing visible ones changes it; (iii) the hidden-key count of the chunk equals the sentence tokens of the window chunks"""
+      import e55_swap as E_
+      emp=[{'sents':[]} for _ in range(n)];nat0=run_('NAT',2,None);r_={}
+      for ar in ('SENT','KMASK'):
+          b=L.run_stream(ar,2,ids[:n*CH],nch=n,tag='unit',log=lambda *x:None,chunks_meta=emp);r_[ar]={'final_hash_equal':b['final_hash']==nat0['final_hash'],'max_abs_ce_diff':max(abs(x['ce']-y['ce']) for x,y in zip(nat0['log'],b['log']))}
+      k=min(3,n-1);assert k>=1;keep_,nk=E_.token_masks('SENT',k,meta,CH);hidden=np.nonzero(~keep_[:8*CH])[0];hidden=hidden[hidden>=(8-k)*CH];vis=np.nonzero(keep_[(8-k)*CH:8*CH])[0]+(8-k)*CH
+      exp_n=sum(x['end']-x['start'] for c_ in range(max(0,k-8),k) for x in meta[c_]['sents']);L.chunks_meta=meta
+      with rt.mesh:
+          m=rt.base;st_all=s3.clone_state(rt.state_all);seq=L._stream_seq(ids[:n*CH],n);pref=rt.prefix(m,seq);Kh,Vh,_=L.record(ids[:n*CH]);sts={'real':s3.clone_state(rt.state_suffix)}
+          for i in range(k):sts['real']=L.read_state(m,sts['real'],rt.chunk(seq,i),pref[i*CH:(i+1)*CH])
+          c=rt.chunk(seq,k);Kc,Vc,keep,st_w,_pl=L.window_inputs('SENT',k,2,{'real':(Kh,Vh)},sts);ids_k=jnp.asarray(ids[k*CH:(k+1)*CH],dtype=jnp.int32);kj=jnp.asarray(keep)
+          def upd(K_,V_):
+              pw=L.prefix_masked(m,ids_k,K_,V_,jnp.int32(k*CH),kj);return delta(L.write_step(m,st_all,st_w,c,pw,kj)[0],m)
+          d0=upd(Kc,Vc);hj=jnp.asarray(hidden);vj=jnp.asarray(vis[:64])
+          dh=upd(Kc.at[:,hj].add(1.0),Vc.at[:,hj].add(1.0));dv=upd(Kc.at[:,vj].add(1.0),Vc.at[:,vj].add(1.0))
+          res['U6']={'empty_table':r_,'hidden_keys':int(len(hidden)),'expected_hidden_keys':int(exp_n),'rel_update_change_hidden_perturbed':float(jnp.linalg.norm(dh-d0)/jnp.linalg.norm(d0)),'rel_update_change_visible_perturbed':float(jnp.linalg.norm(dv-d0)/jnp.linalg.norm(d0)),'chunk':k}
     import traceback
     errs={}
-    for nm,f in (('sec_a (U1,U4)',sec_a),('sec_b (U3,U2,U5,timing)',sec_b)):
+    for nm,f in (('sec_a (U1,U4)',sec_a),('sec_b (U3,U2,U5,timing)',sec_b))+((('sec_c (U6 masks)',sec_c),) if meta is not None else ()):
         try:f()
         except Exception as e:errs[nm]=traceback.format_exc(limit=6);print('UNIT SECTION RAISED',nm,errs[nm],flush=True)          # diagnostic mode: the other section still runs
     res['errors']=errs
@@ -121,12 +155,14 @@ def unit_checks(rt,L,s3,ids,dec,n,tol_ce,tol_upd):
     C['U2']=bool(u2) and (u2['final_hash_equal'] or u2['max_abs_ce_diff']<=tol_ce) and u2['swapped_slots']>0
     C['U5']=bool(u5) and (u5['final_hash_equal'] or u5['max_abs_ce_diff']<=tol_ce) and u5['swapped_slots']==0
     C['U4']=bool(u4) and u4['prefix_window_slots_changed']=={'SWD':list(range(1,9)),'SWDS':[2,4,6,8],'SWDO':[1,3,5,7]} and abs(u4['ce_SWD']-u4['ce_NAT'])>0 and u4['cos_update_NAT_vs_SWD']<1-1e-6
+    if meta is not None:
+        u6=res.get('U6') or {};C['U6']=bool(u6) and all(v['final_hash_equal'] or v['max_abs_ce_diff']<=tol_ce for v in u6['empty_table'].values()) and u6['hidden_keys']==u6['expected_hidden_keys']>0 and u6['rel_update_change_hidden_perturbed']<=1e-6 and u6['rel_update_change_visible_perturbed']>1e-6
     res['checks']={k_:bool(v) for k_,v in C.items()};res['PASS']=bool(all(C.values()) and not errs);res['tolerances']={'ce':tol_ce,'rel_update_strict':tol_upd}
     print('UNIT CHECK TABLE (all checks run; diagnostic mode):',json.dumps(res['checks']),flush=True);return res
 def unit(a):
     """GPU unit checks (real tokenizer, 3B model, first --unit-chunks chunks of world A); exit 9 if any fails"""
     enc,w,tf=build(a);S=streams(w,enc);LD,s3,C=lab();rt=LD.Runtime();L=C.Ladder55(rt,save_dir=Path(a.out or '.')/'states'/'unit',canary=None)
-    res=unit_checks(rt,L,s3,S['A'][0],S['decoy'][0],a.unit_chunks,a.tol_ce,a.tol_upd);print(json.dumps(res,indent=1,default=float))
+    res=unit_checks(rt,L,s3,S['A'][0],S['decoy'][0],a.unit_chunks,a.tol_ce,a.tol_upd,meta=w['chunks'] if getattr(a,'unit_masks',False) else None);print(json.dumps(res,indent=1,default=float))
     if a.out:Path(a.out).mkdir(parents=True,exist_ok=True);json.dump(res,open(Path(a.out)/f'E55_unit_{a.tag}.json','w'),indent=1,default=float)
     if res.get('U1_usable') is False:print('E55 UNIT CHECK UNUSABLE: the CE noise floor is too large for the preregistered tolerance (never widened)',flush=True);sys.exit(10)
     if not res['PASS']:print('E55 UNIT CHECKS FAILED',flush=True);sys.exit(9)
@@ -143,65 +179,68 @@ def run(a):
     OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');seeds=[int(x) for x in a.seeds.split(',')] if a.seeds else [a.seed];plans=seed_plan(a,seeds)
     armseed=dict(x.split(':') for x in a.arm_seeds.split(';')) if a.arm_seeds else {}                  # e.g. 'SWB:55' = arm SWB only for seed 55
     if a.smoke_chunks:assert 'smoke' in a.tag,'a smoke run needs a tag containing smoke'
-    for ar in arms:assert ar in ('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK'),ar
+    for ar in arms:assert ar in ('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK'),ar
     tgt={}          # per seed: per-chunk update norms of arm SWD (the size to which NATM is rescaled)
     LD,s3,C=lab();rt=LD.Runtime();assert int(rt.cfg.model.sliding_window_size)==8192;can=None if a.no_canary else Canary55(LD,rt)
     inline=any(plans[s_][0] or plans[s_][1] for s_ in seeds);rd=None
     if inline:
         import e55_gpu as RG;rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
-    for sd in seeds:
-        my=[ar for ar in arms if ar not in armseed or str(sd) in armseed[ar].split(',')]
-        if not my:continue
-        ro,ri,sv=plans[sd];enc,w,tf=build(a,sd,read_apps=set(ro)|set(ri)|set(sv),arms=my);S=streams(w,enc);nch=a.smoke_chunks or w['n_chunks'];p=w['p']
-        est=host_gib(24,2560,nch*CH,1+len(set(S)-{'A'}));print(f'seed {sd}: host memory for the recordings (3B estimate): {est:.1f} GiB (limit {a.host_gib_limit})',flush=True);assert est<=a.host_gib_limit,'recordings would exceed --host-gib-limit'
-        P=R.plan(w,enc);items=P['items'];reads=[a_*p-1 for a_ in sv] if not a.smoke_chunks else [nch-1];canary_chunks=[a_*p-1 for a_ in parse_apps(a.canary_apps,sv)] if not a.smoke_chunks else [nch-1]
-        R_=None
-        if inline and (ro or ri):
-            tok=rt.tok;raw=rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=out_tail_8192(LD,tok,rt.bos,forbid_list(w))
-            R_=RG.Reads(rd,raw,len(items),G.NCAND,P['read'],out_tail,rt.base,ro,ri,log=lambda *x:print(*x,flush=True));print(f'seed {sd}: W0 read done',flush=True)
-        my=sorted(my,key=lambda x:x=='NATM')           # NATM after SWD (its target)
-        for ar in my:
-            fn=OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json'
-            if fn.exists() and not a.rerun:
-                print('exists, reused:',fn,flush=True)
-                if ar=='SWD':tgt[sd]=[e['update_norm'] for e in json.load(open(fn))['log']]
-                continue
-            if ar=='NATM' and sd not in tgt:
-                f_=OUT/f'E55_{a.tag}_SWD_s{sd}.saved.json';assert f_.exists(),'NATM needs arm SWD of the same seed first (its per-chunk update norms are the target)';tgt[sd]=[e['update_norm'] for e in json.load(open(f_))['log']]
-            sdir=OUT/'states'/f'E55_{a.tag}_{ar}_s{sd}';L=C.Ladder55(rt,save_dir=sdir,canary=can)
-            ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w)),'stream hash mismatch'
-            got={}
-            def partial(k,m,ar=ar,sd=sd):
-                x=R_.at((k+1)//p,m);got[(k+1)//p]=x
-                try:ms=LD.jax.devices()[0].memory_stats();print(f'  [mem] after read at appearance {(k+1)//p}: in use {ms["bytes_in_use"]/2**30:.1f} GiB, peak {ms["peak_bytes_in_use"]/2**30:.1f} GiB',flush=True)
-                except Exception:pass                                   # diagnostic only (device memory should stay flat from read to read)
-                rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':sd,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':False})[ar];json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{sd}.read.partial.json','w'))
-                return {c_:'ok' for c_ in x}
-            hook_chunks=[a_*p-1 for a_ in sorted(set(ro)|set(ri))] if R_ else []
-            t0=time.monotonic();print(f'== seed {sd} {ar}: {nch} chunks, inline reads (out) {ro}, (in-window) {ri}, states saved {sv}',flush=True)
-            r=L.run_stream(ar,p,ids,decoy_ids=S['decoy'][0] if 'decoy' in S else None,bg_ids=S['nofact'][0] if 'nofact' in S else (S['bg'][0] if 'bg' in S else None),read_chunks=reads,canary_chunks=canary_chunks,nch=nch,tag=ar+f'_s{sd}',log=lambda *x:print(*x,flush=True),read_hook=partial if R_ else None,hook_chunks=hook_chunks,norm_targets=tgt.get(sd) if ar=='NATM' else None);r.pop('model',None);r.pop('inline',None)
-            lg=r['log']
-            if ar=='SWD':tgt[sd]=[e['update_norm'] for e in lg]
-            r['summary']={'mean_update_norm':float(np.mean([e['update_norm'] for e in lg])),'clip_bind_frac':r['clip_bind_frac'],'cum_update_norm':r['cum_update_norm'],'mean_ce':float(np.mean([e['ce'] for e in lg])),'mean_scale':float(np.mean([e.get('scale',1.0) for e in lg])),'sec_inline_reads':float(sum(e.get('sec_inline_read',0) for e in lg)),'n_inline_reads':sum(1 for e in lg if 'sec_inline_read' in e)}
-            print(f'  {ar} seed {sd}: update norm mean {r["summary"]["mean_update_norm"]:.4g}, clip fraction {r["summary"]["clip_bind_frac"]:.2f}, mean rescale factor {r["summary"]["mean_scale"]:.3f}, mean CE {r["summary"]["mean_ce"]:.3f}, inline reads {r["summary"]["n_inline_reads"]} in {r["summary"]["sec_inline_reads"]:.0f}s',flush=True)
-            r.update(stream_sha=sha,decoy_sha={k_:v_[1] for k_,v_ in S.items() if k_!='A'},decoy_kinds=w['decoys'],world_seed=sd,cell=a.cell,read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,code=git_rev(),k=w['k'],n=w['n'],bank=w['bank_kind'])
-            if can:
-                w0=r['canary_w0'];lim=0.10
-                for k,e in r['reads'].items():
-                    if 'canary' not in e:continue
-                    for key in ('_gen_nll','_tail_nll'):
-                        if e['canary'][key]-w0[key]>lim:print(f'WARNING canary {key} at chunk {k}: +{e["canary"][key]-w0[key]:.3f} nat over W0 (limit {lim})',flush=True)
-            if R_:
-                import e55_gpu as RG
-                rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':sd,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'code':git_rev(),'complete':True,'place_len':w['place_len']})[ar];fr=OUT/f'E55_{a.tag}_{ar}_s{sd}.read.json'
-                if fr.exists() and not a.rerun:print('exists, not overwritten:',fr)
-                else:json.dump(rec,open(fr,'w'));print('wrote',fr)
-            json.dump(r,open(fn,'w'));print('wrote',fn,f'{time.monotonic()-t0:.0f}s',flush=True)
-        us={}
-        for ar in my:
-            f_=OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json'
-            if f_.exists():us[ar]=json.load(open(f_)).get('summary',{}).get('mean_update_norm')
-        if us.get('NAT'):print(f'seed {sd}: mean per-chunk update norm relative to NAT: '+', '.join(f'{k_}={v_/us["NAT"]:.3f}' for k_,v_ in us.items() if v_),flush=True)
+    cellspecs=[tuple(x.split(':')) for x in a.cells.split(',')] if a.cells else [(a.cell,a.tag)]       # E55 design 19: several cells in ONE process (one model load); each (cell, tag) writes its own file set
+    for cell_,tag_ in cellspecs:
+        a.cell,a.tag=cell_,tag_
+        for sd in seeds:
+            my=[ar for ar in arms if ar not in armseed or str(sd) in armseed[ar].split(',')]
+            if not my:continue
+            ro,ri,sv=plans[sd];enc,w,tf=build(a,sd,read_apps=set(ro)|set(ri)|set(sv),arms=my);S=streams(w,enc);nch=a.smoke_chunks or w['n_chunks'];p=w['p']
+            est=host_gib(24,2560,nch*CH,1+len(set(S)-{'A'}));print(f'seed {sd}: host memory for the recordings (3B estimate): {est:.1f} GiB (limit {a.host_gib_limit})',flush=True);assert est<=a.host_gib_limit,'recordings would exceed --host-gib-limit'
+            P=R.plan(w,enc);items=P['items'];reads=[a_*p-1 for a_ in sv] if not a.smoke_chunks else [nch-1];canary_chunks=[a_*p-1 for a_ in parse_apps(a.canary_apps,sv)] if not a.smoke_chunks else [nch-1]
+            R_=None
+            if inline and (ro or ri):
+                tok=rt.tok;raw=rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=out_tail_8192(LD,tok,rt.bos,forbid_list(w))
+                R_=RG.Reads(rd,raw,len(items),G.NCAND,P['read'],out_tail,rt.base,ro,ri,log=lambda *x:print(*x,flush=True));print(f'seed {sd}: W0 read done',flush=True)
+            my=sorted(my,key=lambda x:x=='NATM')           # NATM after SWD (its target)
+            for ar in my:
+                fn=OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json'
+                if fn.exists() and not a.rerun:
+                    print('exists, reused:',fn,flush=True)
+                    if ar=='SWD':tgt[sd]=[e['update_norm'] for e in json.load(open(fn))['log']]
+                    continue
+                if ar=='NATM' and sd not in tgt:
+                    f_=OUT/f'E55_{a.tag}_SWD_s{sd}.saved.json';assert f_.exists(),'NATM needs arm SWD of the same seed first (its per-chunk update norms are the target)';tgt[sd]=[e['update_norm'] for e in json.load(open(f_))['log']]
+                sdir=OUT/'states'/f'E55_{a.tag}_{ar}_s{sd}';L=C.Ladder55(rt,save_dir=sdir,canary=can)
+                ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w)),'stream hash mismatch'
+                got={}
+                def partial(k,m,ar=ar,sd=sd):
+                    x=R_.at((k+1)//p,m);got[(k+1)//p]=x
+                    try:ms=LD.jax.devices()[0].memory_stats();print(f'  [mem] after read at appearance {(k+1)//p}: in use {ms["bytes_in_use"]/2**30:.1f} GiB, peak {ms["peak_bytes_in_use"]/2**30:.1f} GiB',flush=True)
+                    except Exception:pass                                   # diagnostic only (device memory should stay flat from read to read)
+                    rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':sd,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':False})[ar];json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{sd}.read.partial.json','w'))
+                    return {c_:'ok' for c_ in x}
+                hook_chunks=[a_*p-1 for a_ in sorted(set(ro)|set(ri))] if R_ else []
+                t0=time.monotonic();print(f'== seed {sd} {ar}: {nch} chunks, inline reads (out) {ro}, (in-window) {ri}, states saved {sv}',flush=True)
+                r=L.run_stream(ar,p,ids,decoy_ids=S['decoy'][0] if 'decoy' in S else None,bg_ids=S['nofact'][0] if 'nofact' in S else (S['bg'][0] if 'bg' in S else None),read_chunks=reads,canary_chunks=canary_chunks,nch=nch,tag=ar+f'_s{sd}',log=lambda *x:print(*x,flush=True),read_hook=partial if R_ else None,hook_chunks=hook_chunks,norm_targets=tgt.get(sd) if ar=='NATM' else None,chunks_meta=w['chunks']);r.pop('model',None);r.pop('inline',None)
+                lg=r['log']
+                if ar=='SWD':tgt[sd]=[e['update_norm'] for e in lg]
+                r['summary']={'mean_update_norm':float(np.mean([e['update_norm'] for e in lg])),'clip_bind_frac':r['clip_bind_frac'],'cum_update_norm':r['cum_update_norm'],'mean_ce':float(np.mean([e['ce'] for e in lg])),'mean_scale':float(np.mean([e.get('scale',1.0) for e in lg])),'sec_inline_reads':float(sum(e.get('sec_inline_read',0) for e in lg)),'n_inline_reads':sum(1 for e in lg if 'sec_inline_read' in e)}
+                print(f'  {ar} seed {sd}: update norm mean {r["summary"]["mean_update_norm"]:.4g}, clip fraction {r["summary"]["clip_bind_frac"]:.2f}, mean rescale factor {r["summary"]["mean_scale"]:.3f}, mean CE {r["summary"]["mean_ce"]:.3f}, inline reads {r["summary"]["n_inline_reads"]} in {r["summary"]["sec_inline_reads"]:.0f}s',flush=True)
+                r.update(stream_sha=sha,decoy_sha={k_:v_[1] for k_,v_ in S.items() if k_!='A'},decoy_kinds=w['decoys'],world_seed=sd,cell=a.cell,read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,code=git_rev(),k=w['k'],n=w['n'],bank=w['bank_kind'])
+                if can:
+                    w0=r['canary_w0'];lim=0.10
+                    for k,e in r['reads'].items():
+                        if 'canary' not in e:continue
+                        for key in ('_gen_nll','_tail_nll'):
+                            if e['canary'][key]-w0[key]>lim:print(f'WARNING canary {key} at chunk {k}: +{e["canary"][key]-w0[key]:.3f} nat over W0 (limit {lim})',flush=True)
+                if R_:
+                    import e55_gpu as RG
+                    rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':sd,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'code':git_rev(),'complete':True,'place_len':w['place_len']})[ar];fr=OUT/f'E55_{a.tag}_{ar}_s{sd}.read.json'
+                    if fr.exists() and not a.rerun:print('exists, not overwritten:',fr)
+                    else:json.dump(rec,open(fr,'w'));print('wrote',fr)
+                json.dump(r,open(fn,'w'));print('wrote',fn,f'{time.monotonic()-t0:.0f}s',flush=True)
+            us={}
+            for ar in my:
+                f_=OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json'
+                if f_.exists():us[ar]=json.load(open(f_)).get('summary',{}).get('mean_update_norm')
+            if us.get('NAT'):print(f'seed {sd}: mean per-chunk update norm relative to NAT: '+', '.join(f'{k_}={v_/us["NAT"]:.3f}' for k_,v_ in us.items() if v_),flush=True)
 def out_tail_8192(LD,tok,bos,forbid):
     """neutral out-of-window context of exactly 8192 tokens: BOS + SQuAD dev paragraphs (as ladder.squad_tail, which stops at 7168), none containing a name / place of the worlds"""
     d=json.load(open(LD.ROOT/'data/squad/dev-v1.1.json'));paras=[p['context'] for x in d['data'] for p in x['paragraphs']]
@@ -264,8 +303,8 @@ def fam(a):
                 if fnout(ar,sd).exists() and not a.rerun:print('exists, not overwritten:',fnout(ar,sd));continue
                 json.dump(rec,open(fnout(ar,sd),'w'));print('wrote',fnout(ar,sd))
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('cmd',choices=['dry','run','read','unit','fam']);ap.add_argument('--cell',default='base',choices=list(G.CELLS));ap.add_argument('--seed',type=int,default=55);ap.add_argument('--arms',default='NAT,SWD');ap.add_argument('--tag',default='st0')
+    ap=argparse.ArgumentParser();ap.add_argument('cmd',choices=['dry','run','read','unit','fam','maskdump']);ap.add_argument('--cell',default='base',choices=list(G.CELLS));ap.add_argument('--seed',type=int,default=55);ap.add_argument('--arms',default='NAT,SWD');ap.add_argument('--tag',default='st0')
     ap.add_argument('--out',default=None);ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--smoke-chunks',type=int,default=0);ap.add_argument('--no-canary',action='store_true');ap.add_argument('--rerun',action='store_true');ap.add_argument('--stub',action='store_true',help='dry only: stub tokenizer and synthetic background (CPU test)');ap.add_argument('--host-gib-limit',type=float,default=100.0)
     ap.add_argument('--save-apps',default=None,help='run: appearances at which states are saved (default 2,4,8,16)');ap.add_argument('--canary-apps',default=None,help='run: appearances with a canary read (default = save-apps; W0 always)');ap.add_argument('--apps',default=None,help='read: appearances to read (default all saved)');ap.add_argument('--in-apps',default=None,help='read: comma list of appearances at which the in-window contexts are also read (e.g. 16); default none')
-    ap.add_argument('--seeds',default=None,help='run: comma list of world seeds (one model load for all)');ap.add_argument('--plan',default=None,help="run: per-seed read plan '55=all|1,2,4,8,16;56=2,4,8,16|16' (out-of-window appearances | in-window appearances)");ap.add_argument('--read-apps',default=None,help='run: default out-of-window inline reads (appearances, or all)');ap.add_argument('--arm-seeds',default=None,help="run: restrict an arm to seeds, e.g. 'SWB:55'");ap.add_argument('--decoy',default='names',choices=['names','world'],help='fake window of SWD: names = same chunks with fake names / places (primary), world = another fact world');ap.add_argument('--bg',default='default',choices=['default','pool'],help='background paragraphs: default = the old one-book list (E55 stage 0 jobs), pool = design v3 pooled / deduplicated / seed-shuffled four-book pool');ap.add_argument('--unit-chunks',type=int,default=12);ap.add_argument('--tol-ce',type=float,default=1e-3);ap.add_argument('--tol-upd',type=float,default=2e-3)
-    a=ap.parse_args();{'dry':dry,'run':run,'read':read,'unit':unit,'fam':fam}[a.cmd](a)
+    ap.add_argument('--unit-masks',action='store_true',help='unit: also run the SENT / KMASK mask checks (U6)');ap.add_argument('--cells',default=None,help="run: 'cell:tag,cell:tag' several cells in one process (overrides --cell / --tag)");ap.add_argument('--seeds',default=None,help='run: comma list of world seeds (one model load for all)');ap.add_argument('--plan',default=None,help="run: per-seed read plan '55=all|1,2,4,8,16;56=2,4,8,16|16' (out-of-window appearances | in-window appearances)");ap.add_argument('--read-apps',default=None,help='run: default out-of-window inline reads (appearances, or all)');ap.add_argument('--arm-seeds',default=None,help="run: restrict an arm to seeds, e.g. 'SWB:55'");ap.add_argument('--decoy',default='names',choices=['names','world'],help='fake window of SWD: names = same chunks with fake names / places (primary), world = another fact world');ap.add_argument('--bg',default='default',choices=['default','pool'],help='background paragraphs: default = the old one-book list (E55 stage 0 jobs), pool = design v3 pooled / deduplicated / seed-shuffled four-book pool');ap.add_argument('--unit-chunks',type=int,default=12);ap.add_argument('--tol-ce',type=float,default=1e-3);ap.add_argument('--tol-upd',type=float,default=2e-3)
+    a=ap.parse_args();{'dry':dry,'run':run,'read':read,'unit':unit,'fam':fam,'maskdump':maskdump}[a.cmd](a)

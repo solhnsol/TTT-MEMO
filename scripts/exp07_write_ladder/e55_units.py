@@ -306,7 +306,71 @@ def u21():
     assert not np.allclose(res['W0']['full'],res['W0']['first']) and np.all(res['W0']['full']<=0)
     pf=F.per_fact(res['PERT'][1],res['W0'],'full');assert all(len(v)==n for v in pf.values()) and np.allclose(pf['familiarity']+pf['binding'],pf['gold']-pf['fresh'])
     RES['U21']=f"fam readout: fresh places disjoint (16, token length {w['place_len']}), items [gold, 15 exposed, 16 fresh] x {n} facts, BASE state == W0 bitwise, PERT differs, first-token != full-span, weights unchanged, familiarity + binding = gold - fresh"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21}
+def u22():
+    """E55 design 19.2 masks (CPU, stub tokenizer, real worlds ic_u64 / ic_s64): hidden-key list of SENT / KMASK against an independent computation from the token ids; SENT hides only fact-sentence tokens of the 8 chunks before the chunk, none of the current chunk; KMASK keys are a subset of SENT keys, per-query: a query inside the sentence of fact f hides exactly the earlier f sentences, every other query hides nothing; empty tables mask nothing; Latin frames: one frame per fact once, 16 distinct frames per chunk"""
+    import gen_facts as G
+    enc=G.StubTok();bg=G._synth_bg(9000);out=[]
+    for cell in ('ic_u64','ic_s64'):
+        w=G.cell_world(61,cell,enc,bg,decoys=('names','nofact'));A_=G.realize(w);G.verify(w,enc);ch=A_
+        if cell=='ic_s64':
+            assert all(len({x['frame'] for x in c['sents']})==16 for c in ch) and all(sorted(x['frame'] for c in ch for x in c['sents'] if x['fact']==f)==list(range(64)) for f in range(16))
+        for k in (0,1,5,8,9,40,63):
+            ks,ns=E.token_masks('SENT',k,ch,CH);km,nk=E.token_masks('KMASK',k,ch,CH)
+            assert ks.shape==(W+CH,) and km.shape==(CH,W+CH)
+            # independent hidden set: absolute positions
+            hid=set()
+            for c in range(max(0,k-8),k):
+                for x in ch[c]['sents']:hid|=set(range(c*CH+x['start'],c*CH+x['end']))
+            got={k*CH-W+j for j in np.nonzero(~ks)[0]};assert got==hid,(cell,k)
+            assert all(c*CH+x['start']<=q<c*CH+x['end'] for q in hid for c in [q//CH] for x in ch[c]['sents'] if x['start']<=q-c*CH<x['end']) and not any(q>=k*CH for q in hid)
+            assert ks[W:].all()                                                  # current chunk fully visible
+            hk=set();inside=np.zeros(CH,bool)
+            for xq in ch[k]['sents']:
+                inside[xq['start']:xq['end']]=True;rows=km[xq['start']:xq['end']];exp=set()
+                for c in range(max(0,k-8),k):
+                    for x in ch[c]['sents']:
+                        if x['fact']==xq['fact']:exp|=set(range(c*CH+x['start'],c*CH+x['end']))
+                assert all({k*CH-W+j for j in np.nonzero(~r)[0]}==exp for r in rows),(cell,k,xq['fact']);hk|=exp
+            assert hk<=hid and (km[~inside]).all() and nk==len(hk) and ns==len(hid),(cell,k)
+            if k>=8:out.append((cell,k,ns,nk))
+        # empty table / chunk 0: nothing masked
+        e0=E.token_masks('SENT',0,ch,CH)[0];assert e0.all() and E.token_masks('KMASK',0,ch,CH)[0].all()
+        e1=E.token_masks('SENT',5,[{'sents':[]}]*10,CH)[0];assert e1.all()
+    RES['U22']='; '.join(f'{c} k={k}: SENT hides {a} tokens ({100*a/W:.1f}% of the window), KMASK {b} distinct keys' for c,k,a,b in out[:2]+out[-2:])+'; hidden-key lists equal the independent computation; KMASK subset of SENT; per-query KMASK; Latin frames ok'
+def u23():
+    """model level (CPU tiny model): (a) SENT / KMASK with an EMPTY sentence table == NAT bit for bit (CE and final weights); (b) SENT with sentences changes CE from chunk 1 on; (c) perturbing K,V at SENT-hidden positions does not change the write update (bitwise), perturbing a visible position does; (d) a per-query 2-D mask with identical rows == the 1-D keep (same update), and a 2-D mask hiding a window key only for rows [a,b) leaves the prefix outputs of rows before a bit-identical and changes rows in [a,b)"""
+    emp=[{'sents':[]} for _ in range(NCH)];tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
+    a=nat();r={ar:L.run_stream(ar,2,REAL,nch=NCH,tag='u',log=lambda *x:None,chunks_meta=emp) for ar in ('SENT','KMASK')}
+    for ar,b in r.items():assert b['final_hash']==a['final_hash'] and [e['ce'] for e in b['log']]==[e['ce'] for e in a['log']],ar
+    b=L.run_stream('SENT',2,REAL,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab);ce_a=[e['ce'] for e in a['log']][:5];ce_b=[e['ce'] for e in b['log']]
+    assert ce_a[0]==ce_b[0] and all(x!=y for x,y in zip(ce_a[1:],ce_b[1:])),(ce_a,ce_b);
+    nm=[e['n_masked_keys'] for e in b['log']];assert nm==[0,130,260,390,520],nm
+    k=3;S=setup(5,{'real':REAL});m=rt.base;st_all=s3.clone_state(rt.state_all);sts={'real':s3.clone_state(rt.state_suffix)}
+    with rt.mesh:
+        for i in range(k):sts['real']=L.read_state(m,sts['real'],rt.chunk(S['seq']['real'],i),S['pref']['real'][i*CH:(i+1)*CH])
+        c=rt.chunk(S['seq']['real'],k);L.chunks_meta=tab
+        Kc,Vc,keep,st_w,pl=L.window_inputs('SENT',k,2,S['rec'],sts);ids_k=jnp.asarray(REAL[k*CH:(k+1)*CH],dtype=jnp.int32);kj=jnp.asarray(keep)
+        def upd(Kc_,Vc_,kp):
+            pw=L.prefix_masked(m,ids_k,Kc_,Vc_,jnp.int32(k*CH),kp);return pw,L.write_step(m,st_all,st_w,c,pw,kp)[0]
+        pw0,u0_=upd(Kc,Vc,kj)
+        hidden=np.nonzero(~keep[:W])[0];vis=np.nonzero(keep[(8-k)*CH:W])[0]+(8-k)*CH;assert len(hidden)==130*3 and (hidden>=(8-k)*CH).all()
+        # window array Kc is [layers, W(+pad), nh, d]: index j of the keep vector <-> row j of the window slice (left padded for k < 8, as keep indexing)
+        pad=W-Kc.shape[1] if Kc.shape[1]<W else 0;hj=hidden-pad;hj=hj[hj>=0];vj=[v-pad for v in vis if v-pad>=0 and v-pad<Kc.shape[1]]
+        Kp=Kc.at[:,jnp.asarray(hj)].add(1.0);Vp=Vc.at[:,jnp.asarray(hj)].add(1.0);pw1,u1_=upd(Kp,Vp,kj)
+        Kq=Kc.at[:,jnp.asarray(vj[:50])].add(1.0);Vq=Vc.at[:,jnp.asarray(vj[:50])].add(1.0);pw2,u2_=upd(Kq,Vq,kj)
+        dh=maxdiff(u0_,u1_);dv=maxdiff(u0_,u2_);assert dh==0.0 and float(jnp.max(jnp.abs(pw0-pw1)))==0.0 and dv>0.0 and float(jnp.max(jnp.abs(pw0-pw2)))>0.0,(dh,dv)
+        # (d) 2-D plumbing
+        k2=jnp.asarray(np.tile(keep[None,:],(CH,1)));pw3,u3_=upd(Kc,Vc,k2);d3=maxdiff(u0_,u3_);assert d3<1e-6 and float(jnp.max(jnp.abs(pw0-pw3)))<1e-6,d3
+        j_=int(vj[5])+pad;aa,bb=200,260;m2=np.ones((CH,W+CH),bool);m2[aa:bb,j_]=False;pwn,_=upd(Kc,Vc,jnp.asarray(np.ones(W+CH,bool)));pw4,_u=upd(Kc,Vc,jnp.asarray(m2))
+        pre=float(jnp.max(jnp.abs(pw4[:aa]-pwn[:aa])));inn=float(jnp.max(jnp.abs(pw4[aa:bb]-pwn[aa:bb])));assert pre==0.0 and inn>0.0,(pre,inn)
+    RES['U23']=f"empty sentence table: SENT == KMASK == NAT bitwise ({NCH} chunks, hash {a['final_hash']}); SENT CE differs from chunk 1 on, masked keys per chunk {nm}; update unchanged by perturbing hidden K,V (max|diff| {dh}) and changed by perturbing visible ones ({dv:.2e}); 2-D tiled == 1-D (max|diff| {d3:.1e}); row-selective 2-D mask: rows before it bit-identical, rows inside differ ({inn:.2e})"
+def u24():
+    """e55_run.unit_checks with the sentence table (the GPU check U6 of the SENT / KMASK arms) on the tiny model"""
+    import e55_run as RUN
+    tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
+    r=RUN.unit_checks(rt,L,s3,REAL,DEC,NCH,1e-3,2e-3,meta=tab);assert r['PASS'] and r['checks']['U6'] and not r['errors'],(r.get('U6'),r['checks'],r['errors'])
+    RES['U24']=f"unit_checks incl. U6 on the tiny model: PASS; {json.dumps(r['U6'],default=float)}"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
