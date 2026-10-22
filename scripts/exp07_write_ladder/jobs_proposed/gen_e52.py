@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""generator (not a job): writes 160_e52_L2a_native.sh, 161_e52_L2b_native.sh, 162_e52_L1.sh (E52 Level-2 controlled insertion, GPU, PROPOSED, NOT QUEUED). The code is pinned to --commit (checked out from the local clone, no fetch), the two world files are pinned by sha256.
+"""generator (not a job): writes 160_e52_L2a_native.sh, 161_e52_L2b_native.sh, 162_e52_L1.sh, 165_e52_L1_L2b.sh (with --only 165 just that one) (E52 Level-2 controlled insertion, GPU, PROPOSED, NOT QUEUED). The code is pinned to --commit (checked out from the local clone, no fetch), the two world files are pinned by sha256.
 Usage: gen_e52.py --commit <40-hex> --sha-l2a <sha256> --sha-l2b <sha256>   (CPU only)"""
 import argparse,os,re
 from pathlib import Path
-ap=argparse.ArgumentParser();ap.add_argument('--commit',required=True);ap.add_argument('--sha-l2a',required=True);ap.add_argument('--sha-l2b',required=True);ap.add_argument('--nat-dir',default='data/natural-text/worlds/e52',help='folder holding nat_9201_L2a.json / nat_9201_L2b.json (default for $NAT_DIR in the jobs; the files are read from there, never from the repo)');a=ap.parse_args()
+ap=argparse.ArgumentParser();ap.add_argument('--commit',required=True);ap.add_argument('--sha-l2a',required=True);ap.add_argument('--sha-l2b',required=True);ap.add_argument('--only',default=None);ap.add_argument('--nat-dir',default='data/natural-text/worlds/e52',help='folder holding nat_9201_L2a.json / nat_9201_L2b.json (default for $NAT_DIR in the jobs; the files are read from there, never from the repo)');a=ap.parse_args()
 assert re.fullmatch(r'[0-9a-f]{40}',a.commit) and all(re.fullmatch(r'[0-9a-f]{64}',x) for x in (a.sha_l2a,a.sha_l2b)),'full 40-hex commit and 64-hex sha256 values required'
 D='scripts/exp07_write_ladder'
 FILES=' '.join(f'{D}/{f}' for f in ('nat_world.py','nat_filler.py','nat_pass.py','nat_ladder.py','nat_analyze.py','nat_dryrun.py','nat_signal.py','e51_nat_table.py','e52_table.py','e52_analyze.py'))
@@ -64,6 +64,28 @@ COMMON="--nat 9201:L2a --nat-dir $NAT_DIR --cells L1 --epochs 8 --l1-eval-epochs
 $PY $S/nat_ladder.py $COMMON --mode save
 $PY $S/nat_ladder.py $COMMON --mode eval
 '''
+j165=f'''#!/bin/bash
+# EXPECTED RUN TIME (Hans confirms before it runs): about 0.7-0.9 h [same call as job 162: 41-49 min measured for 162-type L1 calls on 10/21-22 (162 itself 03:37-04:18Z = 41 min), + CPU steps and the pair analysis (~2-3 min); slack ~30%].
+# E52 Level-2, offline L1 control on layout L2b (PROPOSED, NOT QUEUED; needs Hans's approval written in the experiment-run thread). Same settings as job 162 (L1 doc rows = each exposure unit of the stream 9201 alone, plain SGD, worlds A and B, 8 epochs, evaluation at W0 and epochs 1, 2, 3, 8, default l1-variant doc), only the layout differs: L2b instead of L2a, tag e52l1b. Purpose: within-pair Delta of L1 (L1 on L2a minus L1 on L2b), computed exactly like L0's (e52_analyze.py, cell L1), to separate the placement effect from the shadowing share (E52 section 13).
+# Needs the output of job 162 in $OUT (L1_e52l1_s9201_A.json / _B.json, meta_nat_e52l1_s9201.json); without them the final analysis step is skipped with a message.
+# NO OVERWRITE: exit 8 if $OUT/L1_e52l1b_s9201_A.json or _B.json already exists unless RERUN=1. Output: $OUT/L1_e52l1b_s9201_{{A,B}}.json, meta_nat_e52l1b_s9201.json, $OUT/e52_L1_pair_analysis.md. No filler (no pass-2 pool). No sealed stream is read.
+# CPU-only dry run: CPU_ONLY=1 bash <this file> (checkout, world sha check, selftests, per-person table; then exits before any GPU step).
+{COMMON}[ -z "$RERUN" ] && for W in A B; do [ -f $OUT/L1_e52l1b_s9201_$W.json ] && {{ echo "$OUT/L1_e52l1b_s9201_$W.json exists: not overwritten (exit 8; RERUN=1 to redo)"; exit 8; }}; done
+$PY $S/nat_filler.py --selftest
+$PY $S/nat_pass.py --selftest
+$PY $S/e52_analyze.py --selftest | tail -1
+$PY $S/e52_table.py --nat-dir $NAT_DIR --stream 9201 --require-real --tokenizer-file $TOK --out $OUT/e52_person_table_9201.tsv
+[ -n "$CPU_ONLY" ] && {{ echo "CPU_ONLY: done before GPU"; exit 0; }}
+COMMON="--nat 9201:L2b --nat-dir $NAT_DIR --cells L1 --epochs 8 --l1-eval-epochs 1,2,3,8 --worlds AB --tag e52l1b"
+$PY $S/nat_ladder.py $COMMON --mode save
+$PY $S/nat_ladder.py $COMMON --mode eval
+if [ -f $OUT/L1_e52l1_s9201_A.json ] && [ -f $OUT/L1_e52l1_s9201_B.json ]; then
+  $PY $S/e52_analyze.py --dir $OUT --nat-dir $NAT_DIR --stream 9201 --tags e52l1,e52l1b --cell L1 --out $OUT/e52_L1_pair_analysis.md
+else
+  echo "analysis skipped: the job-162 outputs (L1 on L2a) are not in $OUT"
+fi
+'''
 here=Path(__file__).resolve().parent
-for n,t in (('160_e52_L2a_native.sh',j160),('161_e52_L2b_native.sh',j161),('162_e52_L1.sh',j162)):
+for n,t in (('160_e52_L2a_native.sh',j160),('161_e52_L2b_native.sh',j161),('162_e52_L1.sh',j162),('165_e52_L1_L2b.sh',j165)):
+    if a.only and not n.startswith(a.only):continue
     (here/n).write_text(t);os.chmod(here/n,0o755);print('wrote',n)
