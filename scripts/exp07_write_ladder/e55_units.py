@@ -708,7 +708,36 @@ def u37():
         for xq in ch[k]['sents']:inside[xq['start']:xq['end']]=True
         assert oc[~inside].all() and al[~inside].all()
     RES['U37']='occupation spans found in every sentence (miss (0,0,0)), OCCSPAN keys = occupation spans, ALLSPAN = OSPAN union OCCSPAN, disjoint, background unmasked, two-tuple return unchanged'
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37}
+def u38():
+    """E55 31 attention dump on the tiny model (CPU): the run with the dump function == the plain run (CE and final hash bitwise); per layer group the accumulated mass over the facts equals the column sum of the head/layer-averaged attention rows seen by attn_stats (1e-3), the per-query top-m indices are the m largest valid window keys of the averaged row, per-head tops lie inside the valid window (value > 0), their values are at most 1 and the best head value is not below the head-averaged value; labels: key_fact / key_sent / key_ans bits match the sentence table; flat_dump keys; the votegrid runs on the dump (npz round trip)."""
+    import e55_diag as DG,e55_votegrid as VG,tempfile,os
+    ids=REAL;tab=[{'sents':[{'fact':0,'start':100,'end':140,'ans_X':[(105,107)],'ans_P':[(110,112)],'ans_O':[(120,121)]},{'fact':1,'start':300,'end':330,'ans_X':[(305,308)],'ans_P':[(310,312)],'ans_O':[(320,321)]},{'fact':2,'start':700,'end':760,'ans_X':[(710,715)],'ans_P':[(720,722)],'ans_O':[(730,731)]}]} for _ in range(NCH)]
+    seen=[];orig=DG.attn_stats
+    def spy(A,rows,facts,chunks,k,CH_=1024,nw=8,ps=DG.PS):seen.append((np.asarray(A),k));return orig(A,rows,facts,chunks,k,CH_,nw,ps)
+    a=L.run_stream('NAT',2,ids,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab)
+    DG.attn_stats=spy
+    try:
+        dfn=DG.make_dump_fn(L,rt,s3,tab,topm=4,log=lambda *x:None);b=L.run_stream('NAT',2,ids,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab,diag_fn=dfn,diag_chunks={3,4})
+        dg=DG.make_diag_fn(L,rt,s3,tab,log=lambda *x:None);c=L.run_stream('NAT',2,ids,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab,diag_fn=dg,diag_chunks={3,4})
+    finally:DG.attn_stats=orig
+    assert [e['ce'] for e in b['log']]==[e['ce'] for e in a['log']] and b['final_hash']==a['final_hash'] and set(b['diag'])=={3,4}
+    refs={}
+    for A,k in seen:refs.setdefault(k,[]).append(A)         # attn_stats calls of the diag run: all, g1, g2, g3 in order (a group with no layers is skipped)
+    for k in (3,4):
+        z=b['diag'][k];valid=z['key_valid'];assert z['n_rows']==40+30+60 and valid.sum()==min(k,8)*1024 and valid[(8-k)*1024:8192].all() and not valid[8192:].any()
+        gs=[g for g in ('all','g1','g2','g3') if f'{g}_top_idx' in z];assert len(gs)==len(refs[k]),(gs,len(refs[k]))
+        for g,A in zip(gs,refs[k]):
+            assert np.allclose(z[f'{g}_mass_facts'].sum(0),A.sum(0),atol=1e-3),g
+            Av=np.where(valid[None,:],A,-1.0);top=np.sort(Av,axis=1)[:,::-1][:,:4]
+            got=np.take_along_axis(A,z[f'{g}_top_idx'].astype(np.int64),1);assert np.allclose(np.sort(got,axis=1)[:,::-1],top,atol=2e-3),g
+            assert z[f'{g}_top_idx'].shape==(130,4) and z[f'{g}_mass_facts'].shape[0]==3
+        hv=z['heads_val'].astype(np.float32);hi=z['heads_idx'].astype(np.int64);assert hv.ndim==4 and hv.shape[0]==z['n_layers'] and hv.shape[2:]==(130,4) and hv.max()<=1.0+1e-3
+        m_=hv>0;assert valid[hi[m_]].all()
+        assert (z['key_fact']>=0).sum()==min(k,8)*130 and set(np.unique(z['key_fact'][z['key_fact']>=0]))=={0,1,2}
+        assert z['key_ans'][(8-k)*1024+105]==1 and z['key_ans'][(8-k)*1024+110]==2 and z['key_ans'][(8-k)*1024+120]==4 and z['key_sent'][(8-k)*1024+100]==0 and z['key_sent'][(8-k)*1024+1024+300]==64+1
+    f_=tempfile.mktemp(suffix='.npz');np.savez_compressed(f_,**DG.flat_dump(b['diag']));rs=VG.grid(f_,('g3','all'),('avg','heads','mass'),(8,),(2,));os.remove(f_);assert rs and VG.report(rs)
+    RES['U38']='attention dump: run with the dump == plain run bitwise; group mass == column sums of the attn_stats rows; per-query tops = the m largest valid keys; per-head tops valid and <= 1; key labels (fact / sentence id / name-place-occupation bits) match the table; npz round trip + votegrid'
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

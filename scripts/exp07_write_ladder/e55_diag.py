@@ -71,6 +71,51 @@ def diag_report(path_or_dict,out=None):
     t='\n'.join(L)
     if out:open(out,'w').write(t)
     return t
+def key_labels(chunks,k,CH=1024,nw=8):
+    """E55 31 per-key labels over the WIN+CH key axis of chunk k (index j <-> position k*CH-nw*CH+j): valid (window key of an existing earlier chunk), fact (fact id of the fact sentence the key lies in, -1 = background), sent (global sentence id c*64 + index of the sentence in its chunk, -1 = none), ans (bit 1 = name token, 2 = place token, 4 = occupation token; needs annotate_answers with the spans ans_X / ans_P / ans_O)"""
+    W=nw*CH;valid=np.zeros(W+CH,bool);fact=np.full(W+CH,-1,np.int16);sent=np.full(W+CH,-1,np.int32);ans=np.zeros(W+CH,np.uint8)
+    for c in range(max(0,k-nw),k):
+        off=(c-k+nw)*CH;valid[off:off+CH]=True
+        for si,x in enumerate(chunks[c]['sents']):
+            sl=slice(off+x['start'],off+x['end']);fact[sl]=x['fact'];sent[sl]=c*64+si
+            for key,bit in (('ans_X',1),('ans_P',2),('ans_O',4)):
+                for a_,b_ in x.get(key,[]):ans[off+a_:off+b_]|=bit
+    return valid,fact,sent,ans
+def make_dump_fn(L,rt,s3,chunks,topm=8,log=print):
+    """E55 31 attention dump (forward only, same eager 'att' path as make_diag_fn): at a chunk k of the NAT stream, for the fact-sentence query rows: (1) per layer group (all / g1 / g2 / g3) the head- and layer-averaged attention row -> per query the top-m window keys (index int16, value float16) and the accumulated attention mass per fact [n_facts_in_chunk, WIN+CH] (float32; summing over the facts gives the mass vector M of all queries); (2) per layer and head the top-m window keys per query ([layers, heads, rows, m], int16 / float16; entries with value 0 are padding when fewer than m window keys exist); (3) the per-key labels (key_labels) and the query rows / facts. Returns a dict of numpy arrays (flatten with flat_dump). Nothing is written back."""
+    import jax,jax.numpy as jnp
+    CH=1024
+    def fn(k,m,Kc,Vc,keep,ids_k):
+        sents=chunks[k]['sents'];rows=np.asarray([t for x in sents for t in range(x['start'],x['end'])],np.int32);facts=np.asarray([x['fact'] for x in sents for _ in range(x['start'],x['end'])],np.int16)
+        if len(rows)==0 or k==0:return {'n_rows':0}
+        lo=(8-min(k,8))*CH
+        s3.S3.clear();s3.S3['mode']='att';s3.S3['q0']=jnp.int32(k*CH);s3.S3['keep']=jnp.asarray(keep);s3.S3['att_rows']=jnp.asarray(rows);s3.S3['att_out']=[];s3.S3['att_topk']=topm;s3.S3['att_lo']=lo;s3.S3['att_heads']=[]
+        try:
+            ids=jnp.asarray(ids_k,dtype=jnp.int32)
+            with rt.mesh:
+                h=m.language_model.wte_call(ids);blocks=m.language_model.model.h.prefix_blocks;seq=L.Batch(input_ids=ids,target_tokens=ids,loss_masks=jnp.ones_like(ids,dtype=bool))
+                for l in range(Kc.shape[0]):
+                    blk=jax.tree.map(lambda a_:a_[l],blocks);h,_=blk(h,(Kc[l],Vc[l]),seq,is_prefix=True)
+            per=s3.S3['att_out'];heads=s3.S3['att_heads'];fn.last_h=h
+        finally:s3.S3.clear()
+        nL=len(per);assert nL==Kc.shape[0]==len(heads),(nL,Kc.shape[0],len(heads))
+        valid,kfact,ksent,kans=key_labels(chunks,k,CH);out={'n_rows':int(len(rows)),'n_layers':nL,'rows':rows,'qfact':facts,'key_valid':valid,'key_fact':kfact,'key_sent':ksent,'key_ans':kans,'heads_idx':np.stack([x[0] for x in heads]),'heads_val':np.stack([x[1] for x in heads])}
+        ufacts=np.unique(facts);out['mass_facts']=ufacts.astype(np.int16)
+        bounds=[0,nL//3,2*nL//3,nL]
+        for name,(a_,b_) in (('all',(0,nL)),('g1',(bounds[0],bounds[1])),('g2',(bounds[1],bounds[2])),('g3',(bounds[2],bounds[3]))):
+            if b_<=a_:continue
+            A=np.mean(per[a_:b_],axis=0);Av=np.where(valid[None,:],A,-1.0);idx=np.argsort(-Av,axis=1,kind='stable')[:,:topm]
+            out[f'{name}_top_idx']=idx.astype(np.int16);out[f'{name}_top_val']=np.take_along_axis(A,idx,1).astype(np.float16);out[f'{name}_mass_facts']=np.stack([A[facts==f].sum(0) for f in ufacts]).astype(np.float32)
+            out[f'{name}_layers']=np.asarray([a_,b_],np.int16)
+        log(f'  attention dump at chunk {k}: {len(rows)} fact query rows, {nL} prefix layers, top-{topm}');return out
+    fn.last_h=None
+    return fn
+def flat_dump(d):
+    """{chunk: dict of arrays} -> flat dict for np.savez_compressed: 'c<k>/<name>'"""
+    out={}
+    for k,v in d.items():
+        for n,a in v.items():out[f'c{k}/{n}']=np.asarray(a)
+    return out
 PROBE_CONDS=('NAT','KMASK','SENTO','SENT','SWD','OALL','PALL','NALL')
 PROBE_ARM={'NAT':'NAT','KMASK':'KMASK','SENTO':'SENTO','SENT':'SENT','SWD':'SWD','OALL':'OSPAN','PALL':'PSPAN','NALL':'NSPAN'}
 def make_probe_fn(L,rt,s3,reader,meta,conds=PROBE_CONDS,nsum=8,log=print):
