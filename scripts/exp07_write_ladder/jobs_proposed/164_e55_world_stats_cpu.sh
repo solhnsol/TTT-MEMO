@@ -4,11 +4,11 @@
 # Output: $OUT/e55_world_stats.md, $OUT/e55_pools.json, $OUT/e55_samples.txt. NO OVERWRITE: exit 8 if e55_world_stats.md exists unless RERUN=1.
 # PINNED INSTALL, NO FETCH: checks the files out of the local repository at commit $COMMIT (exit 4 if absent), verifies sha256 (first 12 hex; exit 5). Needs the lab data/tokenizer/llama3/tokenizer.json and data/narrative_gutenberg (the same files gen_world.py uses; exit 3 if missing). NO_INSTALL=1 skips the checkout, SKIP_VERIFY=1 the check.
 # CPU-only dry run (this job IS CPU only; to see what it would do without writing): git fetch origin claude/project-thread-rwhdac && git worktree add --detach /tmp/dry_e55 FETCH_HEAD && ln -s "$(pwd)/data" /tmp/dry_e55/data && cd /tmp/dry_e55 && PY=python3 CPU_ONLY=1 NO_INSTALL=1 bash scripts/exp07_write_ladder/jobs_proposed/164_e55_world_stats_cpu.sh   (then: git worktree remove --force /tmp/dry_e55). CPU_ONLY=1 runs only the unit tests with the stub tokenizer and checks that the data files exist.
-set -e
+set -eo pipefail
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=d6f8d88496670a664ddb7a3e0988801b8b273667
+COMMIT=42bd3eef1e204788daf2ff10ea22f8e51dda1bab
 FILES="$D4/gen_world_ctl.py $D/e55_swap.py $D/e55_read.py $D/e55_analyze.py $D4/frame_bank.py $D/e49_stats.py"
 : "${PY:=python3}"; : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}}"
 if [ -z "$NO_INSTALL" ]; then
@@ -21,10 +21,10 @@ if [ -z "$SKIP_VERIFY" ]; then
     G=$(sha256sum $F | cut -c1-12)
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH (exit 5)"; exit 5; }
   done <<'MANIFEST'
-bb05d7321713 scripts/exp04_what_ttt_retains/gen_world_ctl.py
-4c3999626ec6 scripts/exp07_write_ladder/e55_swap.py
-cf7eb61f1417 scripts/exp07_write_ladder/e55_read.py
-9072c930880c scripts/exp07_write_ladder/e55_analyze.py
+ada39e55ccc3 scripts/exp04_what_ttt_retains/gen_world_ctl.py
+f51de80be2d3 scripts/exp07_write_ladder/e55_swap.py
+909e3fbd4623 scripts/exp07_write_ladder/e55_read.py
+eea35cdb04aa scripts/exp07_write_ladder/e55_analyze.py
 eeaaa9135907 scripts/exp04_what_ttt_retains/frame_bank.py
 794ae88a9baf scripts/exp07_write_ladder/e49_stats.py
 

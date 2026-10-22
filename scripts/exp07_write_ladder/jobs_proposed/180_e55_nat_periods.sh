@@ -11,7 +11,7 @@ cd "$(dirname "$0")/../../.." 2>/dev/null || true
 case "$PY" in /*) ;; *) echo "PY must be an absolute path (got '$PY')"; exit 3;; esac
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=4cd2dc32111fbc877a51c22821025486324cd77d
+COMMIT=42bd3eef1e204788daf2ff10ea22f8e51dda1bab
 FILES="$D/e55_run.py $D/e55_core.py $D/e55_gpu.py $D/e55_swap.py $D/e55_read.py $D/e55_analyze.py $D/e49_stats.py $D4/gen_world_ctl.py $D4/frame_pools_hold.py"
 LADDER_OK="714b08ea3b90"
 : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}}"; export EXP07_OUT="$OUT"; mkdir -p "$OUT"
@@ -30,12 +30,12 @@ if [ -z "$SKIP_VERIFY" ]; then
   done <<'MANIFEST'
 06fb0735f222 e55_run.py
 1e9482e70b85 e55_core.py
-6055d1b0af78 e55_gpu.py
+a9d496eac641 e55_gpu.py
 f51de80be2d3 e55_swap.py
-cf7eb61f1417 e55_read.py
-b1318d951c5d e55_analyze.py
+909e3fbd4623 e55_read.py
+eea35cdb04aa e55_analyze.py
 794ae88a9baf e49_stats.py
-bb05d7321713 ../exp04_what_ttt_retains/gen_world_ctl.py
+ada39e55ccc3 ../exp04_what_ttt_retains/gen_world_ctl.py
 0aa17d06bfd7 ../exp04_what_ttt_retains/frame_pools_hold.py
 
 MANIFEST
