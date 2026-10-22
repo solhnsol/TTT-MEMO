@@ -18,6 +18,7 @@ COMMIT={C}
 FILES="{' '.join(files)}"
 : "${{PY:=python3}}"; : "${{S:=$D}}"; : "${{OUT:=${{EXP07_OUT:-experiments/exp07_write_ladder}}}}"; export EXP07_OUT="$OUT"
 JOB={job}
+RPE="${{RP_ENV:-/workspace/rp_env.sh}}"; [ -f "$RPE" ] && . "$RPE"   # written by jobs_proposed/rp_setup.sh on the pod (PY, OUT, XLA_FLAGS, LD_LIBRARY_PATH); on the lab server this file does not exist and the runner environment is used
 # RunPod: every file of the pinned commit is checked out (the pod holds a repo clone, not the lab-patched copies); NO_INSTALL=1 skips the checkout, SKIP_VERIFY=1 the manifest check.
 if [ -z "$NO_INSTALL" ]; then
   git cat-file -e $COMMIT^{{commit}} || {{ echo "commit $COMMIT not in the local clone: git fetch origin claude/project-thread-rwhdac first (exit 4)"; exit 4; }}

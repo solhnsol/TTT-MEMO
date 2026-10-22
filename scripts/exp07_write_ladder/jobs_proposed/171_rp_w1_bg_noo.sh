@@ -12,6 +12,7 @@ COMMIT=0ab15fe2cf9038ed26d0f67013db8125823ea002
 FILES="scripts/exp07_write_ladder/s3.py scripts/exp07_write_ladder/s3_sets.py scripts/exp07_write_ladder/e43_sets_test.py scripts/exp07_write_ladder/e44_sets_test.py scripts/exp07_write_ladder/e46_sets_test.py scripts/exp07_write_ladder/e47_sets_test.py scripts/exp07_write_ladder/e42_k2_tokens.py scripts/exp07_write_ladder/k3_counts.py scripts/exp07_write_ladder/suppress.py scripts/exp07_write_ladder/ladder.py scripts/exp07_write_ladder/margins_split.py scripts/exp07_write_ladder/margins_split_test.py scripts/exp07_write_ladder/e48_world_test.py scripts/exp07_write_ladder/e48_world_stats.py scripts/exp07_write_ladder/e47_native_da.py scripts/exp07_write_ladder/rp_native_check.py scripts/exp04_what_ttt_retains/gen_world.py scripts/exp04_what_ttt_retains/frame_bank.py"
 : "${PY:=python3}"; : "${S:=$D}"; : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}}"; export EXP07_OUT="$OUT"
 JOB=171_rp_w1_bg_noo
+RPE="${RP_ENV:-/workspace/rp_env.sh}"; [ -f "$RPE" ] && . "$RPE"   # written by jobs_proposed/rp_setup.sh on the pod (PY, OUT, XLA_FLAGS, LD_LIBRARY_PATH); on the lab server this file does not exist and the runner environment is used
 # RunPod: every file of the pinned commit is checked out (the pod holds a repo clone, not the lab-patched copies); NO_INSTALL=1 skips the checkout, SKIP_VERIFY=1 the manifest check.
 if [ -z "$NO_INSTALL" ]; then
   git cat-file -e $COMMIT^{commit} || { echo "commit $COMMIT not in the local clone: git fetch origin claude/project-thread-rwhdac first (exit 4)"; exit 4; }
