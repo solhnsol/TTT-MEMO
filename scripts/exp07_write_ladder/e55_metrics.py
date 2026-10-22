@@ -25,7 +25,10 @@ def ranks(S):
     S=np.asarray(S,float);return 1+(S[:,None,:]>S[:,:,None]).sum(2)     # (n,16) rank of every candidate
 def item_stats(S,gi,fi,world):
     """S (n,16) -> per-item arrays for the bound target (A: gi, B: fi) and its partner"""
-    S=np.asarray(S,float);n=len(S);r=np.arange(n);t,o=(gi,fi) if world=='A' else (fi,gi);R=ranks(S);rt,ro=R[r,t],R[r,o];top=S.argmax(1)
+    S=np.asarray(S,float);n=len(S);r=np.arange(n);R=ranks(S)
+    if fi is None:   # no pairs (single-fact items): only the target statistics
+        t=gi;rt=R[r,t];nan=np.full(n,np.nan);return {'rank':rt.astype(float),'top1':(rt==1).astype(float),'pm3':S[r,t]-(S.sum(1)-S[r,t])/(NC-1),'rank_partner':nan,'rank_other14':nan,'wrong':(rt!=1).astype(float),'wrong_partner':nan,'above_partner':nan,'margin':nan}
+    t,o=(gi,fi) if world=='A' else (fi,gi);rt,ro=R[r,t],R[r,o];top=S.argmax(1)
     oth=np.ones_like(S,bool);oth[r,t]=False;oth[r,o]=False
     wrong=(rt!=1)
     return {'rank':rt.astype(float),'top1':(rt==1).astype(float),'pm3':S[r,t]-(S.sum(1)-S[r,t])/(NC-1),'rank_partner':ro.astype(float),'rank_other14':(R*oth).sum(1)/oth.sum(1),
@@ -34,29 +37,34 @@ def place_stats(S,idx):
     """f(S, place) for a given candidate index per item: (rank, top1, pm3)"""
     S=np.asarray(S,float);r=np.arange(len(S));R=ranks(S);return R[r,idx].astype(float),(R[r,idx]==1).astype(float),S[r,idx]-(S.sum(1)-S[r,idx])/(NC-1)
 def _w0(rec,ctx,a):
-    W=rec['W0'];S=W[f'{ctx}@{a}'] if f'{ctx}@{a}' in W else W[ctx];return (S['A'],S['B']) if isinstance(S,dict) else (S,S)
+    W=rec['W0'];S=W[f'{ctx}@{a}'] if f'{ctx}@{a}' in W else W[ctx];return S if isinstance(S,dict) else {'A':S,'B':S}
 def _sel(rec,a=None,ctx=None,dmin=None,dmax=None):
     """exposed items (optionally with information distance in [dmin, dmax] in context ctx)"""
-    m=np.asarray(rec['meta']['kind'])=='exposed'
+    m=(np.asarray(rec['meta']['kind'])=='exposed') if 'kind' in rec['meta'] else np.ones(len(rec['meta']['gi']),bool)
     if dmin is not None:
         d=rec['meta']['d'][str(a)][ctx];m=m&np.array([x is not None and dmin<=x<=dmax for x in d])
     return m
-def _pairs(rec,m):return [p for p,s in zip(rec['meta']['pair'],m) if s]
+def _pairs(rec,m):
+    pr=rec['meta'].get('pair') or [f'p{i}' for i in range(len(m))]   # no pair structure: the unit is the item
+    return [p for p,s in zip(pr,m) if s]
 def rec_items(rec,a,ctx,w0ctx=None,mask=None):
     """-> dict name -> per-item arrays (all items, masked later): W and W0 stats per world and the (i)/(ii) aggregations. w0ctx: context whose W0 is used (default = ctx)"""
-    meta=rec['meta'];gi=np.asarray(meta['gi']);fi=np.asarray(meta['fi']);S=rec['read'][str(a)][ctx];W0=_w0(rec,w0ctx or ctx,a);o={}
-    for w,k in (('A',0),('B',1)):
-        s=item_stats(S[w],gi,fi,w);s0=item_stats(W0[k],gi,fi,w)
+    meta=rec['meta'];gi=np.asarray(meta['gi']);fi=np.asarray(meta['fi']) if meta.get('fi') is not None else None;S=rec['read'][str(a)][ctx];W0=_w0(rec,w0ctx or ctx,a);o={};ws=[w for w in 'AB' if w in S and S[w] is not None];nw=len(ws)
+    for w in ws:
+        s=item_stats(S[w],gi,fi,w);s0=item_stats(W0[w],gi,fi,w)
         for n_,v in s.items():o[(n_,'W',w)]=v
         for n_,v in s0.items():o[(n_,'W0',w)]=v
     out={}
     for n_ in ('rank','top1','pm3','rank_partner','rank_other14','above_partner','margin'):
-        out[n_+'_W']=(o[(n_,'W','A')]+o[(n_,'W','B')])/2;out[n_+'_W0']=(o[(n_,'W0','A')]+o[(n_,'W0','B')])/2
+        out[n_+'_W']=sum(o[(n_,'W',w)] for w in ws)/nw;out[n_+'_W0']=sum(o[(n_,'W0',w)] for w in ws)/nw
     for n_ in ('wrong','wrong_partner'):
-        out[n_+'_W']=o[(n_,'W','A')]+o[(n_,'W','B')];out[n_+'_W0']=o[(n_,'W0','A')]+o[(n_,'W0','B')]   # counts over the two worlds (ratio of sums later)
+        out[n_+'_W']=sum(o[(n_,'W',w)] for w in ws);out[n_+'_W0']=sum(o[(n_,'W0',w)] for w in ws)   # counts over the worlds (ratio of sums later)
     out['G_rank']=out['rank_W0']-out['rank_W'];out['PM2']=out['top1_W']-out['top1_W0'];out['PM3']=out['pm3_W']-out['pm3_W0']
     out['G_rank_partner']=out['rank_partner_W0']-out['rank_partner_W'];out['G_rank_other14']=out['rank_other14_W0']-out['rank_other14_W']
-    # (ii) A-B counterfactual contrast on the same candidate strings
+    # (ii) A-B counterfactual contrast on the same candidate strings (optional: needs both worlds and pairs)
+    if nw<2 or fi is None:
+        for n_ in ('AB_G_rank','AB_PM2','AB_PM3'):out[n_]=np.full(len(gi),np.nan)
+        out['Dalt']=(sum(o[('margin','W',w)] for w in ws)-sum(o[('margin','W0',w)] for w in ws))/nw;out['acc2']=out['above_partner_W']-out['above_partner_W0'];return out
     rA,tA,pA=place_stats(S['A'],gi);rB,tB,pB=place_stats(S['B'],gi);rA2,tA2,pA2=place_stats(S['A'],fi);rB2,tB2,pB2=place_stats(S['B'],fi)
     out['AB_G_rank']=((rB-rA)+(rA2-rB2))/2;out['AB_PM2']=((tA-tB)+(tB2-tA2))/2;out['AB_PM3']=((pA-pB)+(pB2-pA2))/2
     out['Dalt']=(o[('margin','W','A')]+o[('margin','W','B')])/2-(o[('margin','W0','A')]+o[('margin','W0','B')])/2;out['acc2']=out['above_partner_W']-out['above_partner_W0']
@@ -103,6 +111,8 @@ def window_effect(recs,a=16,ctx='in_e0',dmin=1,dmax=8):
                   ('W0_in_rank',lambda r:_pv(r,a,ctx,'rank_W0',_sel(r,a,ctx,dmin=dmin,dmax=dmax))),
                   ('W0_in_top1',lambda r:_pv(r,a,ctx,'top1_W0',_sel(r,a,ctx,dmin=dmin,dmax=dmax)))):
         o[n_]=ci(np.concatenate([fn(r) for r in recs]))
+    # decision column (4c, 14:58 KST): the raw rank difference exit_rank = rank(W, out) - rank(W, in) (positive = in-window better); G_in_minus_G_out is secondary; opposite directions -> no call
+    o['metric_mismatch']=bool(np.sign(o['exit_rank'][0])!=np.sign(o['G_in_minus_G_out'][0]) or np.sign(o['exit_top1'][0])!=np.sign(o['exit_rank'][0]))
     return o
 def prediction_A(win_by_p):
     """win_by_p: {p: window_effect output (NAT cells)}. p=9 only as the construction check"""
@@ -110,11 +120,12 @@ def prediction_A(win_by_p):
     for p in (1,2,4):
         w=win_by_p.get(p)
         if w is None:res['per_p'][p]='missing';ok=None;continue
-        g=w['exit_rank'];t=w['exit_top1'];good=bool(excl0(g) and g[0]>=3 and t[0]>=0.10);res['per_p'][p]={'exit_rank':g,'exit_top1':t,'pass':good};ok=ok and good if ok is not None else None
+        g=w['exit_rank'];t=w['exit_top1'];good=bool(excl0(g) and g[0]>=3 and t[0]>=0.10 and not w['metric_mismatch']);res['per_p'][p]={'exit_rank':g,'exit_top1':t,'metric_mismatch':w['metric_mismatch'],'pass':good};ok=ok and good if ok is not None else None
     if all(isinstance(res['per_p'].get(p),dict) for p in (1,4)):
         d=np.asarray(win_by_p[1]['exit_rank'][0])-np.asarray(win_by_p[4]['exit_rank'][0]);res['p1_minus_p4_rank_point']=float(d);res['falsified_p4_lower_by_3']=bool(win_by_p[4]['exit_rank'][0]<win_by_p[1]['exit_rank'][0]-3)
         res['similar_point_within_1.5']=bool(abs(d)<=1.5)   # the registered test needs the CI of the p1-p4 difference (records of different worlds): use similar_ci below
-    res['verdict']='supported' if ok else ('not supported/falsified' if ok is False else 'cannot judge (cells missing)')
+    if any(isinstance(v,dict) and v['metric_mismatch'] for v in res['per_p'].values()):ok=None
+    res['verdict']='supported' if ok else ('not supported/falsified' if ok is False else 'cannot judge (cells missing or 지표 불일치)')
     if win_by_p.get(9):res['negctrl_p9_pass']=bool(abs(win_by_p[9]['exit_rank'][0])<=1.0 and not excl0(win_by_p[9]['exit_rank']))
     return res
 def prediction_B(nat_by_p,swd_by_p,a=16,ctx='out',n_seeds=1):
@@ -146,10 +157,10 @@ def stage0(nat_files,swd_files=None,a=16,out=None):
     if swd:
         s=shadowing(nat,swd,a);L.append(f'shadowing S=SWD-NAT: G_rank {fmt(s["S"]["G_rank"])}, PM2 {fmt(s["S"]["PM2"])}, PM3 {fmt(s["S"]["PM3"])} -> {s["shadowing"]}'+(' (METRIC MISMATCH)' if s['metric_mismatch'] else '')+f'; negative-control pass (|S|<=1 rank, CI has 0; meaningful at p=9 only) = {s["negctrl_pass"]}')
     if all('in_e0' in r['read'].get(str(a),{}) for r in nat):
-        L.append('');L.append('window readout (NAT), items with information distance 1..8:')
+        L.append('');L.append('window readout (NAT; decision column = exit drop rank(out)-rank(in), G_in-G_out secondary; opposite directions = 지표 불일치), items with information distance 1..8:')
         for ctx in ('in_e0','in_e1','in_e3','in_e7'):
             if ctx in nat[0]['read'][str(a)]:
-                w=window_effect(nat,a,ctx);L.append(f'  {ctx}: exit drop rank(out)-rank(in) {fmt(w["exit_rank"])}, top1 in-out {fmt(w["exit_top1"])}, G_in-G_out {fmt(w["G_in_minus_G_out"])}, write share (G_rank in) {fmt(w["write_share_G_in"])}, W0 in-window rank {fmt(w["W0_in_rank"])}, W0 in-window top-1 {fmt(w["W0_in_top1"])}')
+                w=window_effect(nat,a,ctx);L.append(f'  {ctx}: exit drop rank(out)-rank(in) {fmt(w["exit_rank"])}, top1 in-out {fmt(w["exit_top1"])}, G_in-G_out {fmt(w["G_in_minus_G_out"])}, write share (G_rank in) {fmt(w["write_share_G_in"])}{" [지표 불일치: no call]" if w["metric_mismatch"] else ""}, W0 in-window rank {fmt(w["W0_in_rank"])}, W0 in-window top-1 {fmt(w["W0_in_top1"])}')
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
     return t
@@ -193,11 +204,19 @@ def selftest():
     # 6 window readout and prediction A
     w=[_rec(16,rng,0.5,inwin=6.0,with_d=True) for _ in range(3)];we=window_effect(w,16,'in_e0',1,4);assert excl0(we['exit_rank']) and we['exit_rank'][0]>3 and we['exit_top1'][0]>0.1
     win={1:we,2:we,4:window_effect([_rec(16,rng,0.5,inwin=6.0,with_d=True) for _ in range(3)],16,'in_e0',1,4)};pa=prediction_A(win);assert pa['verdict']=='supported'
-    weak=window_effect([_rec(16,rng,0.5,inwin=0.0,with_d=True) for _ in range(3)],16,'in_e0',1,4);assert prediction_A({1:we,2:weak,4:we})['verdict']=='not supported/falsified'
+    weak=window_effect([_rec(16,rng,0.5,inwin=0.0,with_d=True) for _ in range(3)],16,'in_e0',1,4);assert prediction_A({1:we,2:weak,4:we})['verdict']!='supported'
     # 7 prediction B: NAT flat in p (all same weak signal), SWD rising toward frequent periods
     mk=lambda sig,N:[_rec(N,rng,sig) for _ in range(3)]
     nb=prediction_B({1:mk(2.0,8),2:mk(2.0,16),4:mk(2.0,32),9:mk(2.0,72)},{1:mk(4.0,8),2:mk(3.0,16),4:mk(2.0,32),9:mk(0.0,72)},n_seeds=3);assert nb['rise_under_masking'] and nb['flat'] is True,nb
     assert prediction_B({1:mk(0.0,8),9:mk(0.0,72)},{},n_seeds=1)['flat']=='cannot be judged with one seed'
+    # 8 single-world (A only, no pair structure, no partner): same headline numbers, A-B contrast and partner stats are NaN
+    def a_only(r):
+        r2={'meta':{k:v for k,v in r['meta'].items() if k not in ('pair','fi','kind')},'W0':{k:(v['A'] if isinstance(v,dict) else v) for k,v in r['W0'].items()},'read':{a:{c:{'A':d['A']} for c,d in cs.items()} for a,cs in r['read'].items()}};r2['meta']['fi']=None;r2['meta']['gi']=r['meta']['gi'][:2*16];return r2
+    def trim(r):
+        n=32;r2=a_only(r);r2['meta']['gi']=r['meta']['gi'][:n];r2['W0']={'out':np.asarray(r['W0']['out'])[:n]};r2['read']={'16':{'out':{'A':np.asarray(r['read']['16']['out']['A'])[:n]}}};return r2
+    sa=[trim(r) for r in swd];bs=binding(sa);assert bs['binding'] and np.isnan(bs['table']['AB_G_rank'][0]) and np.isnan(bs['table']['G_rank_partner'][0]),bs['table']
+    # 9 window mismatch flag: raw rank drop and G_in-G_out of opposite sign -> no call
+    wm=dict(we);wm['metric_mismatch']=True;assert prediction_A({1:wm,2:we,4:we})['verdict'].startswith('cannot judge')
     print(table({'NAT':nat,'SWD':swd,'partner-boost only':pb}))
     print('e55_metrics SELFTEST OK (synthetic scores)')
 if __name__=='__main__':
