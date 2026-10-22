@@ -66,7 +66,8 @@ def maskdump(a):
         win=[x['frame'] for c in ch[k-8:k] for x in c['sents']]
         for x in ch[k]['sents']:cnt.append(sum(1 for y in win if y==x['frame']))
     ex=[(c['k'],x['text']) for c in ch[9:10] for x in c['sents'][:3]]
-    info={'cell':a.cell,'seed':a.seed,'bank':w['bank_kind'],'rows':rows,'distinct_frames_per_chunk_min':min(len(set(r)) for r in fr),'frame_repeats_per_fact':max(len(f['frames'])-len(set(f['frames'])) for f in w['facts']),'mean_same_frame_other_sentences_in_window':float(np.mean(cnt)),'example_sentences_chunk9':ex,'ALL_OK':bool(ok)}
+    import hashlib as _h;sha=_h.sha256(b''.join(np.packbits(~E.token_masks('SENT',k,ch,CH)[0]).tobytes() for k in range(len(ch)))).hexdigest()[:12]
+    info={'cell':a.cell,'seed':a.seed,'bank':w['bank_kind'],'sent_mask_sha12_all_chunks':sha,'rows':rows,'distinct_frames_per_chunk_min':min(len(set(r)) for r in fr),'frame_repeats_per_fact':max(len(f['frames'])-len(set(f['frames'])) for f in w['facts']),'mean_same_frame_other_sentences_in_window':float(np.mean(cnt)),'example_sentences_chunk9':ex,'ALL_OK':bool(ok)}
     print(json.dumps(info,indent=1));assert ok,'mask dump check failed';return info
 def lab():
     """import the lab modules (server only)"""
@@ -173,6 +174,61 @@ def rows_for(LD,rt,items):
     for it in items:
         for c in it['cands']:ids,span=stage2.item_ids(tok,slot,it['prefix'],c);raw.append((ids,(span[0]-1,span[1]-1)))
     return raw
+def iso(a):
+    """E55 design 22.3 stage 0: isolated-row offline training (e55_iso.py) on the world of --cell, reads (out-of-window only, unexposed question frames) at the segment boundaries --apps (exposures per fact), the cumulative update norm matched to the NAT run of the same seed (--norm-files, '{seed}' is replaced; --no-match = raw SGD steps)."""
+    OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);seeds=[int(x) for x in a.seeds.split(',')] if a.seeds else [a.seed];apps=parse_apps(a.read_apps,(16,32,64,128))
+    LD,s3,C=lab();rt=LD.Runtime();can=None if a.no_canary else Canary55(LD,rt);import e55_gpu as RG,e55_iso as I;rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
+    for sd in seeds:
+        fn=OUT/f'E55_{a.tag}_ISO_s{sd}.saved.json'
+        if fn.exists() and not a.rerun:print('exists, reused:',fn,flush=True);continue
+        enc,w,tf=build(a,sd,read_apps=set(apps),arms=['NAT']);assert w['p']==1 and max(apps)<=w['n_chunks'],(w['p'],apps)
+        P=R.plan(w,enc);items=P['items'];tok=rt.tok;raw=rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=out_tail_8192(LD,tok,rt.bos,forbid_list(w))
+        R_=RG.Reads(rd,raw,len(items),G.NCAND,P['read'],out_tail,rt.base,apps,(),log=lambda *x:print(*x,flush=True));print(f'seed {sd}: W0 read done',flush=True)
+        T=None
+        if not a.no_match:
+            nf=Path(a.norm_files.replace('{seed}',str(sd)));assert nf.exists(),('NAT run of this seed needed for the norm matching (or --no-match)',nf);T=I.cum_target([e['update_norm'] for e in json.load(open(nf))['log']][:w['n_chunks']])
+        segs=I.iso_rows(w,lambda t:LD.stage2.enc(tok,t).ids,sd,apps);got={};cw0=can(rt.base) if can else None
+        def hook(ap,m):
+            x=R_.at(ap,m);got[ap]=x
+            if can and ap==max(apps):x['canary']=can(m)
+            return {c_:'ok' for c_ in x}
+        L=I.Iso55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_ISO_s{sd}',canary=can);t0=time.monotonic();print(f'== seed {sd} ISO: {sum(len(s_[2]) for s_ in segs)} rows, segments {apps}, matched to NAT: {T is not None}',flush=True)
+        r=I.iso_run(L,rt,segs,T=T,read=hook,log=lambda *x:print(*x,flush=True));r.pop('model',None);can_=got.get(max(apps),{}).pop('canary',None)
+        rec=RG.make_records({'ISO':got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':sd,'k':w['k'],'n':w['n'],'p':1,'bank':w['bank_kind'],'tag':a.tag,'code':git_rev(),'complete':True,'place_len':w['place_len']})['ISO']
+        json.dump(rec,open(OUT/f'E55_{a.tag}_ISO_s{sd}.read.json','w'));lg=r['log']
+        r.update({'reads':{str(k):'in read.json' for k in r['reads']},'canary_w0':cw0,'canary_end':can_,'sec_total':time.monotonic()-t0,'code':git_rev(),'cell':a.cell,'world_seed':sd,'summary':{'mean_update_norm':float(np.mean([e['update_norm'] for e in lg])),'mean_raw_update_norm':float(np.mean([e['raw_update_norm'] for e in lg])),'steps':len(lg),'mean_scale':float(np.mean([e['scale'] for e in lg])),'mean_ce':float(np.mean([e['ce'] for e in lg]))}})
+        json.dump(r,open(fn,'w'),default=float);print('wrote',fn,f'{time.monotonic()-t0:.0f}s',flush=True)
+def ft(a):
+    """E55 design 22.1 stage 1: fast-weight fine-tuning probe (e55_ft.py): arms FT-NAT / FT-MASK (the 64-chunk stream of --cell repeated, AdamW) and FT-ISO (isolated rows of stage 0, AdamW), learning rates --lrs, epochs --epochs; after the epochs in --read-epochs frozen-weight reads: out-of-window, in-window (last 8 chunks) and the positive control (question asked in the frame of the fact's latest training sentence). Per epoch the loss of the place tokens is logged. Files E55_<tag>_<ARM>_lr<lr>_s<seed>_ep<e>.read.json / .pc.read.json and .saved.json."""
+    OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);seeds=[int(x) for x in a.seeds.split(',')] if a.seeds else [a.seed];lrs=[float(x) for x in a.lrs.split(',')];arms=a.ft_arms.split(',');rep=[int(x) for x in a.read_epochs.split(',')];EP=a.epochs
+    assert all(x in ('FT-NAT','FT-MASK','FT-ISO') for x in arms) and max(rep)<=EP and (not a.arm_lrs or all(x.split(':')[0] in ('FT-NAT','FT-MASK','FT-ISO') for x in a.arm_lrs.split(',')))
+    LD,s3,C=lab();rt=LD.Runtime();can=None if a.no_canary else Canary55(LD,rt);import e55_gpu as RG,e55_ft as F;rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
+    for sd in seeds:
+        enc,w,tf=build(a,sd,read_apps={w_ for w_ in (64,)},arms=['NAT']);assert w['p']==1 and w['n_chunks']==64,(w['p'],w['n_chunks'])
+        P=R.plan(w,enc);items=P['items'];tok=rt.tok;raw=rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=out_tail_8192(LD,tok,rt.bos,forbid_list(w))
+        pcit,bad=F.pc_items(w,items);print(f'seed {sd}: positive-control items without a name-before-place frame: {bad}',flush=True);raw_pc=rows_for(LD,rt,pcit);RG.check_rows(raw_pc,len(items),G.NCAND)
+        lg=lambda *x:print(*x,flush=True);R_=RG.Reads(rd,raw,len(items),G.NCAND,P['read'],out_tail,rt.base,[64],[64],log=lg);R_pc=RG.Reads(rd,raw_pc,len(items),G.NCAND,P['read'],out_tail,rt.base,[64],[64],log=lg);print(f'seed {sd}: W0 reads done',flush=True)
+        S=streams(w,enc);ids,sha=S['A'];enc_place=lambda t:LD.stage2.enc(tok,t).ids;enc_row=lambda t:LD.stage2.enc(tok,t).ids;meta=G.item_meta(items)
+        L=F.Ft55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_ft_s{sd}',canary=can)
+        pairs=[(ar,float(x.split(':')[1])) for x in a.arm_lrs.split(',') for ar in [x.split(':')[0]]] if a.arm_lrs else [(ar,lr) for lr in lrs for ar in arms]
+        for ar,lr in pairs:
+            if True:
+                key=f'{a.tag}_{ar}_lr{lr:g}_s{sd}';fn=OUT/f'E55_{key}.saved.json'
+                if fn.exists() and not a.rerun:print('exists, reused:',fn,flush=True);continue
+                def hook(ep,m,ar=ar,key=key,sd=sd,lr=lr):
+                    x=R_.at(64,m);xp=R_pc.at(64,m);cn=can(m) if (can and ep==max(rep)) else None
+                    info={'cell':a.cell,'seed':sd,'k':w['k'],'n':w['n'],'p':1,'bank':w['bank_kind'],'tag':a.tag,'code':git_rev(),'complete':True,'place_len':w['place_len'],'epoch':ep,'lr':lr,'canary':cn}
+                    json.dump(RG.make_records({ar:{64:x}},R_.W0,meta,P['read'],R_.idx,info)[ar],open(OUT/f'E55_{key}_ep{ep}.read.json','w'));json.dump(RG.make_records({ar:{64:xp}},R_pc.W0,meta,P['read'],R_pc.idx,{**info,'positive_control':True})[ar],open(OUT/f'E55_{key}_ep{ep}.pc.read.json','w'))
+                    try:ms=LD.jax.devices()[0].memory_stats();print(f'  [mem] after epoch {ep} reads: in use {ms["bytes_in_use"]/2**30:.1f} GiB, peak {ms["peak_bytes_in_use"]/2**30:.1f} GiB',flush=True)
+                    except Exception:pass
+                t0=time.monotonic();print(f'== seed {sd} {ar} lr {lr:g}: {EP} epochs, reads after {rep}',flush=True)
+                if ar=='FT-ISO':r=F.ft_iso(L,rt,F.iso_epoch_rows(w,enc_row,sd,EP,w['facts'],enc_place),lr,rep,read=hook,log=lg,enc_place=enc_place)
+                else:r=F.ft_stream(L,rt,ids,w['chunks'],ar,lr,EP,rep,read=hook,log=lg,facts=w['facts'],enc_place=enc_place)
+                r.pop('model',None)
+                try:ms=LD.jax.devices()[0].memory_stats();r['peak_bytes_in_use']=int(ms['peak_bytes_in_use']);print(f'  peak device memory {ms["peak_bytes_in_use"]/2**30:.1f} GiB',flush=True)
+                except Exception:pass
+                r.update(stream_sha=sha,world_seed=sd,cell=a.cell,code=git_rev(),sec_total=time.monotonic()-t0,read_epochs=rep,window_reset_each_epoch=True,short_window_chunks_per_epoch=8,optimizer={'name':'AdamW','weight_decay':0.0,'clip':1.0,'betas':[0.9,0.999],'eps':1e-8,'master_dtype':'float32'},trainable='inner (fast) parameters only')
+                json.dump(r,open(fn,'w'),default=float);print('wrote',fn,f'{time.monotonic()-t0:.0f}s',flush=True)
 def forbid_list(w):return [x['X'] for x in w['facts']+w['ctrl']]+[x['P'] for x in w['facts']]+list(w['unexposed'])+[x['X'] for k_ in ('names','decoy') if k_ in w for x in w[k_]['facts']]+[x['P'] for k_ in ('names','decoy') if k_ in w for x in w[k_]['facts']]
 def run(a):
     """stream the world ONCE per arm and seed; inline frozen-weight reads (design 11c) after the chunks of the seed's plan, states saved only at --save-apps. Weights, optimizer, carried KV window are never touched by a read (U15 checks bit-identity)."""
@@ -303,8 +359,8 @@ def fam(a):
                 if fnout(ar,sd).exists() and not a.rerun:print('exists, not overwritten:',fnout(ar,sd));continue
                 json.dump(rec,open(fnout(ar,sd),'w'));print('wrote',fnout(ar,sd))
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('cmd',choices=['dry','run','read','unit','fam','maskdump']);ap.add_argument('--cell',default='base',choices=list(G.CELLS));ap.add_argument('--seed',type=int,default=55);ap.add_argument('--arms',default='NAT,SWD');ap.add_argument('--tag',default='st0')
+    ap=argparse.ArgumentParser();ap.add_argument('cmd',choices=['dry','run','read','unit','fam','maskdump','iso','ft']);ap.add_argument('--cell',default='base',choices=list(G.CELLS));ap.add_argument('--seed',type=int,default=55);ap.add_argument('--arms',default='NAT,SWD');ap.add_argument('--tag',default='st0')
     ap.add_argument('--out',default=None);ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--smoke-chunks',type=int,default=0);ap.add_argument('--no-canary',action='store_true');ap.add_argument('--rerun',action='store_true');ap.add_argument('--stub',action='store_true',help='dry only: stub tokenizer and synthetic background (CPU test)');ap.add_argument('--host-gib-limit',type=float,default=100.0)
     ap.add_argument('--save-apps',default=None,help='run: appearances at which states are saved (default 2,4,8,16)');ap.add_argument('--canary-apps',default=None,help='run: appearances with a canary read (default = save-apps; W0 always)');ap.add_argument('--apps',default=None,help='read: appearances to read (default all saved)');ap.add_argument('--in-apps',default=None,help='read: comma list of appearances at which the in-window contexts are also read (e.g. 16); default none')
-    ap.add_argument('--unit-masks',action='store_true',help='unit: also run the SENT / KMASK mask checks (U6)');ap.add_argument('--cells',default=None,help="run: 'cell:tag,cell:tag' several cells in one process (overrides --cell / --tag)");ap.add_argument('--seeds',default=None,help='run: comma list of world seeds (one model load for all)');ap.add_argument('--plan',default=None,help="run: per-seed read plan '55=all|1,2,4,8,16;56=2,4,8,16|16' (out-of-window appearances | in-window appearances)");ap.add_argument('--read-apps',default=None,help='run: default out-of-window inline reads (appearances, or all)');ap.add_argument('--arm-seeds',default=None,help="run: restrict an arm to seeds, e.g. 'SWB:55'");ap.add_argument('--decoy',default='names',choices=['names','world'],help='fake window of SWD: names = same chunks with fake names / places (primary), world = another fact world');ap.add_argument('--bg',default='default',choices=['default','pool'],help='background paragraphs: default = the old one-book list (E55 stage 0 jobs), pool = design v3 pooled / deduplicated / seed-shuffled four-book pool');ap.add_argument('--unit-chunks',type=int,default=12);ap.add_argument('--tol-ce',type=float,default=1e-3);ap.add_argument('--tol-upd',type=float,default=2e-3)
-    a=ap.parse_args();{'dry':dry,'run':run,'read':read,'unit':unit,'fam':fam,'maskdump':maskdump}[a.cmd](a)
+    ap.add_argument('--unit-masks',action='store_true',help='unit: also run the SENT / KMASK mask checks (U6)');ap.add_argument('--norm-files',default='experiments/exp07_write_ladder/E55_v3a_NAT_s{seed}.saved.json',help="iso: NAT saved.json of the same seed ('{seed}' replaced)");ap.add_argument('--no-match',action='store_true',help='iso: raw SGD steps, no cumulative-norm matching');ap.add_argument('--arm-lrs',default=None,help="ft: 'FT-NAT:3e-5,FT-MASK:1e-4,FT-ISO:3e-5' one learning rate per arm (overrides --lrs x --ft-arms)");ap.add_argument('--lrs',default='1e-5,3e-5,1e-4',help='ft: learning rates');ap.add_argument('--epochs',type=int,default=4,help='ft: epochs');ap.add_argument('--read-epochs',default='1,2,4',help='ft: epochs after which the frozen-weight reads run');ap.add_argument('--ft-arms',default='FT-NAT,FT-MASK,FT-ISO',help='ft: arms');ap.add_argument('--cells',default=None,help="run: 'cell:tag,cell:tag' several cells in one process (overrides --cell / --tag)");ap.add_argument('--seeds',default=None,help='run: comma list of world seeds (one model load for all)');ap.add_argument('--plan',default=None,help="run: per-seed read plan '55=all|1,2,4,8,16;56=2,4,8,16|16' (out-of-window appearances | in-window appearances)");ap.add_argument('--read-apps',default=None,help='run: default out-of-window inline reads (appearances, or all)');ap.add_argument('--arm-seeds',default=None,help="run: restrict an arm to seeds, e.g. 'SWB:55'");ap.add_argument('--decoy',default='names',choices=['names','world'],help='fake window of SWD: names = same chunks with fake names / places (primary), world = another fact world');ap.add_argument('--bg',default='default',choices=['default','pool'],help='background paragraphs: default = the old one-book list (E55 stage 0 jobs), pool = design v3 pooled / deduplicated / seed-shuffled four-book pool');ap.add_argument('--unit-chunks',type=int,default=12);ap.add_argument('--tol-ce',type=float,default=1e-3);ap.add_argument('--tol-upd',type=float,default=2e-3)
+    a=ap.parse_args();{'dry':dry,'run':run,'read':read,'unit':unit,'fam':fam,'maskdump':maskdump,'iso':iso,'ft':ft}[a.cmd](a)
