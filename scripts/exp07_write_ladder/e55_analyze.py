@@ -23,11 +23,13 @@ def pair_vec(vals,meta,metric,mask=None):
     pairs=[p for p,s_ in zip(meta['pair'],sel) if s_];return ES.pair_means(vals[metric][sel],pairs)
 def read_vals(rec,a,ctx):
     meta=rec['meta'];gi=np.asarray(meta['gi']);fi=np.asarray(meta['fi']);S=rec['read'][str(a)][ctx];return item_vals(S['A'],S['B'],gi,fi)
-def w0_vals(rec,ctx):
-    meta=rec['meta'];gi=np.asarray(meta['gi']);fi=np.asarray(meta['fi']);S=rec['W0'][ctx];return item_vals(S,S,gi,fi)
+def w0_vals(rec,ctx,a=None):
+    """W0 scores of the same items in the same context. 'out' (neutral tail) is one matrix shared by A and B; an in-window context depends on the world (names in the tail) and on the read point, so the GPU reader stores it as W0['<ctx>@<a>'] = {'A': S, 'B': S}"""
+    meta=rec['meta'];gi=np.asarray(meta['gi']);fi=np.asarray(meta['fi']);W=rec['W0'];S=W[f'{ctx}@{a}'] if a is not None and f'{ctx}@{a}' in W else W[ctx]
+    return item_vals(S['A'],S['B'],gi,fi) if isinstance(S,dict) else item_vals(S,S,gi,fi)
 def change_vec(rec,a,ctx,metric,mask=None):
     """pair-level change vs W0 (same items, same context)"""
-    v=read_vals(rec,a,ctx);v0=w0_vals(rec,ctx);d={k:v[k]-v0[k] for k in v};return pair_vec(d,rec['meta'],metric,mask)
+    v=read_vals(rec,a,ctx);v0=w0_vals(rec,ctx,a);d={k:v[k]-v0[k] for k in v};return pair_vec(d,rec['meta'],metric,mask)
 def cat(recs,fn):return np.concatenate([fn(r) for r in recs])
 def cell_row(recs,a=16,ctx='out'):
     return {m:_ci(cat(recs,lambda r:change_vec(r,a,ctx,m))) for m in ('P1','P2','rank','p_norm','mass_partner','abs_lp')}
@@ -67,7 +69,7 @@ def rule9(w,a=16,ctxs=('in_e0','in_e1','in_e3','in_e7')):
             for b,(lo,hi) in {'1':(1,1),'2':(2,2),'3-4':(3,4),'5-8':(5,8),'inf':(9,10**6)}.items():
                 m_=(d_>=lo)&(d_<=hi)
                 if m_.sum()==0:continue
-                vw=read_vals(rec,a,ctx);vout=read_vals(rec,a,'out');v0=w0_vals(rec,ctx)
+                vw=read_vals(rec,a,ctx);vout=read_vals(rec,a,'out');v0=w0_vals(rec,ctx,a)
                 ent=out['bins'].setdefault((ctx,b),{'n_items':int(m_.sum()),'W_in':[], 'W_out':[],'W0_in':[]})
                 ent['W_in'].append(pair_vec(vw,rec['meta'],'P2',m_));ent['W0_in'].append(pair_vec(v0,rec['meta'],'P2',m_));ent['W_out'].append(pair_vec(vout,rec['meta'],'P2',m_))
     res={}
@@ -118,7 +120,21 @@ def selftest():
     k=('in_e0','1');assert r9[k]['write_share_W_in_minus_W0_in'] is not None and r9[k]['n_items']>0
     print(report({'NAT':nat,'SWD':swd,'SWD@p9':swd9}))
     print('e55_analyze SELFTEST OK (synthetic scores)')
+def stage0(nat_files,swd_files,a=16,out=None):
+    """records of the stage-0 cells (e55_gpu.make_records, one file per cell and seed) -> text report: table of the changes vs W0, rules 1-3 and, when the records carry in-window reads, rule 9. No verdict wording beyond the pre-registered rule outputs."""
+    load=lambda fs:[json.load(open(f)) for f in fs.split(',')];nat,swd=load(nat_files),load(swd_files);L=['# E55 stage 0 (NAT vs SWD) -- pre-registered rule outputs','',report({'NAT':nat,'SWD':swd},a),'']
+    r1=rule1(nat,swd,a);L.append(f'rule 1 (unreadable if BOTH cells have P2 < chance+0.03 and P1 CI contains 0): unreadable={r1["unreadable"]} per cell {r1["per_cell_unreadable"]}')
+    for nm,r in (('NAT',nat),('SWD',swd)):x=rule2(r,a);L.append(f'rule 2 {nm}: binding present={x["binding"]}')
+    x=rule3(nat,swd,a);L.append(f'rule 3 S = SWD - NAT: P2 {x["S_P2"][0]:+.3f} [{x["S_P2"][1]:+.3f}, {x["S_P2"][2]:+.3f}], P1 {x["S_P1"][0]:+.3f} [{x["S_P1"][1]:+.3f}, {x["S_P1"][2]:+.3f}] -> shadowing flag={x["shadowing"]}; negative control (|S|<=0.02 and CI contains 0)={x["negctrl_pass"]} (only meaningful for p=9)')
+    if all(str(a) in r['read'] and 'in_e0' in r['read'][str(a)] for r in nat):
+        x=rule9(nat,a);L.append('');L.append(f'rule 9 (window readout, NAT): W0 d=1 top-1 check = {x["check_i_W0_d1_top1"]} -> interpretable={x["interpretable"]}')
+        for k,v in x.items():
+            if isinstance(k,tuple):L.append(f'  {k[0]} d-bin {k[1]}: n_items {v["n_items"]}, top1 in-window {v["top1_W_in"][0]:.3f}, out-of-window {v["top1_W_out"][0]:.3f}, W0 in-window {v["top1_W0_in"][0]:.3f}, exit drop {v["exit_drop_W_in_minus_out"][0]:+.3f}, write share {v["write_share_W_in_minus_W0_in"][0]:+.3f}')
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--nat',default=None,help='comma list of NAT read records');ap.add_argument('--swd',default=None);ap.add_argument('--a',type=int,default=16);ap.add_argument('--out',default=None);a=ap.parse_args()
     if a.selftest:selftest()
+    elif a.nat and a.swd:print(stage0(a.nat,a.swd,a.a,a.out))
     else:print(__doc__)

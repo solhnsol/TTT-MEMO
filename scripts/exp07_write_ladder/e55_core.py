@@ -57,7 +57,7 @@ class Ladder55(s3.Ladder3):
             Kw,_=E.compose_window(src_k,k,pl,CH,axis=1);Vw,_=E.compose_window(src_v,k,pl,CH,axis=1);Kc,Vc=jnp.asarray(Kw),jnp.asarray(Vw)
             st=compose_state({'real':sts['real'],'decoy':sts.get('decoy',sts['real']),'bg':sts.get('bg',sts['real'])},pl,counter)
         return Kc,Vc,keep,st,pl
-    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None):
+    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None):
         """-> {'log': per-chunk dicts, 'reads': {chunk: {...state file / hash / canary}}, 'stream_hash', 'clip_bind_frac'}"""
         assert arm in E.ARMS,arm
         if arm not in IMPLEMENTED:raise NotImplementedError(f'arm {arm} is not implemented (SWB needs a background-only stream)')
@@ -87,7 +87,7 @@ class Ladder55(s3.Ladder3):
                 out['log'].append(ent)
                 if k in read_chunks:
                     r={**self.save_state(m,f'state_{tag}_{k:03d}.npz')}
-                    if self.canary:r['canary']=self.canary(m)
+                    if self.canary and (canary_chunks is None or k in canary_chunks):r['canary']=self.canary(m)
                     out['reads'][k]=r;log(f'  {arm} chunk {k+1}/{nch}: state saved, hash {r["_hash"]}')
                 elif k%8==0:log(f'  {arm} chunk {k+1}/{nch} {ent["sec"]:.1f}s ce {ent["ce"]:.3f}')
             out['final_hash']=s3.reuse._hash_pytree(m.inner_parameters())[0];out['model']=m

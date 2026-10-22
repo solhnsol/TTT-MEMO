@@ -58,6 +58,12 @@ class TinyRuntime:
         return Batch(input_ids=ids,target_tokens=targets,loss_masks=jnp.asarray(mask,dtype=bool))
     def chunk(self,seq,k):
         s=slice(k*CH,(k+1)*CH);return Batch(input_ids=seq.input_ids[s],target_tokens=seq.target_tokens[s],loss_masks=seq.loss_masks[s])
+class TailCtx:
+    """copy of ladder._TailCtx (what packing.Packed needs from a Readouts object)"""
+    def __init__(self,rt32,tail_ids):
+        self.rt=rt32;self.tail_ids=tail_ids
+        with rt32.mesh,jax.default_matmul_precision('highest'):
+            seq=rt32.seq(list(tail_ids)+[rt32.eos]*CH);self._tail_seq=seq;self._tail_pref=rt32.prefix(rt32.base,seq)[:len(tail_ids)]
 def install_stubs(rt):
     """register stand-ins for ladder / suppress / margins_split dependencies so that `import s3` works; returns the s3 module"""
     sys.path.insert(0,str(HERE))
@@ -66,5 +72,8 @@ def install_stubs(rt):
     class Ladder:pass
     ladder.__dict__.update(dict(jax=jax,jnp=jnp,eqx=eqx,np=np,optax=optax,MetaModel=MetaModel,CH=CH,clone_state=clone_state,reuse=reuse,Ladder=Ladder,ROOT=ROOT,OUT=Path('/tmp/e55_cpu_out'),gw=types.SimpleNamespace(),Batch=Batch))
     sys.modules['ladder']=ladder;sys.modules['suppress']=types.ModuleType('suppress')
-    sys.path.insert(0,str(ROOT/'scripts/exp04_what_ttt_retains'))
+    core=types.ModuleType('core');core.clone_state=clone_state;sys.modules['core']=core        # packing._clone imports it lazily
+    sys.path.insert(0,str(ROOT/'scripts/exp05_write_dynamics'));sys.path.insert(0,str(ROOT/'scripts/exp04_what_ttt_retains'))
+    import packing                                      # as in the lab, packing patches the SWA class before s3 does
+    ladder.packing=packing;ladder.TailCtx=TailCtx
     import s3;return s3,reuse
