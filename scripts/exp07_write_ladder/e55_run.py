@@ -231,7 +231,7 @@ def ft(a):
                 json.dump(r,open(fn,'w'),default=float);print('wrote',fn,f'{time.monotonic()-t0:.0f}s',flush=True)
 def decomp(a):
     """E55 design 24.3 decomposition between ISO and NAT, v3 world of --cell, reads (out-of-window, unexposed frames) at a = 64 and 128: ISOB = the stream chunks themselves (fact sentences + non-repeating background) cut into isolated rows, 128 steps; ISOD = isolated sentences, one round (16) per chunk, 128 steps; NATB = NAT with the window, every chunk step rescaled to the size of one stage-0 ISO step of its segment (NAT norm x chunks / ISO steps); FOS = fact-only stream: the stage-0 sentences as ordinary continuous text with the 8-chunk SWA window (segments padded to 1024 multiples), norm per chunk = the NAT segment increment spread equally. ISOB / ISOD norm per step = the NAT per-chunk norm (matched). Files E55_<tag>_<ARM>_s<seed>.read.json / .saved.json."""
-    OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);seeds=[int(x) for x in a.seeds.split(',')] if a.seeds else [a.seed];arms=a.arms.split(',');apps=[64,128];assert all(x in ('ISOB','ISOD','NATB','FOS') for x in arms)
+    OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);seeds=[int(x) for x in a.seeds.split(',')] if a.seeds else [a.seed];arms=a.arms.split(',');apps=[64,128];assert all(x in ('ISOB','ISOD','NATB','FOS','SENT') for x in arms)
     LD,s3,C=lab();rt=LD.Runtime();can=None if a.no_canary else Canary55(LD,rt);import e55_gpu as RG,e55_iso as I;rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     for sd in seeds:
         todo=[ar for ar in arms if a.rerun or not (OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json').exists()]
@@ -251,6 +251,8 @@ def decomp(a):
             if ar in ('ISOB','ISOD'):
                 segs=I.rows_bg(w) if ar=='ISOB' else I.rows_density(w,encr,sd)
                 r=I.iso_run(L,rt,segs,T=T,read=hook,log=lg,read_at=set(apps))
+            elif ar=='SENT':          # E55 design 25.3 (A): the online stream with the window, earlier fact sentences hidden from attention (as job 183 SENT), no norm matching
+                r=L.run_stream('SENT',1,ids,nch=128,tag='dcSENT',log=lg,read_hook=lambda k,m:hook(k+1,m),hook_chunks=[a_-1 for a_ in apps],chunks_meta=w['chunks'])
             elif ar=='NATB':
                 tg=I.bigstep_targets(norms,segs_iso,apps);extra={'target_mean_ratio_to_nat':float(np.mean(tg)/np.mean(norms))};print(f'  NATB: mean target norm / NAT norm = {extra["target_mean_ratio_to_nat"]:.3f}',flush=True)
                 r=L.run_stream('NATM',1,ids,nch=128,tag='dcNATB',log=lg,read_hook=lambda k,m:hook(k+1,m),hook_chunks=[a_-1 for a_ in apps],norm_targets=tg)
