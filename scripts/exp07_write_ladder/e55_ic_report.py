@@ -134,8 +134,9 @@ def iso_report(d,seeds,nat_tag='v3a',iso_tag='iso',apps=(16,32,64,128),out=None,
 def ft_report(d,tag,seed,lrs,epochs,arms=('FT-NAT','FT-MASK','FT-ISO'),out=None,load=None):
     """E55 design 22.1 report: per learning rate and arm, per epoch with reads: u (out-of-window, in-window, positive control; W0 subtracted, fact bootstrap CI), mean CE and the place-token CE of the epoch. The positive control is a memorization ceiling only and is not part of any verdict. First 8 chunks of every epoch have a short carried window (reset at the epoch start)."""
     load=load or (lambda f:json.load(open(f)));L=[f'# E55 stage 1 report: fast-weight fine-tuning probe, seed {seed}, tag {tag}','','u = (W0 rank - rank)/15 over the 16 facts, 95% fact-bootstrap CI. pc = positive control (question in the frame of the latest training sentence): memorization ceiling, not used for the verdict. Each epoch repeats the 64-chunk stream (FT-NAT / FT-MASK) or all isolated rows (FT-ISO) with the carried window reset at the start; the first 8 chunks of every epoch therefore have a short window.','']
-    for lr in lrs:
-        for ar in arms:
+    pairs=[(ar,lr) for ar,v in lrs.items() for lr in v] if isinstance(lrs,dict) else [(ar,lr) for lr in lrs for ar in arms]
+    for ar,lr in pairs:
+        if True:
             fs=Path(d)/f'E55_{tag}_{ar}_lr{lr:g}_s{seed}.saved.json'
             if not fs.exists():continue
             sv=load(fs);ep_info={e['epoch']:e for e in sv['epochs']};L+=[f'## {ar}, lr {lr:g}','','| epoch | u out | u in-window | u pc | mean CE | place-token CE |','|---|---|---|---|---|---|']
@@ -157,7 +158,9 @@ if __name__=='__main__':
     if '--iso' in _s.argv:
         _s.argv.remove('--iso');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');a=ap.parse_args();print(iso_report(a.dir,[int(x) for x in a.seeds.split(',')],out=a.out));_s.exit(0)
     if '--ft' in _s.argv:
-        _s.argv.remove('--ft');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--tag');ap.add_argument('--seed',type=int);ap.add_argument('--lrs');ap.add_argument('--epochs',type=int,default=4);ap.add_argument('--out');a=ap.parse_args();print(ft_report(a.dir,a.tag,a.seed,[float(x) for x in a.lrs.split(',')],a.epochs,out=a.out));_s.exit(0)
+        _s.argv.remove('--ft');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--tag');ap.add_argument('--seed',type=int);ap.add_argument('--lrs',default=None);ap.add_argument('--arm-lrs',default=None);ap.add_argument('--epochs',type=int,default=4);ap.add_argument('--out');a=ap.parse_args();L_={}
+        for x in (a.arm_lrs.split(',') if a.arm_lrs else []):L_.setdefault(x.split(':')[0],[]).append(float(x.split(':')[1]))
+        print(ft_report(a.dir,a.tag,a.seed,L_ if a.arm_lrs else [float(x) for x in a.lrs.split(',')],a.epochs,out=a.out));_s.exit(0)
     if '--rep' in _s.argv:
         _s.argv.remove('--rep');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='icr');a=ap.parse_args();print(rep_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--dir');ap.add_argument('--seed',type=int,default=61);ap.add_argument('--out');a=ap.parse_args()
