@@ -150,7 +150,7 @@ def q1b_report(d,seeds,tag='q1b',nat_tag='v3a',arms=('SENTPQ','SENTPQADAM','NATA
     def mx(v):
         v=[y for y in v if y is not None];return max(v) if v else None
     L=[f'# E55 Q1-B report (design 29.3): Adam-direction write on the online stream, seeds {list(seeds)}','',
-       'World v3_16_1 (job 181), window kept. SENTPQ-STD = arm SENTPQ (the job-190 convention, ordinary inner SGD step, natural update size, re-run here so that the pairs match); SENTPQ-ADAM / NAT-ADAM = the Adam direction of the (clipped) write gradient (the ISO-ADAM rule of job 192: bias-corrected m / (sqrt(v) + eps), B1 .9, B2 .999, fp32, state kept over the chunks) under the masked / unmasked window; its step SIZE per chunk = the update norm of the NAT run of the same seed in that chunk (cumulative-norm matching, job 181 files); SENTPQ-ADAM-0.5N = half of that norm. g = out-of-window rank gain u (W0 subtracted, unexposed question frames), 95% fact-bootstrap CI.','',
+       'World v3_16_1 (job 181), window kept. SENTPQ-STD = arm SENTPQ (the job-190 convention, ordinary inner SGD step, natural update size, re-run here so that the pairs match); SENTPQ-ADAM / NAT-ADAM = the Adam direction of the (clipped) write gradient (the ISO-ADAM rule of job 192: bias-corrected m / (sqrt(v) + eps), B1 .9, B2 .999, fp32, state kept over the chunks) under the masked / unmasked window; its step SIZE per chunk = the update norm of ITS natural-size SGD arm of the same seed in that chunk (cumulative-norm matching, design 29.4): SENTPQ-ADAM <- SENTPQ-STD (same tag and seed), NAT-ADAM <- NAT (job 181 file), SENTPQ-ADAM-0.5N = half of the SENTPQ-STD norm. The norm ratio of each Adam arm to its SGD arm is in the damage table (target 1.00 / 1.00 / 0.50). g = out-of-window rank gain u (W0 subtracted, unexposed question frames), 95% fact-bootstrap CI.','',
        '## Verdict rules (fixed before the results; SENTPQ-ADAM is the arm under test)','',
        '1. SPEED: g(a=64) >= 0.15 in at least 2 of 3 seeds (seed means), OR pooled g(a=64) >= 80% of the pooled g(a=128) of SENTPQ-STD.',
        '2. GAIN KEPT: pooled g(a=128) >= pooled g(a=128) of SENTPQ-STD - 0.05.',
@@ -174,8 +174,12 @@ def q1b_report(d,seeds,tag='q1b',nat_tag='v3a',arms=('SENTPQ','SENTPQADAM','NATA
             try:row.append(fmt(boot(np.concatenate([fact_g(G[s_,x],a,'out')-fact_g(G[s_,y],a,'out') for s_ in use]))) if use else 'n/a')
             except Exception as e:ERR.append(f'diff {nm}: {e!r}');row.append('n/a')
         L.append(f'| {nm} | '+' | '.join(row)+' |')
-    L+=['','## damage: canary NLL rise (nat, max of generic and tail text) per arm, max over seeds','','| arm | rise vs W0 a=32 | a=64 | a=128 | rise vs NAT (job 181) a=128 | clip share | mean update norm / NAT |','|---|---|---|---|---|---|---|']
+    L+=['','## damage: canary NLL rise (nat, max of generic and tail text) per arm, max over seeds','','| arm | rise vs W0 a=32 | a=64 | a=128 | rise vs NAT (job 181) a=128 | clip share | mean update norm / norm of its SGD arm (SENTPQ-ADAM <- SENTPQ-STD, NAT-ADAM <- NAT, 0.5N <- SENTPQ-STD; target 1.00 / 1.00 / 0.50) |','|---|---|---|---|---|---|---|']
     nat_norm={s_:float(np.mean([e['update_norm'] for e in NATS[s_]['log']])) for s_ in NATS if NATS[s_].get('log')}
+    def mean_norm(s_,ar):
+        return float(np.mean([e['update_norm'] for e in S[s_,ar]['log']])) if (s_,ar) in S and S[s_,ar].get('log') else None
+    def sgd_ref(s_,ar):          # the natural-size SGD arm whose norm the arm should match
+        return nat_norm.get(s_) if ar==NA else (mean_norm(s_,STD) if ar in (A,AH) else None)
     riseW={};riseN={}
     for ar in arms:
         rw={a:mx([can_at(s_,ar,a) for s_ in seeds if (s_,ar) in S]) for a in (32,64,128)}
@@ -185,7 +189,7 @@ def q1b_report(d,seeds,tag='q1b',nat_tag='v3a',arms=('SENTPQ','SENTPQADAM','NATA
             if c and n:rn.append(max(c[k]-n[k] for k in ('_gen_nll','_tail_nll')))
         rn=max(rn) if rn else None;riseW[ar]=rw[128];riseN[ar]=rn
         cl=[float(np.mean([e['coef']<1 for e in S[s_,ar]['log']])) for s_ in seeds if (s_,ar) in S and S[s_,ar].get('log')]
-        nr=[float(np.mean([e['update_norm'] for e in S[s_,ar]['log']]))/nat_norm[s_] for s_ in seeds if (s_,ar) in S and S[s_,ar].get('log') and s_ in nat_norm]
+        nr=[mean_norm(s_,ar)/sgd_ref(s_,ar) for s_ in seeds if mean_norm(s_,ar) is not None and sgd_ref(s_,ar)]
         f_=lambda v:'n/a' if v is None else f'{v:+.3f}'
         L.append(f'| {name[ar]} | {f_(rw[32])} | {f_(rw[64])} | {f_(rw[128])} | {f_(rn)} | '+(f'{np.mean(cl):.2f}' if cl else 'n/a')+' | '+(f'{np.mean(nr):.2f}' if nr else 'n/a')+' |')
     L+=['','## verdicts (the arms under test against SENTPQ-STD; every check separate)','','| arm | SPEED | GAIN KEPT | DAMAGE rel (<= +0.05 over STD) | DAMAGE abs vs NAT (<= 0.10) | DAMAGE abs vs W0 (<= 0.10) | CLIP < 0.9 |','|---|---|---|---|---|---|---|']

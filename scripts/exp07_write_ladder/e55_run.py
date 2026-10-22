@@ -310,6 +310,8 @@ DECOMP_ARMS=('ISOB','ISOD','NATB','FOS','SENT','KMASK','SENTO','SENTPQ','OSPAN',
 def decomp(a):
     """E55 design 24.3 decomposition between ISO and NAT, v3 world of --cell, reads (out-of-window, unexposed frames) at a = 64 and 128: ISOB = the stream chunks themselves (fact sentences + non-repeating background) cut into isolated rows, 128 steps; ISOD = isolated sentences, one round (16) per chunk, 128 steps; NATB = NAT with the window, every chunk step rescaled to the size of one stage-0 ISO step of its segment (NAT norm x chunks / ISO steps); FOS = fact-only stream: the stage-0 sentences as ordinary continuous text with the 8-chunk SWA window (segments padded to 1024 multiples), norm per chunk = the NAT segment increment spread equally. ISOB / ISOD norm per step = the NAT per-chunk norm (matched). Files E55_<tag>_<ARM>_s<seed>.read.json / .saved.json."""
     OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);seeds=[int(x) for x in a.seeds.split(',')] if a.seeds else [a.seed];arms=a.arms.split(',');apps=[int(x) for x in a.decomp_apps.split(',')];assert apps==sorted(apps) and apps[-1]==128,'decomp apps must end at 128 (canary / DCLM end reads)';assert all(x in DECOMP_ARMS for x in arms),[x for x in arms if x not in DECOMP_ARMS]
+    if a.check_only:
+        assert not (any(x in ('SENTPQADAM','SENTPQADAMH') for x in arms) and 'SENTPQ' not in arms and not all((OUT/f'E55_{a.tag}_SENTPQ_s{s_}.saved.json').exists() for s_ in seeds)),'SENTPQ-ADAM arms need SENTPQ of the same tag and seed (their norm target): add SENTPQ to the arms'
     if a.check_only:print(f'decomp check-only OK: arms {arms} seeds {seeds} all in {DECOMP_ARMS}; every masked arm has a branch: {[x for x in arms if x in E.MASK_ARMS]}');return
     LD,s3,C=lab();rt=LD.Runtime();can=None if a.no_canary else Canary55(LD,rt);import e55_gpu as RG,e55_iso as I;rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     for sd in seeds:
@@ -322,6 +324,7 @@ def decomp(a):
         if dcl:dcl_w0=dcl(rt.base);print(f'seed {sd}: DCLM W0 NLL {dcl_w0:.4f} ({dcl.n} samples, ids sha {dcl.sha12})',flush=True)
         nf=Path(a.norm_files.replace('{seed}',str(sd)));assert nf.exists(),('NAT run of this seed needed',nf);norms=[e['update_norm'] for e in json.load(open(nf))['log']][:128];T=I.cum_target(norms)
         encr=lambda t:LD.stage2.enc(tok,t).ids;segs_iso=I.iso_rows(w,encr,sd,apps);S=streams(w,enc);ids,sha=S['A'];meta=G.item_meta(items)
+        todo=sorted(todo,key=lambda x:x in E.ADAM and x!='NATADAM')       # SENTPQ-ADAM arms after SENTPQ (their norm target = the per-chunk update norms of SENTPQ of the same seed and tag)
         for ar in todo:
             got={};cw0=can(rt.base) if can else None
             def hook(ap,m):
@@ -334,8 +337,13 @@ def decomp(a):
                 segs=I.rows_bg(w) if ar=='ISOB' else I.rows_density(w,encr,sd)
                 r=I.iso_run(L,rt,segs,T=T,read=hook,log=lg,read_at=set(apps))
             elif ar in E.MASK_ARMS or ar in E.MIX or ar in E.ADAM or ar in ('ALT','NAT'):
+                ntg=None
+                if ar in E.ADAM:       # E55 29.4: the Adam arm keeps the cumulative norm of ITS natural-size SGD arm (per chunk, same seed): NAT-ADAM <- NAT (job 181 file), SENTPQ-ADAM and SENTPQ-ADAM-0.5N <- SENTPQ (this tag; x factor 1 / 0.5), not the NAT norm
+                    if ar=='NATADAM':ntg=norms;extra['norm_target']='NAT (norm file)'
+                    else:
+                        fq=OUT/f'E55_{a.tag}_SENTPQ_s{sd}.saved.json';assert fq.exists(),('SENTPQ of this seed and tag is needed first (norm target of the SENTPQ-ADAM arms)',fq);ntg=[e['update_norm'] for e in json.load(open(fq))['log']][:128];extra['norm_target']='SENTPQ (same tag and seed)'
                 if ar in E.SPAN:miss=E.annotate_answers(w['chunks'],w['facts'],enc);assert miss==(0,0),('answer span not found in sentences (place, name):',miss);extra={'answer_span_miss':list(miss)}          # E55 design 25.3 (A): the online stream with the window, earlier fact sentences hidden from attention (as job 183 SENT), no norm matching
-                r=L.run_stream(ar,1,ids,nch=128,tag='dc'+ar,log=lg,read_hook=lambda k,m:hook(k+1,m),hook_chunks=[a_-1 for a_ in apps],chunks_meta=w['chunks'],norm_targets=norms if ar in E.ADAM else None)
+                r=L.run_stream(ar,1,ids,nch=128,tag='dc'+ar,log=lg,read_hook=lambda k,m:hook(k+1,m),hook_chunks=[a_-1 for a_ in apps],chunks_meta=w['chunks'],norm_targets=ntg)
             elif ar=='NATB':
                 tg=I.bigstep_targets(norms,segs_iso,apps);extra={'target_mean_ratio_to_nat':float(np.mean(tg)/np.mean(norms))};print(f'  NATB: mean target norm / NAT norm = {extra["target_mean_ratio_to_nat"]:.3f}',flush=True)
                 r=L.run_stream('NATM',1,ids,nch=128,tag='dcNATB',log=lg,read_hook=lambda k,m:hook(k+1,m),hook_chunks=[a_-1 for a_ in apps],norm_targets=tg)
