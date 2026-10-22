@@ -66,6 +66,9 @@ $PY $S/rp_native_check.py --selftest | tail -1
 $PY $S/rp_unifg_check.py --selftest | tail -1
 [ -f "$OUT/L0fs_w1rp_s101_A.json" ] && { echo "L0fs_w1rp_s101_A.json exists: not overwritten (exit 8)"; exit 8; }
 [ -n "$CPU_ONLY" ] && { echo "would write L0fs_w1rp_s101_{A,B}.json, rp_native_check_PASS.txt"; exit 0; }
+CK=checkpoints/3b_ttt_e2e_finetune_books_128k_3x_cc
+[ -f "$OUT/rp_ckpt_sha256.txt" ] || (cd $CK && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$OUT/rp_ckpt_sha256.txt"
+echo "checkpoint file list sha256 -> $OUT/rp_ckpt_sha256.txt ($(wc -l < $OUT/rp_ckpt_sha256.txt) files); compare with the same command on the lab server: sha256sum of that file = $(sha256sum $OUT/rp_ckpt_sha256.txt | cut -c1-16)"
 for M in save eval; do
   $PY $S/ladder.py --mode $M --level L0fs --world-seed 101 --passes 4 --worlds AB --keep --tag w1rp
 done
