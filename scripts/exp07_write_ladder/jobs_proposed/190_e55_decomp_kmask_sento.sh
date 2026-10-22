@@ -20,7 +20,7 @@ case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=90c427568c3bcd51b549d41c5a5757dec4da4021
+COMMIT=9388669b65a36df8d6f8c8c46a528b3086bcfb37
 FILES="$D/e55_run.py $D/e55_core.py $D/e55_gpu.py $D/e55_swap.py $D/e55_read.py $D/e55_analyze.py $D/e55_metrics.py $D/e55_ic_report.py $D/e55_iso.py $D/s3.py $D4/gen_facts.py $D4/gen_world_ctl.py $D4/frame_bank.py $D/e55_gates.py $D4/frames300.txt"
 LADDER_OK="714b08ea3b90"
 S3_OLD="a16e6dd0d4c9"
@@ -39,7 +39,7 @@ if [ -z "$SKIP_VERIFY" ]; then
     G=$(sha256sum $D/$F | cut -c1-12)
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH (exit 5)"; exit 5; }
   done <<'MANIFEST'
-12f9637d7740 e55_run.py
+126d18fc175d e55_run.py
 8d2e5eb5ff3c e55_core.py
 9827e34dcde6 e55_gpu.py
 f242a0f24d5c e55_swap.py
@@ -77,6 +77,7 @@ n,w=g('NAT'),g('SWD');print(f'SWD_HASH seed {sd}: NAT={str(n)[:20]} SWD={str(w)[
 PYEOF
 done
 $PY $S/e55_run.py dry --cell v3_16_1 --seed 61 --bg pool --arms NAT | tail -3
+$PY $S/e55_run.py decomp --cell v3_16_1 --tag dc --bg pool --out $OUT --seeds $SEEDS --arms KMASK,SENTO,SENTPQ --norm-files "$OUT/E55_v3a_NAT_s{seed}.saved.json" --check-only
 [ -n "$CPU_ONLY" ] && { echo "CPU_ONLY: done before any GPU step"; exit 0; }
 REP=$OUT/e55_dc3_report.md
 if [ -f $REP ] && [ -z "$RERUN" ]; then echo "report $REP exists: not redone (exit 8; RERUN=1 to redo)"; exit 8; fi
