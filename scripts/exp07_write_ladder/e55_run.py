@@ -251,7 +251,7 @@ def decomp(a):
             if ar in ('ISOB','ISOD'):
                 segs=I.rows_bg(w) if ar=='ISOB' else I.rows_density(w,encr,sd)
                 r=I.iso_run(L,rt,segs,T=T,read=hook,log=lg,read_at=set(apps))
-            elif ar in ('SENT','KMASK','SENTO'):          # E55 design 25.3 (A): the online stream with the window, earlier fact sentences hidden from attention (as job 183 SENT), no norm matching
+            elif ar in ('SENT','KMASK','SENTO','SENTPQ'):          # E55 design 25.3 (A): the online stream with the window, earlier fact sentences hidden from attention (as job 183 SENT), no norm matching
                 r=L.run_stream(ar,1,ids,nch=128,tag='dc'+ar,log=lg,read_hook=lambda k,m:hook(k+1,m),hook_chunks=[a_-1 for a_ in apps],chunks_meta=w['chunks'])
             elif ar=='NATB':
                 tg=I.bigstep_targets(norms,segs_iso,apps);extra={'target_mean_ratio_to_nat':float(np.mean(tg)/np.mean(norms))};print(f'  NATB: mean target norm / NAT norm = {extra["target_mean_ratio_to_nat"]:.3f}',flush=True)
@@ -270,7 +270,7 @@ def run(a):
     OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');seeds=[int(x) for x in a.seeds.split(',')] if a.seeds else [a.seed];plans=seed_plan(a,seeds)
     armseed=dict(x.split(':') for x in a.arm_seeds.split(';')) if a.arm_seeds else {}                  # e.g. 'SWB:55' = arm SWB only for seed 55
     if a.smoke_chunks:assert 'smoke' in a.tag,'a smoke run needs a tag containing smoke'
-    for ar in arms:assert ar in ('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK'),ar
+    for ar in arms:assert ar in ('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ'),ar
     tgt={}          # per seed: per-chunk update norms of arm SWD (the size to which NATM is rescaled)
     LD,s3,C=lab();rt=LD.Runtime();assert int(rt.cfg.model.sliding_window_size)==8192;can=None if a.no_canary else Canary55(LD,rt)
     inline=any(plans[s_][0] or plans[s_][1] for s_ in seeds);rd=None

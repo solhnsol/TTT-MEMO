@@ -11,7 +11,7 @@ import e55_swap as E
 import s3
 jax,jnp,eqx=s3.jax,s3.jnp,s3.eqx
 CH=1024;WIN=8192;NW=E.NW
-IMPLEMENTED=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO')
+IMPLEMENTED=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ')
 def compose_state(chains,pl,counter=None):
     """suffix-layer SWA state with the slot blocks taken from the chain that plan `pl` names ('real' | 'decoy' | 'bg'; 'mask' and absent slots keep the real chain's block, the mask is applied through the key mask). Every other leaf (chunk index) is the real chain's. counter (list) collects the number of KV leaves composed (must be 2: K and V)."""
     def f(*ls):
@@ -50,9 +50,9 @@ class Ladder55(s3.Ladder3):
     def window_inputs(self,arm,k,p,recs,sts,counter=None):
         """what the write forward of chunk k gets: (Kc,Vc,keep,st_suffix,plan). recs[name] = (Kh,Vh) numpy [layers,T,nh,d]; sts[name] = suffix chain state."""
         pl=E.plan(arm,k,p);keep=keep_vector(pl)
-        if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO'):
+        if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO','SENTPQ'):
             Kc,Vc=self.ctx_kv(*recs['real'],k);st=sts['real']
-            if arm in ('SENT','KMASK','SENTO'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW)
+            if arm in ('SENT','KMASK','SENTO','SENTPQ'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW)
         else:
             src_k={n:recs[n][0] for n in recs};src_v={n:recs[n][1] for n in recs}
             Kw,_=E.compose_window(src_k,k,pl,CH,axis=1);Vw,_=E.compose_window(src_v,k,pl,CH,axis=1);Kc,Vc=jnp.asarray(Kw),jnp.asarray(Vw)
@@ -73,7 +73,7 @@ class Ladder55(s3.Ladder3):
         assert arm in E.ARMS,arm
         if arm not in IMPLEMENTED:raise NotImplementedError(f'arm {arm} is not implemented')
         self.chunks_meta=chunks_meta;self.n_masked_keys=0
-        if arm in ('SENT','KMASK','SENTO'):assert chunks_meta is not None and len(chunks_meta)>=(nch or len(real_ids)//CH),'SENT / KMASK need the sentence table of the world (chunks_meta)'
+        if arm in ('SENT','KMASK','SENTO','SENTPQ'):assert chunks_meta is not None and len(chunks_meta)>=(nch or len(real_ids)//CH),'SENT / KMASK need the sentence table of the world (chunks_meta)'
         rt=self.rt;n=len(real_ids)//CH;nch=nch or n;assert nch<=n and len(real_ids)%CH==0
         names=['real']+(['decoy'] if arm in ('SWD','SWDS','SWDO') else [])+(['bg'] if arm=='SWB' else [])
         ids_={'real':np.asarray(real_ids),'decoy':None if decoy_ids is None else np.asarray(decoy_ids),'bg':None if bg_ids is None else np.asarray(bg_ids)}

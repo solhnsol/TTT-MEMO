@@ -356,8 +356,9 @@ def u29():
                 assert np.array_equal(km[r]&so[r],ks),(k,r)
                 n+=1
         assert so[~inside].all()
+        sp,_=E.token_masks('SENTPQ',k,ch,CH);assert sp[~inside].all() and all(np.array_equal(sp[r],ks) for xq in ch[k]['sents'] for r in range(xq['start'],xq['end'])) and np.array_equal(sp&~(~km|~so),sp)
     assert E.token_masks('SENTO',0,ch,CH)[0].all() and E.token_masks('SENTO',5,[{'sents':[]}]*10,CH)[0].all()
-    RES['U29']=f'SENTO rows == independent other-fact computation ({n} rows), KMASK/SENTO disjoint, intersection of keeps == SENT keep on every sentence row, background rows unmasked, empty/chunk0 unmasked'
+    RES['U29']=f'SENTPQ sentence rows == SENT keep, background rows unmasked; SENTO rows == independent other-fact computation ({n} rows), KMASK/SENTO disjoint, intersection of keeps == SENT keep on every sentence row, background rows unmasked, empty/chunk0 unmasked'
 def u23():
     """model level (CPU tiny model): (a) SENT / KMASK with an EMPTY sentence table == NAT bit for bit (CE and final weights); (b) SENT with sentences changes CE from chunk 1 on; (c) perturbing K,V at SENT-hidden positions does not change the write update (bitwise), perturbing a visible position does; (d) a per-query 2-D mask with identical rows == the 1-D keep (same update), and a 2-D mask hiding a window key only for rows [a,b) leaves the prefix outputs of rows before a bit-identical and changes rows in [a,b)"""
     emp=[{'sents':[]} for _ in range(NCH)];tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]

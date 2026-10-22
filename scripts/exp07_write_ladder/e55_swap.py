@@ -5,12 +5,12 @@ Slots that do not exist (k - j < 0) are left as the zero padding of ladder.ctx_k
 GPU integration (NOT in this file, NOT done): the plan must be applied to (a) the prefix layers' context K,V of Ladder3.prefix_masked (ctx_kv slices of three recordings) and (b) the carried suffix-layer KV state used by write_step / read_state (needs a decoy / bg chain of read_state and a window composed from the three chains); (b) needs the state layout of the ttt SWA state, which is not in this repository checkout (e2e submodule)."""
 import numpy as np
 NW=8
-ARMS=['NAT','SWD','SWB','MSK','SWDS','SWDO','NATM','SENT','KMASK','SENTO']
+ARMS=['NAT','SWD','SWB','MSK','SWDS','SWDO','NATM','SENT','KMASK','SENTO','SENTPQ']
 def plan(arm,k,p):
     assert arm in ARMS and p>=1 and k>=0;out={}
     for j in range(1,NW+1):
         if k-j<0:continue
-        if arm in ('NAT','NATM','SENT','KMASK','SENTO'):src='real'      # SENT / KMASK: real window K,V; only the attention mask changes (token_masks)
+        if arm in ('NAT','NATM','SENT','KMASK','SENTO','SENTPQ'):src='real'      # SENT / KMASK: real window K,V; only the attention mask changes (token_masks)
         elif arm=='SWD':src='decoy'
         elif arm=='SWB':src='bg'
         elif arm=='MSK':src='mask'
@@ -34,10 +34,11 @@ def compose_window(src,k,pl,CH,seqlen=None,axis=0):
 def token_masks(arm,k,chunks,CH,nw=NW):
     """E55 design 19.2: attention-only masks of the sentence-level arms. chunks[c]['sents'] = [{'fact','start','end'}] (token positions inside chunk c). Key index j <-> absolute position k*CH-nw*CH+j (the window, nw*CH keys, then the current chunk, CH keys), as keep_vector.
     SENT : 1-D keep, every token of every fact sentence of the nw chunks BEFORE chunk k is hidden from every query; background and the sentences of the chunk being written stay visible.
+    SENTPQ: 2-D keep, convention control: a query token inside any fact sentence hides ALL earlier fact sentences of the window, background queries see everything (per-query version of SENT; E55 26.5).
     SENTO: 2-D keep, the complement of KMASK inside the sentence rows: a query token inside the sentence of fact f hides the earlier sentences of every OTHER fact in the window (its own earlier sentences stay visible); all other queries see everything (E55 design 26.4 (b)).
     KMASK: 2-D keep [CH, nw*CH+CH]; a query token inside the sentence of fact f of chunk k does not see the tokens of the EARLIER sentences of the same fact f inside the window; all other queries (background, other facts' sentences) see everything.
     -> (keep, n_masked_keys): n_masked_keys = hidden window tokens for SENT, hidden (query, key) fact pairs / query tokens for KMASK is reported as the number of distinct hidden key tokens"""
-    assert arm in ('SENT','KMASK','SENTO');W=nw*CH;lo=max(0,k-nw);hid=np.zeros(W+CH,bool)
+    assert arm in ('SENT','KMASK','SENTO','SENTPQ');W=nw*CH;lo=max(0,k-nw);hid=np.zeros(W+CH,bool)
     if arm=='SENT':
         keep=np.ones(W+CH,bool)
         for c in range(lo,k):
@@ -49,7 +50,7 @@ def token_masks(arm,k,chunks,CH,nw=NW):
         for c in range(lo,k):
             off=(c-k+nw)*CH
             for x in chunks[c]['sents']:
-                if (x['fact']==xq['fact'])==(arm=='KMASK'):keep[xq['start']:xq['end'],off+x['start']:off+x['end']]=False;hid[off+x['start']:off+x['end']]=True
+                if arm=='SENTPQ' or (x['fact']==xq['fact'])==(arm=='KMASK'):keep[xq['start']:xq['end'],off+x['start']:off+x['end']]=False;hid[off+x['start']:off+x['end']]=True
     return keep,int(hid.sum())
 def write_chunk(real_ids,k,CH):
     """the chunk that is written: always the real tokens, in every arm"""
