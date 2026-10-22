@@ -11,9 +11,9 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 import numpy as np,e49_stats as ES
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int,default=101);ap.add_argument('--epoch',type=int,default=4);ap.add_argument('--epochs',default=None,help='comma list of passes to read per cell (default: --epoch only); with several passes the cell names become <name>_p<epoch>');ap.add_argument('--cell',action='append',default=[]);ap.add_argument('--ref',default=None);ap.add_argument('--w0',action='store_true')
-    ap.add_argument('--analyze',action='store_true');ap.add_argument('--strict',action='store_true');ap.add_argument('--nboot',type=int,default=4000);ap.add_argument('--out',default=None,help='result directory (default ladder.OUT)');ap.add_argument('--tag',default='');a=ap.parse_args()
-    EPS=[int(x) for x in a.epochs.split(',')] if a.epochs else [a.epoch];nm=lambda n,ep:n if len(EPS)==1 else f'{n}_p{ep}'
-    cells=[c.split('=',1) for c in a.cell];names=[nm(n,ep) for n,_ in cells for ep in EPS]+(['W0'] if a.w0 else []);cellpre={nm(n,ep):(pre,ep) for n,pre in cells for ep in EPS}
+    ap.add_argument('--analyze',action='store_true');ap.add_argument('--w0-name',default='W0',help='result name of the untrained-model read (default W0; give another name, e.g. w1_W0, so an existing W0 result file of another world is neither reused nor overwritten)');ap.add_argument('--strict',action='store_true');ap.add_argument('--nboot',type=int,default=4000);ap.add_argument('--out',default=None,help='result directory (default ladder.OUT)');ap.add_argument('--tag',default='');a=ap.parse_args()
+    w0n=a.w0_name;EPS=[int(x) for x in a.epochs.split(',')] if a.epochs else [a.epoch];nm=lambda n,ep:n if len(EPS)==1 else f'{n}_p{ep}'
+    cells=[c.split('=',1) for c in a.cell];names=[nm(n,ep) for n,_ in cells for ep in EPS]+([w0n] if a.w0 else []);cellpre={nm(n,ep):(pre,ep) for n,pre in cells for ep in EPS}
     OUT=Path(a.out or os.environ.get('EXP07_OUT',Path(__file__).resolve().parents[2]/'experiments/exp07_write_ladder'))   # same default as ladder.OUT, without importing jax
     fn=lambda n:OUT/f'e49_cand_s{a.seed}_{n}.json'
     if not a.analyze:
@@ -28,7 +28,7 @@ def main():
         if miss:
             print('MISSING saved states / logs for',miss,flush=True)
             if a.strict:sys.exit(7)
-        todo=[nm(n,ep) for n,_ in cells for ep in EPS if (n,'A') not in miss and (n,'B') not in miss and not fn(nm(n,ep)).exists()]+(['W0'] if a.w0 and not fn('W0').exists() else [])
+        todo=[nm(n,ep) for n,_ in cells for ep in EPS if (n,'A') not in miss and (n,'B') not in miss and not fn(nm(n,ep)).exists()]+([w0n] if a.w0 and not fn(w0n).exists() else [])
         print('to read:',todo,'| already done:',[n for n in names if fn(n).exists()],flush=True)
         if todo:
             rt=Runtime();L=LD.Ladder(rt,a.seed,readout=True);T=L.T;w_=T.w
@@ -48,7 +48,7 @@ def main():
             t0=time.monotonic()
             for name in todo:
                 S={}
-                if name=='W0':S={'A':read(rt.base),'B':None};S['B']=S['A']   # untrained model: the worlds differ only in the stream, so both worlds read the same scores
+                if name==w0n:S={'A':read(rt.base),'B':None};S['B']=S['A']   # untrained model: the worlds differ only in the stream, so both worlds read the same scores
                 else:
                     pre,epn=cellpre[name]
                     for w in 'AB':
@@ -56,7 +56,7 @@ def main():
                         assert len(ent)==1,f'{name} world {w}: epoch {epn} state not found in the saved log ({[e.get("epoch") for e in log]})'
                         m=L.load_state(ent[0]['margins']['_file']);assert reuse._hash_pytree(m.inner_parameters())[0]==ent[0]['margins']['_hash'],'loaded weights differ from the streamed weights'
                         S[w]=read(m);print(name,w,'read',f'{time.monotonic()-t0:.0f}s',flush=True)
-                json.dump(ES.cell_record(name,places,gi,fi,pairs,S,{'epoch':(cellpre[name][1] if name!='W0' else 0),'cand_tokens':tl,'sec_total':time.monotonic()-t0}),open(fn(name),'w'))
+                json.dump(ES.cell_record(name,places,gi,fi,pairs,S,{'epoch':(cellpre[name][1] if name!=w0n else 0),'cand_tokens':tl,'sec_total':time.monotonic()-t0}),open(fn(name),'w'))
     recs=[json.load(open(fn(n))) for n in names if fn(n).exists()]
     if not recs:print('no result files');return
     ref=nm(a.ref,max(EPS)) if a.ref else recs[0]['cell']   # several passes: the reference is the reference cell at the last read pass
