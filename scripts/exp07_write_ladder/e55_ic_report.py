@@ -7,6 +7,7 @@ HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import e55_metrics as MT
 U=1/15;NB=10000
 ARMS=('NAT','KMASK','SENT');TAGS={'unique':'icu','shared64':'ics'}
+LAB={'unique':'low frame sharing (0.45x)','shared64':'shared64 frames (1.95x)'}       # labels in the report: 'unique' = every fact its own 64 frames, still 0.45 same-frame sentences of other facts per window
 def fact_g(rec,a,ctx):
     it=MT.rec_items(rec,a,ctx);m=MT._sel(rec,a,ctx);return np.asarray(it['G_rank'][m],float)*U
 def boot(x,seed=5):
@@ -30,9 +31,9 @@ def report(d,seed,apps=(16,32,64),ctxs=('out','in'),out=None,load=None):
                 for a in apps:
                     try:row.append(fmt(boot(fact_g(G[fr,ar],a,ctx))))
                     except Exception as e:row.append('n/a')
-                L.append(f'| {fr} | {ar} | '+' | '.join(row)+' |')
+                L.append(f'| {LAB[fr]} | {ar} | '+' | '.join(row)+' |')
         L+=['','paired differences (same facts):','','| contrast | '+' | '.join(f'a={a}' for a in apps)+' |','|---|'+'---|'*len(apps)]
-        cons=[(f'{fr}: {b}-{a_}',(fr,b),(fr,a_)) for fr in TAGS for a_,b in (('NAT','KMASK'),('NAT','SENT'),('KMASK','SENT'))]+[(f'{ar}: shared64-unique',('shared64',ar),('unique',ar)) for ar in ARMS]
+        cons=[(f'{LAB[fr]}: {b}-{a_}',(fr,b),(fr,a_)) for fr in TAGS for a_,b in (('NAT','KMASK'),('NAT','SENT'),('KMASK','SENT'))]+[(f'{ar}: shared64 - low frame sharing',('shared64',ar),('unique',ar)) for ar in ARMS]
         for nm,x,y in cons:
             if x not in G or y not in G:continue
             row=[]
@@ -44,7 +45,7 @@ def report(d,seed,apps=(16,32,64),ctxs=('out','in'),out=None,load=None):
     L+=['## write side (from the saved logs)','','| frames | arm | mean update norm | mean CE | clip fraction | mean hidden distinct window keys / chunk (share of the 8192 window) |','|---|---|---|---|---|---|']
     for (fr,ar),r in S.items():
         lg=r['log'];nm=np.mean([e.get('n_masked_keys',0) for e in lg[8:]]) if len(lg)>8 else 0.0
-        L.append(f"| {fr} | {ar} | {np.mean([e['update_norm'] for e in lg]):.4g} | {np.mean([e['ce'] for e in lg]):.3f} | {r.get('clip_bind_frac',float('nan')):.2f} | {nm:.0f} ({100*nm/8192:.1f}%) |")
+        L.append(f"| {LAB[fr]} | {ar} | {np.mean([e['update_norm'] for e in lg]):.4g} | {np.mean([e['ce'] for e in lg]):.3f} | {r.get('clip_bind_frac',float('nan')):.2f} | {nm:.0f} ({100*nm/8192:.1f}%) |")
     L+=['','KMASK hides the same distinct keys as SENT but only from the 1/16 of the query tokens that sit inside the sentence of the same fact (see e55_swap.token_masks); the mean number of hidden keys per fact-sentence query token is about 1/16 of the SENT count x 1 sentence.']
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
@@ -60,7 +61,7 @@ def selftest():
         data={(tg,ar):{'g':base+(0.5*i if ar!='NAT' else 0)} for tg in TAGS.values() for i,ar in enumerate(ARMS)}
         ld=lambda f:data[(Path(f).name.split('_')[1],Path(f).name.split('_')[2])]
         for (tg,ar) in data:(d/f'E55_{tg}_{ar}_s61.read.json').write_text('{}')
-        t=report(d,61,load=ld);assert 'KMASK-NAT' in t and 'shared64-unique' in t and 'NAT' in t
+        t=report(d,61,load=ld);assert 'KMASK-NAT' in t and 'shared64 - low frame sharing' in t and 'low frame sharing (0.45x)' in t and 'NAT' in t
         x=fact_g({'g':np.array([15.0]*16)},16,'out') if False else None
     finally:MT.rec_items,MT._sel=orig
     print('e55_ic_report SELFTEST OK')
