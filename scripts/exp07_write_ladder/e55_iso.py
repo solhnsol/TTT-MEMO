@@ -52,7 +52,7 @@ def iso_rows(world,enc,seed,apps):
 def cum_target(norms):
     """T[a] = sum of the first a per-chunk update norms of the NAT run (T[0] = 0)"""
     return np.concatenate([[0.0],np.cumsum(np.asarray(norms,float))])
-def iso_run(L,rt,segs,T=None,read=None,eos=None,log=print,smoke_steps=None,weights0=None):
+def iso_run(L,rt,segs,T=None,read=None,eos=None,log=print,smoke_steps=None,weights0=None,read_at=None):
     """-> {'log': per step dicts, 'reads': {a1: read(a1, m) result}, 'cum_update_norm': {a1: ...}, 'model': final weights}. T = cum_target of the NAT run (None: no matching, raw SGD steps)."""
     packing=LD.packing;clone_state=LD.clone_state;W=int(rt.cfg.model.sliding_window_size);m=weights0 if weights0 is not None else rt.base;st_all=clone_state(rt.state_all);out={'log':[],'reads':{},'cum_update_norm':{}};cum=0.0;eos=rt.eos if eos is None else eos
     with rt.mesh:
@@ -70,5 +70,44 @@ def iso_run(L,rt,segs,T=None,read=None,eos=None,log=print,smoke_steps=None,weigh
                 un=L.norm_between(newp,m);m=L.set_inner(m,newp);cum+=un;seg_cum+=un
                 out['log'].append({'a0':a0,'a1':a1,'step':j,'rows_in_chunk':int(seg.max())+1,'grad_norm':float(gn),'clip_coef':float(coef),'ce':float(ce),'raw_update_norm':raw,'scale':s,'update_norm':un,'cum_update_norm':cum,'sec':time.monotonic()-t0})
             out['cum_update_norm'][a1]=cum;log(f'  ISO segment ({a0},{a1}]: {J} packed chunks, {len(rows)} rows, update norm {seg_cum:.4g}'+('' if T is None else f' (NAT target {T[a1]-T[a0]:.4g})'))
-            if read is not None:out['reads'][a1]=read(a1,m)
+            if read is not None and (read_at is None or a1 in read_at):out['reads'][a1]=read(a1,m)
     out['model']=m;return out
+
+def rows_bg(world):
+    """E55 design 24.3 (a) ISO+background (ISOB): per exposure round r ONE segment holding the tokens of stream chunk r itself (fact sentences AND the non-repeating background of that chunk), cut into isolated rows: every fact sentence is a row, every run of background tokens between sentences is a row (no row sees another; positions restart per row). The rows concatenated are exactly the 1024 tokens of the chunk, so they pack into exactly one chunk per round (128 steps, the same text, the same fact share 31-37% as the online stream, the same loss tokens up to one per row). -> segments (a0, a1, rows, texts)"""
+    segs=[];A_=world['chunks'];sep=len(world['sep'])
+    for r,c in enumerate(A_):
+        ids=list(c['ids']);cuts=[0];
+        for x in sorted(c['sents'],key=lambda x:x['start']):cuts+=[x['start'],x['end']]
+        cuts=sorted(set(cuts+[len(ids)]));rows=[(ids[a:b],(0,b-a-1)) for a,b in zip(cuts,cuts[1:]) if b>a];assert sum(len(x[0]) for x in rows)==len(ids)==1024
+        segs.append((r,r+1,rows,[]))
+    return segs
+def rows_density(world,enc,seed):
+    """(c) ISO-density (ISOD): per exposure round r ONE segment with the 16 sentences of round r as isolated rows ('\\n\\n' + sentence, loss on their tokens only, shuffled within the round), one chunk (about 400 tokens, rest padding) per round = 128 steps."""
+    segs=[]
+    for r,c in enumerate(world['chunks']):
+        sents=[x['text'] for x in c['sents']];random.Random(f'E55isod|{world["seed"]}|{seed}|{r}').shuffle(sents);rows=[]
+        for t in sents:ids=enc('\n\n'+t);rows.append((ids,(0,len(ids)-1)))
+        segs.append((r,r+1,rows,sents))
+    return segs
+def bigstep_targets(norms,segs_iso,apps):
+    """(b) NAT-bigstep (NATB): per-chunk update-norm targets of the NAT stream = NAT norm x (chunks of the segment / packed ISO steps of the segment) for the segment (a0, a1] that contains the chunk, i.e. every chunk step gets the size of one stage-0 ISO step of its segment (the ISO steps are the NAT segment norm spread over fewer steps). segs_iso = iso_rows segments of stage 0 (same apps)."""
+    packing=LD.packing;t=np.asarray(norms,float).copy()
+    for a0,a1,rows,_ in segs_iso:
+        J=len(packing.pack_rows(rows)[0]);t[a0:a1]*= (a1-a0)/J
+    return t
+
+def fos_stream(segs,pad_ids):
+    """(d) fact-only stream (FOS): the isolated rows of stage-0 segments concatenated as ORDINARY continuous text (no isolation, the SWA window of the previous 8 chunks is present, the write path of the online stream), each segment padded with `pad_ids` ('\\n\\n' tokens) to a multiple of 1024 tokens so that a read point falls on a chunk boundary (at most 1023 pad tokens per segment). -> (ids, chunk index of the last chunk of each segment, tokens of pad)"""
+    ids=[];ends=[];pad=0
+    for a0,a1,rows,_ in segs:
+        for r,_ab in rows:ids+=list(r)
+        while len(ids)%1024:ids.append(pad_ids[pad%len(pad_ids)]);pad+=1
+        ends.append(len(ids)//1024-1)
+    return np.asarray(ids,np.int64),ends,pad
+def fos_targets(T,segs,ends):
+    """per-chunk norm targets of FOS: the NAT cumulative increment of the segment spread equally over the segment's chunks (cumulative norm at the read points == NAT's, as stage 0)"""
+    t=[];s0=0
+    for (a0,a1,_r,_t),e in zip(segs,ends):
+        n=e-s0+1;t+=[(T[a1]-T[a0])/n]*n;s0=e+1
+    return np.asarray(t)

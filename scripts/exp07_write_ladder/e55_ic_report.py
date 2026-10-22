@@ -83,6 +83,11 @@ def selftest():
             r2=rec(2.0);(dd/f'E55_ft_{ar}_lr0.0001_s61_ep{ep}.pc.read.json').write_text(json.dumps({**r2,'read':{'64':r2['read']['16']},'W0':{'out':r2['W0']['out'],'in_g0@64':r2['W0']['in_g0@16']}}))
     ERR.clear();t=ft_report(dd,'ft',61,[1e-4],2,arms=('FT-NAT','FT-ISO'));assert 'u pc' in t and 'n/a |' in t.replace('| n/a | n/a','|') or True
     assert t.count('n/a')==2,t
+    d3=Path(tempfile.mkdtemp())
+    for sd in (61,62):
+        for ar,tg in (('NAT','v3a'),('ISO','iso'),('ISOB','dc'),('ISOD','dc'),('NATB','dc'),('FOS','dc')):
+            r_=rec(1.0);(d3/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (64,128)}}))
+    ERR.clear();t=decomp_report(d3,[61,62]);assert 'FOS - ISO' in t and 'n/a' not in t,t
     print('e55_ic_report SELFTEST OK')
 def rep_report(d,seeds,tag='icr',apps=(16,32,64),out=None,load=None):
     """E55 design 21.2 (shared16rep: 16 shared frames, 4 laps, repeats of (fact, frame) allowed at gap 16): arms NAT and SENT, seeds 61-63; per seed and pooled over seeds (facts of all seeds, fact bootstrap): u of NAT, SENT and the paired difference SENT - NAT, out-of-window and in-window. Exploratory; per-seed signs are listed because three seeds cannot carry seed-level significance."""
@@ -153,6 +158,32 @@ def ft_report(d,tag,seed,lrs,epochs,arms=('FT-NAT','FT-MASK','FT-ISO'),out=None,
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
     return t
+def decomp_report(d,seeds,tag='dc',nat_tag='v3a',iso_tag='iso',apps=(64,128),out=None,load=None):
+    """E55 design 24.3: u (W0 subtracted, out-of-window) at a = 64, 128 of NAT (job 181), ISO (job 185, norm matched), ISOB (ISO + the stream's own background, 128 steps), ISOD (isolated sentences, one round per chunk, 128 steps), NATB (NAT with the window, ISO-sized steps), FOS (fact-only continuous stream with the SWA window); per seed and pooled, with paired differences to NAT and the decomposition contrasts (ISOB - ISO: background, ISOD - ISO: step density, NATB - NAT: step size, FOS - ISO: window shadowing inside the ISO setup)."""
+    load=load or (lambda f:json.load(open(f)));tags={'NAT':nat_tag,'ISO':iso_tag,'ISOB':tag,'ISOD':tag,'NATB':tag,'FOS':tag};G={}
+    for sd in seeds:
+        for ar,tg in tags.items():
+            f=Path(d)/f'E55_{tg}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,ar]=load(f)
+    L=[f'# E55 decomposition report (design 24.3), seeds {list(seeds)}','','u = (W0 rank - rank)/15, out-of-window read, question frames never seen; mean over facts, 95% fact-bootstrap CI; exploratory. ISO from job 185 uses read segments 16/32/64/128, the arms here use 64/128 (the packing of the ISO steps differs slightly).','','| seed | arm | '+' | '.join(f'a={a}' for a in apps)+' |','|---|---|'+'---|'*len(apps)]
+    def cellf(fn,use,a):
+        try:return fmt(boot(np.concatenate([fn(s_) for s_ in use])))
+        except Exception as e:ERR.append(repr(e));return 'n/a'
+    for sd in list(seeds)+['pooled']:
+        use=[s_ for s_ in seeds if sd=='pooled' or s_==sd]
+        for ar in tags:
+            L.append(f'| {sd} | {ar} | '+' | '.join(cellf(lambda s_,ar=ar,a=a:fact_g(G[s_,ar],a,'out'),[s_ for s_ in use if (s_,ar) in G],a) for a in apps)+' |')
+    L+=['','paired contrasts (pooled over seeds, same facts):','','| contrast | meaning | '+' | '.join(f'a={a}' for a in apps)+' |','|---|---|'+'---|'*len(apps)]
+    for nm,mean,x,y in (('ISOB - ISO','background added to isolated rows (128 steps, matched norm)','ISOB','ISO'),('ISOD - ISO','step density (128 isolated one-round steps vs ISO steps)','ISOD','ISO'),('NATB - NAT','larger steps in the online stream','NATB','NAT'),('FOS - ISO','removing isolation inside the ISO setup (window present = shadowing share)','FOS','ISO'),('ISOB - NAT','isolation only (same text, same steps, same norm)','ISOB','NAT'),('ISO - NAT','stage 0','ISO','NAT')):
+        row=[]
+        for a in apps:
+            use=[s_ for s_ in seeds if (s_,x) in G and (s_,y) in G]
+            row.append(cellf(lambda s_,x=x,y=y,a=a:fact_g(G[s_,x],a,'out')-fact_g(G[s_,y],a,'out'),use,a))
+        L.append(f'| {nm} | {mean} | '+' | '.join(row)+' |')
+    if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:3]}']
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
 if __name__=='__main__':
     import sys as _s
     if '--iso' in _s.argv:
@@ -161,6 +192,8 @@ if __name__=='__main__':
         _s.argv.remove('--ft');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--tag');ap.add_argument('--seed',type=int);ap.add_argument('--lrs',default=None);ap.add_argument('--arm-lrs',default=None);ap.add_argument('--epochs',type=int,default=4);ap.add_argument('--out');a=ap.parse_args();L_={}
         for x in (a.arm_lrs.split(',') if a.arm_lrs else []):L_.setdefault(x.split(':')[0],[]).append(float(x.split(':')[1]))
         print(ft_report(a.dir,a.tag,a.seed,L_ if a.arm_lrs else [float(x) for x in a.lrs.split(',')],a.epochs,out=a.out));_s.exit(0)
+    if '--decomp' in _s.argv:
+        _s.argv.remove('--decomp');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');a=ap.parse_args();print(decomp_report(a.dir,[int(x) for x in a.seeds.split(',')],out=a.out));_s.exit(0)
     if '--rep' in _s.argv:
         _s.argv.remove('--rep');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='icr');a=ap.parse_args();print(rep_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--dir');ap.add_argument('--seed',type=int,default=61);ap.add_argument('--out');a=ap.parse_args()
