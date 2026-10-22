@@ -85,9 +85,9 @@ def selftest():
     assert t.count('n/a')==2,t
     d3=Path(tempfile.mkdtemp())
     for sd in (61,62):
-        for ar,tg in (('NAT','v3a'),('ISO','iso'),('ISOB','dc'),('ISOD','dc'),('NATB','dc'),('FOS','dc')):
+        for ar,tg in (('NAT','v3a'),('ISO','iso'),('ISOB','dc'),('ISOD','dc'),('NATB','dc'),('FOS','dc'),('SENT','dc')):
             r_=rec(1.0);(d3/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (64,128)}}))
-    ERR.clear();t=decomp_report(d3,[61,62]);assert 'FOS - ISO' in t and 'n/a' not in t,t
+    ERR.clear();t=decomp_report(d3,[61,62]);assert 'SENT - ISOB' in t;assert 'FOS - ISO' in t and 'n/a' not in t,t
     print('e55_ic_report SELFTEST OK')
 def rep_report(d,seeds,tag='icr',apps=(16,32,64),out=None,load=None):
     """E55 design 21.2 (shared16rep: 16 shared frames, 4 laps, repeats of (fact, frame) allowed at gap 16): arms NAT and SENT, seeds 61-63; per seed and pooled over seeds (facts of all seeds, fact bootstrap): u of NAT, SENT and the paired difference SENT - NAT, out-of-window and in-window. Exploratory; per-seed signs are listed because three seeds cannot carry seed-level significance."""
@@ -160,7 +160,7 @@ def ft_report(d,tag,seed,lrs,epochs,arms=('FT-NAT','FT-MASK','FT-ISO'),out=None,
     return t
 def decomp_report(d,seeds,tag='dc',nat_tag='v3a',iso_tag='iso',apps=(64,128),out=None,load=None):
     """E55 design 24.3: u (W0 subtracted, out-of-window) at a = 64, 128 of NAT (job 181), ISO (job 185, norm matched), ISOB (ISO + the stream's own background, 128 steps), ISOD (isolated sentences, one round per chunk, 128 steps), NATB (NAT with the window, ISO-sized steps), FOS (fact-only continuous stream with the SWA window); per seed and pooled, with paired differences to NAT and the decomposition contrasts (ISOB - ISO: background, ISOD - ISO: step density, NATB - NAT: step size, FOS - ISO: window shadowing inside the ISO setup)."""
-    load=load or (lambda f:json.load(open(f)));tags={'NAT':nat_tag,'ISO':iso_tag,'ISOB':tag,'ISOD':tag,'NATB':tag,'FOS':tag};G={}
+    load=load or (lambda f:json.load(open(f)));tags={'NAT':nat_tag,'ISO':iso_tag,'ISOB':tag,'ISOD':tag,'NATB':tag,'FOS':tag,'SENT':tag};G={}
     for sd in seeds:
         for ar,tg in tags.items():
             f=Path(d)/f'E55_{tg}_{ar}_s{sd}.read.json'
@@ -174,7 +174,7 @@ def decomp_report(d,seeds,tag='dc',nat_tag='v3a',iso_tag='iso',apps=(64,128),out
         for ar in tags:
             L.append(f'| {sd} | {ar} | '+' | '.join(cellf(lambda s_,ar=ar,a=a:fact_g(G[s_,ar],a,'out'),[s_ for s_ in use if (s_,ar) in G],a) for a in apps)+' |')
     L+=['','paired contrasts (pooled over seeds, same facts):','','| contrast | meaning | '+' | '.join(f'a={a}' for a in apps)+' |','|---|---|'+'---|'*len(apps)]
-    for nm,mean,x,y in (('ISOB - ISO','background added to isolated rows (128 steps, matched norm)','ISOB','ISO'),('ISOD - ISO','step density (128 isolated one-round steps vs ISO steps)','ISOD','ISO'),('NATB - NAT','larger steps in the online stream','NATB','NAT'),('FOS - ISO','removing isolation inside the ISO setup (window present = shadowing share)','FOS','ISO'),('ISOB - NAT','isolation only (same text, same steps, same norm)','ISOB','NAT'),('ISO - NAT','stage 0','ISO','NAT')):
+    for nm,mean,x,y in (('ISOB - ISO','background added to isolated rows (128 steps, matched norm)','ISOB','ISO'),('ISOD - ISO','step density (128 isolated one-round steps vs ISO steps)','ISOD','ISO'),('NATB - NAT','larger steps in the online stream','NATB','NAT'),('FOS - ISO','removing isolation inside the ISO setup (window present = shadowing share)','FOS','ISO'),('ISOB - NAT','isolation only (same text, same steps, same norm)','ISOB','NAT'),('ISO - NAT','stage 0','ISO','NAT'),('SENT - NAT','online stream with earlier fact sentences hidden (window present)','SENT','NAT'),('SENT - ISOB','window + masking vs isolation, same text and steps','SENT','ISOB'),('SENT - ISO','masking in the window vs isolated rows','SENT','ISO')):
         row=[]
         for a in apps:
             use=[s_ for s_ in seeds if (s_,x) in G and (s_,y) in G]
