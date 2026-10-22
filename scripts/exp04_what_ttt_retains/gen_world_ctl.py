@@ -92,13 +92,33 @@ def pool_report(enc):
         for n in pool:c[nt(n)]=c.get(nt(n),0)+1
         out[nm]=dict(sorted(c.items()))
     return out
-def _alloc(seed,N,enc,decoy=True):
+def _contexts(bank):
+    """distinct local contexts in which a person's name appears in the bank frames (<=3 words before, <=3 after; a frame that starts with the name gives a context with an empty left side)"""
+    import re as _re
+    out=set()
+    for f in bank:
+        if '{X}' not in f:continue
+        pre,post=f.split('{X}',1)[0],f.split('{X}',1)[1]
+        pre=' '.join(pre.split(' ')[-4:]) if pre and pre.strip() else pre;post=' '.join(post.split(' ')[:4])
+        out.add(_re.sub(r'\{\w+\}','Aldmere',pre)+'{N}'+_re.sub(r'\{\w+\}','Aldmere',post))
+    return sorted(out)
+def _alloc(seed,N,enc,decoy=True,bank=None):
+    """names / places with one token length in the modal class (counted with a leading space as mid-sentence). Persons are additionally PAIRED (names[2j], names[2j+1]) so that both names of a pair give the same token length in every local context of the frame bank (a name at the very start of a sentence has no leading space and can tokenise differently): world B swaps the two names of a pair and must keep every sentence length."""
     nt=lambda s:len(enc(' '+s));need=2*N+2*NCTRL_PAIRS+(2*N if decoy else 0);res={}
     for what,pool in (('persons',[a+b for a in SYL1X for b in SYL2X]),('places',[a+b for a in PL_PREX for b in PL_SUFX])):
         byl={}
         for n in sorted(set(pool)):byl.setdefault(nt(n),[]).append(n)
         L=max(byl,key=lambda k:len(byl[k]));cls=byl[L][:];assert len(cls)>=need,(what,'token length',L,'class size',len(cls),'need',need,{k:len(v) for k,v in sorted(byl.items())},'extend the E55 pools')
-        random.Random(f'E55|{seed}|{what}').shuffle(cls);res[what]=(cls[:need],L)
+        if what=='persons' and bank is not None:
+            cx=_contexts(bank);sig={n:tuple(len(enc(m.replace('{N}',n))) for m in cx) for n in cls};g={}
+            for n in cls:g.setdefault(sig[n],[]).append(n)
+            r=random.Random(f'E55|{seed}|pairs');pairs=[]
+            for k in sorted(g):
+                v=g[k][:];r.shuffle(v);pairs+=[(v[i],v[i+1]) for i in range(0,len(v)-1,2)]
+            assert len(pairs)>=need//2,('persons: not enough sentence-length-compatible name pairs',len(pairs),'need',need//2,'signature classes',sorted(len(v) for v in g.values()),'contexts',len(cx))
+            r.shuffle(pairs);cls=[x for pr in pairs[:need//2] for x in pr]
+        else:random.Random(f'E55|{seed}|{what}').shuffle(cls)
+        res[what]=(cls[:need],L)
     return res
 def frame_bank(kind,seed,N,need):
     """-> (bank list, owner function pair -> list of frame indices or None for shared banks). need = n_app x s frames per person."""
@@ -156,8 +176,8 @@ def _stream(persons,N,M,s,p,n_app,bank,enc,bg,seed,tag,sep):
 def build_ctl_world(seed,M,s,p,n_app=16,bank='50',enc=None,bg=None,decoy=True):
     """bg: list of background paragraphs (str, >= 2 x the paragraphs needed); enc: text -> ids. Returns the world dict (JSON-able except nothing is tokenized lazily: pieces carry token ids of background and token counts of sentences)."""
     assert enc is not None and bg is not None and M%2==0 and p>=1 and s>=1;N=M*p;need=n_app*s
-    al=_alloc(seed,N,enc,decoy);P_,Lp=al['persons'];L_,Ll=al['places'];sep=enc('\n\n')
     bk,owner=frame_bank(bank,seed,N,need)
+    al=_alloc(seed,N,enc,decoy,bk);P_,Lp=al['persons'];L_,Ll=al['places'];sep=enc('\n\n')
     persons=_make_persons(P_[:2*N],L_[:2*N],seed,N,'real',bank,bk,owner,s,n_app)
     ctrl=[{'id':2*N+i,'pair':f'c{i//2}','X':P_[2*N+i],'P':L_[2*N+i],'o':random.Random(f'E55|{seed}|cocc|{i}').choice(OCC)} for i in range(2*NCTRL_PAIRS)]
     half=len(bg)//2;w={'seed':seed,'M':M,'s':s,'p':p,'n_app':n_app,'bank_kind':bank,'N':N,'n_chunks':n_app*p,'name_len':Lp,'place_len':Ll,'bank':bk,'persons':persons,'ctrl':ctrl,'read_chunks':[a*p-1 for a in READ_APPS if a<=n_app],'sep':sep}

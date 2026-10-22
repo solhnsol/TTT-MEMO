@@ -16,7 +16,7 @@ def item_vals(SA,SB,gi,fi):
     out={}
     for w,S in (('A',SA),('B',SB)):
         S=np.asarray(S,float);m=ES.item_metrics(S,gi,fi,w);tg=gi if w=='A' else fi;r=np.arange(len(S))
-        out[w]={'P1':S[r,tg]-S.mean(1),'P2':m['top1'],'rank':m['rank'],'p_norm':m['p_norm'],'mass_partner':m['mass_partner'],'abs_lp':m['abs_lp']}
+        out[w]={'P1':S[r,tg]-S.mean(1),'P2':m['top1'],'rank':m['rank'],'p_norm':m['p_norm'],'mass_partner':m['mass_partner'],'abs_lp':m['abs_lp'],'PM3':S[r,tg]-(S.sum(1)-S[r,tg])/(S.shape[1]-1)}
     return {k:(out['A'][k]+out['B'][k])/2 for k in out['A']}
 def pair_vec(vals,meta,metric,mask=None):
     kind=np.asarray(meta['kind']);sel=(kind=='exposed') if mask is None else ((kind=='exposed')&np.asarray(mask))
@@ -32,7 +32,7 @@ def change_vec(rec,a,ctx,metric,mask=None):
     v=read_vals(rec,a,ctx);v0=w0_vals(rec,ctx,a);d={k:v[k]-v0[k] for k in v};return pair_vec(d,rec['meta'],metric,mask)
 def cat(recs,fn):return np.concatenate([fn(r) for r in recs])
 def cell_row(recs,a=16,ctx='out'):
-    return {m:_ci(cat(recs,lambda r:change_vec(r,a,ctx,m))) for m in ('P1','P2','rank','p_norm','mass_partner','abs_lp')}
+    return {m:_ci(cat(recs,lambda r:change_vec(r,a,ctx,m))) for m in ('P1','P2','PM3','rank','p_norm','mass_partner','abs_lp')}
 def contrast(recs_x,recs_y,a=16,ctx='out',metric='P2',ctx_y=None,a_y=None):
     """pair-level paired difference X - Y of the change-vs-W0 metric (same worlds: records of the same seeds in the same order)"""
     dx=cat(recs_x,lambda r:change_vec(r,a,ctx,metric));dy=cat(recs_y,lambda r:change_vec(r,a_y or a,ctx_y or ctx,metric));assert dx.shape==dy.shape;return _ci(dx-dy)
@@ -59,25 +59,23 @@ def rule6(nat,swd,swds,a=16):
     tot=contrast(swd,nat,a,metric='P2')[0];part=contrast(swds,nat,a,metric='P2')[0]
     if abs(tot)<1e-9:return {'share':None,'class':'no total effect'}
     sh=part/tot;return {'share':sh,'class':'same-fact chunks carry most' if sh>=0.7 else ('other-pair context carries most' if sh<=0.3 else 'not classified (value only)')}
-def rule9(w,a=16,ctxs=('in_e0','in_e1','in_e3','in_e7')):
-    """w: records of one state (NAT cell), the W0 in-window read is rec['W0'][ctx]. Bins by the information distance d (rec['meta']['d'][a][ctx], None = control / not yet appeared)."""
-    out={'W0_d1_top1':None,'bins':{}}
-    for ctx in ctxs:
-        for rec in w:
-            if ctx not in rec['meta']['d'][str(a)]:continue
-            d=rec['meta']['d'][str(a)][ctx];d_=np.asarray([x if x is not None else 0 for x in d])
-            for b,(lo,hi) in {'1':(1,1),'2':(2,2),'3-4':(3,4),'5-8':(5,8),'inf':(9,10**6)}.items():
-                m_=(d_>=lo)&(d_<=hi)
-                if m_.sum()==0:continue
-                vw=read_vals(rec,a,ctx);vout=read_vals(rec,a,'out');v0=w0_vals(rec,ctx,a)
-                ent=out['bins'].setdefault((ctx,b),{'n_items':int(m_.sum()),'W_in':[], 'W_out':[],'W0_in':[]})
-                ent['W_in'].append(pair_vec(vw,rec['meta'],'P2',m_));ent['W0_in'].append(pair_vec(v0,rec['meta'],'P2',m_));ent['W_out'].append(pair_vec(vout,rec['meta'],'P2',m_))
-    res={}
-    for k,e in out['bins'].items():
-        wi,w0,wo=(np.concatenate(e[x]) for x in ('W_in','W0_in','W_out'));res[k]={'n_items':e['n_items'],'top1_W_in':_ci(wi),'top1_W0_in':_ci(w0),'top1_W_out':_ci(wo),'exit_drop_W_in_minus_out':_ci(wi-wo),'write_share_W_in_minus_W0_in':_ci(wi-w0)}
-    d1=[v for (c,b),v in res.items() if b=='1']
-    res['check_i_W0_d1_top1']=float(np.mean([v['top1_W0_in'][0] for v in d1])) if d1 else None
-    res['interpretable']=(res['check_i_W0_d1_top1'] is not None and res['check_i_W0_d1_top1']>=CHANCE+0.20)
+def rule9(w,a=16):
+    """window readout of one cell (corrected design 14:40 KST): the in-window read of every exposed item is taken in its own group's context, so d = p for the whole cell (rec['meta']['d'][a]['in'], None = control). Per cell: P2 / P1 in the window (W), out of the window (W, neutral tail), in the window at W0; exit drop = in - out, write share = W in - W0 in. (i) W0 check: only meaningful where d = 1 (the p = 1 cell): W0 in-window top-1 >= chance + 0.20. Distance curve = the cells' values across p (d = p)."""
+    acc={'P2':{'W_in':[],'W0_in':[],'W_out':[]},'P1':{'W_in':[],'W0_in':[],'W_out':[]}};dset=set()
+    for rec in w:
+        key=str(a)
+        if 'in' not in rec['read'].get(key,{}):continue
+        d=rec['meta']['d'][key]['in'];m_=np.asarray([x is not None for x in d]);dset|={x for x in d if x is not None}
+        vw=read_vals(rec,a,'in');vout=read_vals(rec,a,'out');v0=w0_vals(rec,'in',a)
+        for met in acc:
+            acc[met]['W_in'].append(pair_vec(vw,rec['meta'],met,m_));acc[met]['W0_in'].append(pair_vec(v0,rec['meta'],met,m_));acc[met]['W_out'].append(pair_vec(vout,rec['meta'],met,m_))
+    if not dset:return {'d':None}
+    assert len(dset)==1,('mixed distances in one cell',dset);res={'d':dset.pop()}
+    for met,e in acc.items():
+        wi,w0,wo=(np.concatenate(e[x]) for x in ('W_in','W0_in','W_out'))
+        res[met]={'W_in':_ci(wi),'W0_in':_ci(w0),'W_out':_ci(wo),'exit_drop_W_in_minus_out':_ci(wi-wo),'write_share_W_in_minus_W0_in':_ci(wi-w0)}
+    res['check_i_W0_top1']=res['P2']['W0_in'][0] if res['d']==1 else None
+    res['interpretable']=(res['check_i_W0_top1']>=CHANCE+0.20) if res['d']==1 else None
     return res
 def fmt_row(name,row):
     return f'| {name} | '+' | '.join('%+.3f [%+.3f, %+.3f]'%row[m] for m in ('P1','P2','rank','p_norm','mass_partner','abs_lp'))+' |'
@@ -99,11 +97,13 @@ def _rec(N,rng,signal=0.0,seed=0,with_d=False,inwin=0.0):
     W0={'out':rng.normal(size=(n,16))};rec={'meta':meta,'W0':W0,'read':{}}
     A,B=S(signal);rec['read']['16']={'out':{'A':A,'B':B}}
     if with_d:
-        d=[1+(i//2)%8 for i in range(2*N)]+[None]*8;meta['d']={'16':{'in_e0':d}}
-        W0['in_e0']=rng.normal(size=(n,16));W0['in_e0'][:2*N][np.arange(2*N),gi[:2*N]]+=np.array([inwin if x<=2 else 0 for x in d[:2*N]])
-        A,B=S(signal);A2=rng.normal(size=(n,16));B2=A2.copy()
-        for i in range(2*N):A2[i,gi[i]]+=inwin if d[i]<=2 else 0;B2[i,fi[i]]+=inwin if d[i]<=2 else 0
-        rec['read']['16']['in_e0']={'A':A2,'B':B2}
+        dd=with_d if isinstance(with_d,int) and with_d>1 else 1
+        d=[dd]*(2*N)+[None]*8;meta['d']={'16':{'in':d}}
+        W0['in@16']={'A':rng.normal(size=(n,16)),'B':rng.normal(size=(n,16))}
+        for i in range(2*N):W0['in@16']['A'][i,gi[i]]+=inwin if dd<=2 else 0;W0['in@16']['B'][i,fi[i]]+=inwin if dd<=2 else 0
+        A2=rng.normal(size=(n,16));B2=rng.normal(size=(n,16))
+        for i in range(2*N):A2[i,gi[i]]+=(inwin+signal) if dd<=2 else 0;B2[i,fi[i]]+=(inwin+signal) if dd<=2 else 0
+        rec['read']['16']['in']={'A':A2,'B':B2}
     return rec
 def selftest():
     rng=np.random.default_rng(1);N=16
@@ -116,8 +116,8 @@ def selftest():
     assert rule4({1:.4,2:.3,4:.2,9:.0})['monotone_nonincreasing'] and not rule4({1:.1,2:.3})['monotone_nonincreasing']
     msk=[_rec(N,rng,3.0,s) for s in range(3)];assert rule5(nat,swd,msk)['class']=='consistent'
     half=[_rec(N,rng,1.5,s) for s in range(3)];r6=rule6(nat,swd,half);assert r6['class'] in ('not classified (value only)','same-fact chunks carry most','other-pair context carries most') and 0.2<r6['share']<0.8
-    w=[_rec(N,rng,1.0,s,with_d=True,inwin=4.0) for s in range(3)];r9=rule9(w);assert r9['interpretable'] and ('in_e0','1') in r9
-    k=('in_e0','1');assert r9[k]['write_share_W_in_minus_W0_in'] is not None and r9[k]['n_items']>0
+    w=[_rec(N,rng,1.0,s,with_d=True,inwin=4.0) for s in range(3)];r9=rule9(w);assert r9['d']==1 and r9['interpretable'] and r9['P2']['exit_drop_W_in_minus_out'][0]>0.1 and r9['P2']['write_share_W_in_minus_W0_in'][1]<r9['P2']['write_share_W_in_minus_W0_in'][0]<r9['P2']['write_share_W_in_minus_W0_in'][2]
+    w9=[_rec(N,rng,0.0,s,with_d=9,inwin=4.0) for s in range(3)];r99=rule9(w9);assert r99['d']==9 and r99['interpretable'] is None and abs(r99['P2']['exit_drop_W_in_minus_out'][0])<0.15
     print(report({'NAT':nat,'SWD':swd,'SWD@p9':swd9}))
     print('e55_analyze SELFTEST OK (synthetic scores)')
 def stage0(nat_files,swd_files,a=16,out=None):
@@ -126,10 +126,11 @@ def stage0(nat_files,swd_files,a=16,out=None):
     if swd:r1=rule1(nat,swd,a);L.append(f'rule 1 (unreadable if BOTH cells have P2 < chance+0.03 and P1 CI contains 0): unreadable={r1["unreadable"]} per cell {r1["per_cell_unreadable"]}')
     for nm,r in (('NAT',nat),)+((('SWD',swd),) if swd else ()):x=rule2(r,a);L.append(f'rule 2 {nm}: binding present={x["binding"]}')
     if swd:x=rule3(nat,swd,a);L.append(f'rule 3 S = SWD - NAT: P2 {x["S_P2"][0]:+.3f} [{x["S_P2"][1]:+.3f}, {x["S_P2"][2]:+.3f}], P1 {x["S_P1"][0]:+.3f} [{x["S_P1"][1]:+.3f}, {x["S_P1"][2]:+.3f}] -> shadowing flag={x["shadowing"]}; negative control (|S|<=0.02 and CI contains 0)={x["negctrl_pass"]} (only meaningful for p=9)')
-    if all(str(a) in r['read'] and 'in_e0' in r['read'][str(a)] for r in nat):
-        x=rule9(nat,a);L.append('');L.append(f'rule 9 (window readout, NAT): W0 d=1 top-1 check = {x["check_i_W0_d1_top1"]} -> interpretable={x["interpretable"]}')
-        for k,v in x.items():
-            if isinstance(k,tuple):L.append(f'  {k[0]} d-bin {k[1]}: n_items {v["n_items"]}, top1 in-window {v["top1_W_in"][0]:.3f}, out-of-window {v["top1_W_out"][0]:.3f}, W0 in-window {v["top1_W0_in"][0]:.3f}, exit drop {v["exit_drop_W_in_minus_out"][0]:+.3f}, write share {v["write_share_W_in_minus_W0_in"][0]:+.3f}')
+    if all('in' in r['read'].get(str(a),{}) for r in nat):
+        x=rule9(nat,a);L.append('');L.append(f'rule 9 (window readout, NAT; every pair read in its own group context just before its next appearance, d = {x["d"]} chunks; d >= 9 = outside the 8-chunk window)')
+        for met in ('P2','P1'):
+            v=x[met];L.append(f'  {met}: in-window {v["W_in"][0]:+.3f} [{v["W_in"][1]:+.3f}, {v["W_in"][2]:+.3f}], out-of-window {v["W_out"][0]:+.3f}, W0 in-window {v["W0_in"][0]:+.3f}; exit drop (in - out) {v["exit_drop_W_in_minus_out"][0]:+.3f} [{v["exit_drop_W_in_minus_out"][1]:+.3f}, {v["exit_drop_W_in_minus_out"][2]:+.3f}]; write share (W in - W0 in) {v["write_share_W_in_minus_W0_in"][0]:+.3f} [{v["write_share_W_in_minus_W0_in"][1]:+.3f}, {v["write_share_W_in_minus_W0_in"][2]:+.3f}]')
+        L.append(f'  W0 check (only at d = 1): top-1 {x["check_i_W0_top1"]} -> interpretable={x["interpretable"]}')
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
     return t

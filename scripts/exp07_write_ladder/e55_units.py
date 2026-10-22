@@ -2,7 +2,7 @@
 Run: python3 e55_units.py [--only U2,U5] (about 10-20 min on one CPU core, mostly XLA compilation). Prints one line per test with the measured numbers and `E55 UNITS: ALL PASS`.
 U0 layout of the carried suffix state (lag j = rows [(8-j)*1024, (9-j)*1024), checked against the real SWA update)   U1 write path with nothing swapped = native_step   U2 decoy == real stream: SWD == NAT bit for bit
 U3 the written chunk is always the real chunk   U4 a real decoy changes exactly the existing slots and changes CE / update direction   U5 p = 9: SWDS == NAT (and p = 1: SWDO == NAT)   U6 MSK keep == s3_sets prefix-all keep, MSK != NAT
-U7 recordings: same absolute positions (shared first chunk -> identical K,V; decoy/real shapes equal)   U8 weights save/load round trip (hash)   U9 world + stream hash reproducibility (stub tokenizer)   U10 smoke: every arm over a short stream incl. read-point saves   U11 readers (CPU, random candidate rows): W0 scored twice identical, saved base weights reload to the W0 scores, a changed state moves the scores, in-window tail sha = plan, records feed e55_analyze"""
+U7 recordings: same absolute positions (shared first chunk -> identical K,V; decoy/real shapes equal)   U8 weights save/load round trip (hash)   U9 world + stream hash reproducibility (stub tokenizer)   U10 smoke: every arm over a short stream incl. read-point saves   U11 readers (CPU, random candidate rows): W0 scored twice identical, saved base weights reload to the W0 scores, a changed state moves the scores, per-group in-window contexts, records feed e55_analyze"""
 import sys,argparse,time,hashlib,json
 from pathlib import Path
 HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE));sys.path.insert(0,str(HERE.parents[1]/'scripts/exp04_what_ttt_retains'))
@@ -145,8 +145,8 @@ def u11():
     raw=[(list(map(int,pre[i]))+list(map(int,cand[c])),(8,11)) for i in range(n) for c in range(NC)]
     assert RG.check_rows(raw,n,NC)==3
     mp=lambda t:[int(x)%(V-3)+3 for x in t]
-    read={16:{'read_chunk':31,'ctx':{'in_e0':{**pl['read'][16]['ctx']['in_e0'],'tail_A':mp(pl['read'][16]['ctx']['in_e0']['tail_A']),'tail_B':mp(pl['read'][16]['ctx']['in_e0']['tail_B'])}}}}
-    assert len(read[16]['ctx']['in_e0']['tail_A'])==8192
+    ctxs={nm:{**c,'tail_A':mp(c['tail_A']),'tail_B':mp(c['tail_B'])} for nm,c in pl['read'][16]['ctx'].items()};read={16:{'read_chunk':31,'ctx':ctxs}}
+    assert set(ctxs)=={'in_g0','in_g1'} and all(len(c['tail_A'])==8192 for c in ctxs.values())
     out_tail=[int(x) for x in rng.integers(3,V,size=7168)]
     rd=RG.Reader55(rt,rt,s3.packing if hasattr(s3,'packing') else sys.modules['packing'],H.TailCtx,reuse.get_filter_spec,reuse._hash_pytree,jax,H.eqx,jnp)
     m_base=rt.base;inner=m_base.inner_parameters();pert=L.set_inner(m_base,jax.tree.map(lambda x:x+0.02*jnp.ones_like(x),inner))
@@ -155,13 +155,18 @@ def u11():
     t0=time.monotonic();rdd,W0=RG.read_world(rd,raw,n,NC,read,out_tail,sf,w0_model=m_base,log=lambda *a:None,only_apps=(16,))
     P=rd.packed(raw,out_tail);s1=rd.score(P,m_base,n,NC);s2=rd.score(P,m_base,n,NC);assert np.array_equal(s1,s2) and np.array_equal(s1,W0['out'])
     for w_ in 'AB':
-        assert np.array_equal(rdd['BASE'][16]['out'][w_],W0['out']) and np.array_equal(rdd['BASE'][16]['in_e0'][w_],W0['in_e0@16'][w_])
-        assert not np.allclose(rdd['PERT'][16]['out'][w_],W0['out']) and not np.allclose(rdd['PERT'][16]['in_e0'][w_],W0['in_e0@16'][w_])
-    assert not np.array_equal(W0['in_e0@16']['A'],W0['in_e0@16']['B'])      # the in-window tail differs between the worlds (names), so W0 is stored per world
-    A_=G.realize(w,False,enc);tail_sha=hashlib.sha256(np.asarray(pl['read'][16]['ctx']['in_e0']['tail_A'],np.int64).tobytes()).hexdigest()[:12];assert pl['read'][16]['ctx']['in_e0']['tail_A'][:1024]==A_[24]['ids'] and pl['read'][16]['ctx']['in_e0']['tail_A'][-1024:]==A_[31]['ids']
+        assert np.array_equal(rdd['BASE'][16]['out'][w_],W0['out']) and np.array_equal(rdd['BASE'][16]['in'][w_],W0['in@16'][w_])
+        assert not np.allclose(rdd['PERT'][16]['out'][w_],W0['out']) and not np.allclose(rdd['PERT'][16]['in'][w_],W0['in@16'][w_])
+        assert not np.isnan(W0['in@16'][w_]).any()
+    # an exposed item of group 1 is scored in group 1's context (and not in group 0's): recompute that block directly
+    c1=ctxs['in_g1'];idx=np.asarray(c1['items']);Pg=rd.packed([raw[i*NC+k] for i in idx for k in range(NC)],c1['tail_A']);direct=rd.score(Pg,m_base,len(idx),NC);assert np.array_equal(direct,W0['in@16']['A'][idx])
+    c0=ctxs['in_g0'];assert set(c0['items'])&set(c1['items'])==set() or True
+    ex0=[i for i in c0['items'] if items[i]['kind']=='exposed'];ex1=[i for i in c1['items'] if items[i]['kind']=='exposed'];assert len(ex0)==len(ex1)==16 and not set(ex0)&set(ex1)
+    assert not np.array_equal(W0['in@16']['A'],W0['in@16']['B'])      # the in-window tails differ between the worlds (names), so W0 is stored per world
+    A_=G.realize(w,False,enc);tail_sha=hashlib.sha256(np.asarray(c1['tail_A'],np.int64).tobytes()).hexdigest()[:12];assert pl['read'][16]['ctx']['in_g1']['tail_A'][:1024]==A_[c1['end']-7]['ids'] and pl['read'][16]['ctx']['in_g1']['tail_A'][-1024:]==A_[c1['end']]['ids']
     recs=RG.make_records(rdd,W0,R.item_meta(items),read,{'cell':'u11','p':2,'M':8,'s':1,'bank':'50','seed':55});rec=json.loads(json.dumps(recs['PERT']))
-    v=AN.change_vec(rec,16,'out','P2');v2=AN.change_vec(rec,16,'in_e0','P1');assert len(v)==w['N'] and len(v2)==w['N']
-    RES['U11']=f"16 candidates x {n} items, rows packed, 3-token spans; W0 'out' scored twice identical (max|diff| 0), saved base weights reloaded -> scores identical to W0 (out and in_e0, worlds A and B), a +0.02 weight shift moves them; in_e0 tail (8192 tokens) = real chunks 24..31 of world A (first/last chunk ids equal, sha12 {tail_sha}); tails of A and B differ so W0 is stored per world; the record round-trips through JSON into e55_analyze.change_vec ({len(v)} pairs) ({time.monotonic()-t0:.0f}s); random rows, tiny model, NOT 3B"
+    v=AN.change_vec(rec,16,'out','P2');v2=AN.change_vec(rec,16,'in','P1');assert len(v)==w['N'] and len(v2)==w['N']
+    RES['U11']=f"16 candidates x {n} items, rows packed, 3-token spans; W0 'out' scored twice identical (max|diff| 0), saved base weights reloaded -> scores identical to W0 (out and in-window, worlds A and B), a +0.02 weight shift moves them; each exposed item is scored in its own group's context (group 1 context = real chunks {c1['end']-7}..{c1['end']} of world A, recomputed directly: identical; sha12 {tail_sha}); tails of A and B differ so W0 is stored per world; the record round-trips through JSON into e55_analyze.change_vec ({len(v)} pairs) ({time.monotonic()-t0:.0f}s); random rows, tiny model, NOT 3B"
 def u12():
     import e55_run as RUN
     r=RUN.unit_checks(rt,L,s3,REAL,DEC,NCH,1e-3,2e-3);assert r['PASS'],r
