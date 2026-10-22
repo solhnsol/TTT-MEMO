@@ -370,8 +370,17 @@ def decomp(a):
             json.dump(r,open(OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json','w'),default=float);print('wrote',OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json',f'{time.monotonic()-t0:.0f}s',flush=True)
             # E55 29.5: drop the arm's buffers before the next arm and print the device memory (job 195: peak 55 GB earlier, 63.5 GB at the failing read)
             r=L=got=None;import gc;gc.collect()
-            try:ms=LD.jax.devices()[0].memory_stats();print(f'  [mem] after {ar} seed {sd}: in use {ms["bytes_in_use"]/2**30:.1f} GiB, peak {ms["peak_bytes_in_use"]/2**30:.1f} GiB',flush=True)
-            except Exception:pass
+            print(memline(LD,f'after {ar} seed {sd}'),flush=True)
+def memline(LD,tag):
+    """one '[mem] ...' line, never silent: jax memory_stats of device 0 (bytes in use / peak) or, when the backend gives none, nvidia-smi's used / total MiB, or the reason why not"""
+    try:
+        ms=LD.jax.devices()[0].memory_stats()
+        if ms and 'bytes_in_use' in ms:return f'  [mem] {tag}: in use {ms["bytes_in_use"]/2**30:.1f} GiB, peak {ms.get("peak_bytes_in_use",0)/2**30:.1f} GiB'
+        why='memory_stats() returned '+repr(ms)[:60]
+    except Exception as e:why='memory_stats() failed: '+repr(e)[:80]
+    try:
+        o=subprocess.run(['nvidia-smi','--query-gpu=memory.used,memory.total','--format=csv,noheader'],capture_output=True,text=True,timeout=20).stdout.strip().replace('\n',' | ');return f'  [mem] {tag}: nvidia-smi used,total {o} ({why})'
+    except Exception as e:return f'  [mem] {tag}: unavailable ({why}; nvidia-smi: {e!r})'
 def forbid_list(w):return [x['X'] for x in w['facts']+w['ctrl']]+[x['P'] for x in w['facts']]+list(w['unexposed'])+[x['X'] for k_ in ('names','decoy') if k_ in w for x in w[k_]['facts']]+[x['P'] for k_ in ('names','decoy') if k_ in w for x in w[k_]['facts']]
 def run(a):
     """stream the world ONCE per arm and seed; inline frozen-weight reads (design 11c) after the chunks of the seed's plan, states saved only at --save-apps. Weights, optimizer, carried KV window are never touched by a read (U15 checks bit-identity)."""
@@ -437,8 +446,7 @@ def run(a):
                 json.dump(r,open(fn,'w'));print('wrote',fn,f'{time.monotonic()-t0:.0f}s',flush=True)
                 # E55 29.5: drop the arm's buffers before the next arm and print the device memory (job 195: peak 55 GB earlier, 63.5 GB at the failing read)
                 import gc;gc.collect()
-                try:ms=LD.jax.devices()[0].memory_stats();print(f'  [mem] after {ar} seed {sd}: in use {ms["bytes_in_use"]/2**30:.1f} GiB, peak {ms["peak_bytes_in_use"]/2**30:.1f} GiB',flush=True)
-                except Exception:pass
+                print(memline(LD,f'after {ar} seed {sd}'),flush=True)
             us={}
             for ar in my:
                 f_=OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json'
