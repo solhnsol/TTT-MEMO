@@ -9,6 +9,7 @@
 # CPU-only dry run: git fetch origin claude/project-thread-rwhdac && git worktree add --detach /tmp/dry_e55s FETCH_HEAD && ln -s "$(pwd)/data" /tmp/dry_e55s/data && cd /tmp/dry_e55s && PY=/abs/path/python CPU_ONLY=1 bash scripts/exp07_write_ladder/jobs_proposed/180a_e55_seeds23_nat_swd.sh   (then git worktree remove --force /tmp/dry_e55s)
 # Queue position: after the running W1 / E52 / E54 jobs (file name 180).
 set -eo pipefail
+PY=$(readlink -f "$PY")   # the runner exports a relative PY (.venv/bin/python): resolve it BEFORE the cd below
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 case "$PY" in /*) ;; *) echo "PY must be an absolute path (got '$PY')"; exit 3;; esac
 D=scripts/exp07_write_ladder
