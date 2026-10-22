@@ -13,7 +13,7 @@ case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=9ccbd827f5a51664d58e1b59cb924e9705d694c8
+COMMIT=4acb3184c8aae606aa0544dc9577a8527ee7bab5
 FILES="$D/e55_run.py $D/e55_core.py $D/e55_gpu.py $D/e55_swap.py $D/e55_read.py $D/e55_analyze.py $D/e55_metrics.py $D/e55_ic_report.py $D/e55_iso.py $D/s3.py $D4/gen_facts.py $D4/gen_world_ctl.py $D4/frame_bank.py $D/e55_gates.py $D4/frames300.txt"
 LADDER_OK="714b08ea3b90"
 S3_OLD="a16e6dd0d4c9"
@@ -32,14 +32,14 @@ if [ -z "$SKIP_VERIFY" ]; then
     G=$(sha256sum $D/$F | cut -c1-12)
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH (exit 5)"; exit 5; }
   done <<'MANIFEST'
-d06824dfb161 e55_run.py
+a8aa3e708ddf e55_run.py
 ca9f3280f5d6 e55_core.py
 9827e34dcde6 e55_gpu.py
 5179c07fb43e e55_swap.py
 a6d506949071 e55_read.py
 4a811650bcd8 e55_analyze.py
 30769e241d5e e55_metrics.py
-4caa3b5df5ce e55_ic_report.py
+62e2bb699fe3 e55_ic_report.py
 5723bbc93aa9 e55_iso.py
 f261120d0f03 s3.py
 1746ce4c159c ../exp04_what_ttt_retains/gen_facts.py
