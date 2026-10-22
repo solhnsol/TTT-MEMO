@@ -5,12 +5,12 @@ Slots that do not exist (k - j < 0) are left as the zero padding of ladder.ctx_k
 GPU integration (NOT in this file, NOT done): the plan must be applied to (a) the prefix layers' context K,V of Ladder3.prefix_masked (ctx_kv slices of three recordings) and (b) the carried suffix-layer KV state used by write_step / read_state (needs a decoy / bg chain of read_state and a window composed from the three chains); (b) needs the state layout of the ttt SWA state, which is not in this repository checkout (e2e submodule)."""
 import numpy as np
 NW=8
-ARMS=['NAT','SWD','SWB','MSK','SWDS','SWDO']
+ARMS=['NAT','SWD','SWB','MSK','SWDS','SWDO','NATM']
 def plan(arm,k,p):
     assert arm in ARMS and p>=1 and k>=0;out={}
     for j in range(1,NW+1):
         if k-j<0:continue
-        if arm=='NAT':src='real'
+        if arm in ('NAT','NATM'):src='real'
         elif arm=='SWD':src='decoy'
         elif arm=='SWB':src='bg'
         elif arm=='MSK':src='mask'
