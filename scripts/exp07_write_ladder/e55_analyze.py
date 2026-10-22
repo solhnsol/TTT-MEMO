@@ -122,10 +122,10 @@ def selftest():
     print('e55_analyze SELFTEST OK (synthetic scores)')
 def stage0(nat_files,swd_files,a=16,out=None):
     """records of the stage-0 cells (e55_gpu.make_records, one file per cell and seed) -> text report: table of the changes vs W0, rules 1-3 and, when the records carry in-window reads, rule 9. No verdict wording beyond the pre-registered rule outputs."""
-    load=lambda fs:[json.load(open(f)) for f in fs.split(',')];nat,swd=load(nat_files),load(swd_files);L=['# E55 stage 0 (NAT vs SWD) -- pre-registered rule outputs','',report({'NAT':nat,'SWD':swd},a),'']
-    r1=rule1(nat,swd,a);L.append(f'rule 1 (unreadable if BOTH cells have P2 < chance+0.03 and P1 CI contains 0): unreadable={r1["unreadable"]} per cell {r1["per_cell_unreadable"]}')
-    for nm,r in (('NAT',nat),('SWD',swd)):x=rule2(r,a);L.append(f'rule 2 {nm}: binding present={x["binding"]}')
-    x=rule3(nat,swd,a);L.append(f'rule 3 S = SWD - NAT: P2 {x["S_P2"][0]:+.3f} [{x["S_P2"][1]:+.3f}, {x["S_P2"][2]:+.3f}], P1 {x["S_P1"][0]:+.3f} [{x["S_P1"][1]:+.3f}, {x["S_P1"][2]:+.3f}] -> shadowing flag={x["shadowing"]}; negative control (|S|<=0.02 and CI contains 0)={x["negctrl_pass"]} (only meaningful for p=9)')
+    load=lambda fs:[json.load(open(f)) for f in fs.split(',')];nat=load(nat_files);swd=load(swd_files) if swd_files else None;L=['# E55 stage 0 (%s) -- pre-registered rule outputs'%('NAT vs SWD' if swd else 'NAT only'),'',report({'NAT':nat,**({'SWD':swd} if swd else {})},a),'']
+    if swd:r1=rule1(nat,swd,a);L.append(f'rule 1 (unreadable if BOTH cells have P2 < chance+0.03 and P1 CI contains 0): unreadable={r1["unreadable"]} per cell {r1["per_cell_unreadable"]}')
+    for nm,r in (('NAT',nat),)+((('SWD',swd),) if swd else ()):x=rule2(r,a);L.append(f'rule 2 {nm}: binding present={x["binding"]}')
+    if swd:x=rule3(nat,swd,a);L.append(f'rule 3 S = SWD - NAT: P2 {x["S_P2"][0]:+.3f} [{x["S_P2"][1]:+.3f}, {x["S_P2"][2]:+.3f}], P1 {x["S_P1"][0]:+.3f} [{x["S_P1"][1]:+.3f}, {x["S_P1"][2]:+.3f}] -> shadowing flag={x["shadowing"]}; negative control (|S|<=0.02 and CI contains 0)={x["negctrl_pass"]} (only meaningful for p=9)')
     if all(str(a) in r['read'] and 'in_e0' in r['read'][str(a)] for r in nat):
         x=rule9(nat,a);L.append('');L.append(f'rule 9 (window readout, NAT): W0 d=1 top-1 check = {x["check_i_W0_d1_top1"]} -> interpretable={x["interpretable"]}')
         for k,v in x.items():
@@ -136,5 +136,5 @@ def stage0(nat_files,swd_files,a=16,out=None):
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--nat',default=None,help='comma list of NAT read records');ap.add_argument('--swd',default=None);ap.add_argument('--a',type=int,default=16);ap.add_argument('--out',default=None);a=ap.parse_args()
     if a.selftest:selftest()
-    elif a.nat and a.swd:print(stage0(a.nat,a.swd,a.a,a.out))
+    elif a.nat:print(stage0(a.nat,a.swd,a.a,a.out))
     else:print(__doc__)
