@@ -1,141 +1,107 @@
-"""E55 analysis (CPU, numpy only): pre-registered metrics and rules of E55-controlled-world-binding-design.md sections 3, 4 and 2.5 from the raw 16-candidate score matrices of e55_read records.
-Unit = pair (the two names of a pair are averaged, worlds A and B averaged); several seeds of the same cell are concatenated (pairs of different worlds); CI = 95% pair bootstrap (4000 draws, seed 55).
-Metrics (change vs W0, same items, same context): P1 = [log p(bound target) - mean log p over the 16 candidates] (nats), P2 = top-1 rate (chance 1/16 = 0.0625). Sub-metrics: rank, normalized probability, mass on the partner place, absolute target log-prob.
-Records: see e55_read.py. Only EXPOSED items are used for P1 / P2; the 8 unexposed control names are reported separately (their gold = a never-shown place).
-Rules implemented: 1 (readable?), 2 (binding present per cell), 3 (shadowing S(p) = metric(SWD) - metric(NAT) and the p = 9 negative control), 4 (ordering of S over p, signs only), 5 (MSK vs SWD), 6 (same-group share), 9 (window readout: W0 check, exit drop, write share). Rules 7 (information variables) and 8 (invalid-run conditions: unit test failures, identity-test mismatch, name overlap, clip fraction, canary) are read from the generic `contrast` table and from the run logs respectively and are NOT automated here. Thresholds are the ones fixed in the design (P2 +3 / +5 / +10 percentage points, 1/3 and 0.3 / 0.7 fractions, 20 pp for rule 9(i))."""
-import json,sys,argparse
+"""E55 report. Thin wrapper over e55_metrics (design 10.3 / 4c) for the k >= 16 cells; plus the existence-check report (stage 0', k = 8 < 16, p = 1: candidates = the k exposed places, ranks normalised u = (K - rank) / (K - 1), chance 0.5; familiarity = mean score of the never-exposed places minus mean score of the exposed non-gold places). Records are the JSON files of `e55_run.py read` (format: e55_read.py docstring); several seeds are given as a comma list and pooled over facts.
+  python3 e55_analyze.py --nat <nat.read.json[,...]> [--swd <swd.read.json[,...]>] [--a 16] [--out report.md]
+  python3 e55_analyze.py --selftest"""
+import sys,argparse,json
 from pathlib import Path
 import numpy as np
 HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
-import e49_stats as ES
-CHANCE=1/16;NB=4000
-def _ci(v,nb=NB):
-    v=np.asarray(v,float);rng=np.random.default_rng(55);idx=rng.integers(0,len(v),(nb,len(v)));b=v[idx].mean(1);return float(v.mean()),*np.percentile(b,[2.5,97.5]).tolist()
-def item_vals(SA,SB,gi,fi):
-    """per item, mean over worlds A and B: P1, top1, rank, p_norm, mass_partner, abs_lp"""
-    out={}
-    for w,S in (('A',SA),('B',SB)):
-        S=np.asarray(S,float);m=ES.item_metrics(S,gi,fi,w);tg=gi if w=='A' else fi;r=np.arange(len(S))
-        out[w]={'P1':S[r,tg]-S.mean(1),'P2':m['top1'],'rank':m['rank'],'p_norm':m['p_norm'],'mass_partner':m['mass_partner'],'abs_lp':m['abs_lp'],'PM3':S[r,tg]-(S.sum(1)-S[r,tg])/(S.shape[1]-1)}
-    return {k:(out['A'][k]+out['B'][k])/2 for k in out['A']}
-def pair_vec(vals,meta,metric,mask=None):
-    kind=np.asarray(meta['kind']);sel=(kind=='exposed') if mask is None else ((kind=='exposed')&np.asarray(mask))
-    pairs=[p for p,s_ in zip(meta['pair'],sel) if s_];return ES.pair_means(vals[metric][sel],pairs)
-def read_vals(rec,a,ctx):
-    meta=rec['meta'];gi=np.asarray(meta['gi']);fi=np.asarray(meta['fi']);S=rec['read'][str(a)][ctx];return item_vals(S['A'],S['B'],gi,fi)
-def w0_vals(rec,ctx,a=None):
-    """W0 scores of the same items in the same context. 'out' (neutral tail) is one matrix shared by A and B; an in-window context depends on the world (names in the tail) and on the read point, so the GPU reader stores it as W0['<ctx>@<a>'] = {'A': S, 'B': S}"""
-    meta=rec['meta'];gi=np.asarray(meta['gi']);fi=np.asarray(meta['fi']);W=rec['W0'];S=W[f'{ctx}@{a}'] if a is not None and f'{ctx}@{a}' in W else W[ctx]
-    return item_vals(S['A'],S['B'],gi,fi) if isinstance(S,dict) else item_vals(S,S,gi,fi)
-def change_vec(rec,a,ctx,metric,mask=None):
-    """pair-level change vs W0 (same items, same context)"""
-    v=read_vals(rec,a,ctx);v0=w0_vals(rec,ctx,a);d={k:v[k]-v0[k] for k in v};return pair_vec(d,rec['meta'],metric,mask)
-def cat(recs,fn):return np.concatenate([fn(r) for r in recs])
-def cell_row(recs,a=16,ctx='out'):
-    return {m:_ci(cat(recs,lambda r:change_vec(r,a,ctx,m))) for m in ('P1','P2','PM3','rank','p_norm','mass_partner','abs_lp')}
-def contrast(recs_x,recs_y,a=16,ctx='out',metric='P2',ctx_y=None,a_y=None):
-    """pair-level paired difference X - Y of the change-vs-W0 metric (same worlds: records of the same seeds in the same order)"""
-    dx=cat(recs_x,lambda r:change_vec(r,a,ctx,metric));dy=cat(recs_y,lambda r:change_vec(r,a_y or a,ctx_y or ctx,metric));assert dx.shape==dy.shape;return _ci(dx-dy)
-def excl0(ci):return ci[1]>0 or ci[2]<0
-def rule1(nat,swd,a=16):
-    """readable? unreadable if in BOTH cells P2 < chance + 0.03 and the P1 CI contains 0"""
-    bad=[]
-    for r in (nat,swd):
-        row=cell_row(r,a);bad.append(row['P2'][0]<CHANCE+0.03 and not excl0(row['P1']))
-    return {'unreadable':all(bad),'per_cell_unreadable':bad}
-def rule2(recs,a=16):
-    row=cell_row(recs,a);return {'binding':bool(excl0(row['P1']) and row['P1'][0]>0 and row['P2'][0]>=CHANCE+0.05),'row':row}
-def rule3(nat,swd,a=16):
-    c2=contrast(swd,nat,a,metric='P2');c1=contrast(swd,nat,a,metric='P1')
-    return {'S_P2':c2,'S_P1':c1,'shadowing':bool(excl0(c2) and c2[0]>=0.05 and excl0(c1)),'negctrl_pass':bool(abs(c2[0])<=0.02 and not excl0(c2))}
-def rule4(S_by_p):
-    """S_by_p: {p: S_P2 point estimate} for p in (1,2,4,9): only the sign of adjacent differences"""
-    ps=sorted(S_by_p);return {'monotone_nonincreasing':all(S_by_p[ps[i]]>=S_by_p[ps[i+1]] for i in range(len(ps)-1)),'differences':[S_by_p[ps[i]]-S_by_p[ps[i+1]] for i in range(len(ps)-1)]}
-def rule5(nat,swd,msk,a=16):
-    s=contrast(swd,nat,a,metric='P2');m=contrast(msk,swd,a,metric='P2');third=abs(s[0])/3
-    cls='consistent' if abs(m[0])<=third else ('mask adds a window-length effect' if m[0]>third else 'mask removes less than the swap')
-    return {'S':s,'MSK_minus_SWD':m,'class':cls}
-def rule6(nat,swd,swds,a=16):
-    tot=contrast(swd,nat,a,metric='P2')[0];part=contrast(swds,nat,a,metric='P2')[0]
-    if abs(tot)<1e-9:return {'share':None,'class':'no total effect'}
-    sh=part/tot;return {'share':sh,'class':'same-fact chunks carry most' if sh>=0.7 else ('other-pair context carries most' if sh<=0.3 else 'not classified (value only)')}
-def rule9(w,a=16):
-    """window readout of one cell (corrected design 14:40 KST): the in-window read of every exposed item is taken in its own group's context, so d = p for the whole cell (rec['meta']['d'][a]['in'], None = control). Per cell: P2 / P1 in the window (W), out of the window (W, neutral tail), in the window at W0; exit drop = in - out, write share = W in - W0 in. (i) W0 check: only meaningful where d = 1 (the p = 1 cell): W0 in-window top-1 >= chance + 0.20. Distance curve = the cells' values across p (d = p)."""
-    acc={'P2':{'W_in':[],'W0_in':[],'W_out':[]},'P1':{'W_in':[],'W0_in':[],'W_out':[]}};dset=set()
-    for rec in w:
-        key=str(a)
-        if 'in' not in rec['read'].get(key,{}):continue
-        d=rec['meta']['d'][key]['in'];m_=np.asarray([x is not None for x in d]);dset|={x for x in d if x is not None}
-        vw=read_vals(rec,a,'in');vout=read_vals(rec,a,'out');v0=w0_vals(rec,'in',a)
-        for met in acc:
-            acc[met]['W_in'].append(pair_vec(vw,rec['meta'],met,m_));acc[met]['W0_in'].append(pair_vec(v0,rec['meta'],met,m_));acc[met]['W_out'].append(pair_vec(vout,rec['meta'],met,m_))
-    if not dset:return {'d':None}
-    assert len(dset)==1,('mixed distances in one cell',dset);res={'d':dset.pop()}
-    for met,e in acc.items():
-        wi,w0,wo=(np.concatenate(e[x]) for x in ('W_in','W0_in','W_out'))
-        res[met]={'W_in':_ci(wi),'W0_in':_ci(w0),'W_out':_ci(wo),'exit_drop_W_in_minus_out':_ci(wi-wo),'write_share_W_in_minus_W0_in':_ci(wi-w0)}
-    res['check_i_W0_top1']=res['P2']['W0_in'][0] if res['d']==1 else None
-    res['interpretable']=(res['check_i_W0_top1']>=CHANCE+0.20) if res['d']==1 else None
-    return res
-def fmt_row(name,row):
-    return f'| {name} | '+' | '.join('%+.3f [%+.3f, %+.3f]'%row[m] for m in ('P1','P2','rank','p_norm','mass_partner','abs_lp'))+' |'
-def report(cells,a=16):
-    L=['| cell | P1 (nats) | P2 (top-1 rate change; chance 0.0625) | rank change | p_norm change | mass on partner change | target log-prob change |','|'+'---|'*7]
-    for n,recs in cells.items():L.append(fmt_row(n,cell_row(recs,a)))
-    return '\n'.join(L)
-# ------------------------------------------------------------------ synthetic records for the self test
-def _rec(N,rng,signal=0.0,seed=0,with_d=False,inwin=0.0):
-    """exposed names 2N + 8 controls, 16 candidates; the score of the bound target gets +signal (in A the gold, in B the partner); W0 has noise only"""
-    n=2*N+8;kind=['exposed']*(2*N)+['ctrl']*8;pair=[f'p{i//2}' for i in range(2*N)]+[f'c{i//2}' for i in range(8)]
-    gi=np.zeros(n,int);fi=np.ones(n,int);meta={'kind':kind,'pair':pair,'gi':gi.tolist(),'fi':fi.tolist(),'qframe':[i%3 for i in range(n)],'name_id':list(range(n))}
-    def S(sig,d=None):
-        A=rng.normal(size=(n,16));B=rng.normal(size=(n,16))
-        for i in range(2*N):
-            s_=sig if d is None else sig*(d[i] is not None and d[i]<=8)
-            A[i,gi[i]]+=s_;B[i,fi[i]]+=s_
-        return A,B
-    W0={'out':rng.normal(size=(n,16))};rec={'meta':meta,'W0':W0,'read':{}}
-    A,B=S(signal);rec['read']['16']={'out':{'A':A,'B':B}}
-    if with_d:
-        dd=with_d if isinstance(with_d,int) and with_d>1 else 1
-        d=[dd]*(2*N)+[None]*8;meta['d']={'16':{'in':d}}
-        W0['in@16']={'A':rng.normal(size=(n,16)),'B':rng.normal(size=(n,16))}
-        for i in range(2*N):W0['in@16']['A'][i,gi[i]]+=inwin if dd<=2 else 0;W0['in@16']['B'][i,fi[i]]+=inwin if dd<=2 else 0
-        A2=rng.normal(size=(n,16));B2=rng.normal(size=(n,16))
-        for i in range(2*N):A2[i,gi[i]]+=(inwin+signal) if dd<=2 else 0;B2[i,fi[i]]+=(inwin+signal) if dd<=2 else 0
-        rec['read']['16']['in']={'A':A2,'B':B2}
-    return rec
-def selftest():
-    rng=np.random.default_rng(1);N=16
-    nat=[_rec(N,rng,0.0,s) for s in range(3)];swd=[_rec(N,rng,3.0,s) for s in range(3)]
-    r1=rule1(nat,swd);assert not r1['unreadable']   # SWD is clearly readable
-    r1b=rule1(nat,[_rec(N,rng,0.0,s) for s in range(3)]);assert r1b['unreadable']
-    assert rule2(swd)['binding'] and not rule2(nat)['binding']
-    r3=rule3(nat,swd);assert r3['shadowing'] and r3['S_P2'][0]>0.2
-    nat9=[_rec(72,rng,0.0,s) for s in range(3)];swd9=[_rec(72,rng,0.0,s) for s in range(3)];r39=rule3(nat9,swd9);assert r39['negctrl_pass'] and not r39['shadowing']
-    assert rule4({1:.4,2:.3,4:.2,9:.0})['monotone_nonincreasing'] and not rule4({1:.1,2:.3})['monotone_nonincreasing']
-    msk=[_rec(N,rng,3.0,s) for s in range(3)];assert rule5(nat,swd,msk)['class']=='consistent'
-    half=[_rec(N,rng,1.5,s) for s in range(3)];r6=rule6(nat,swd,half);assert r6['class'] in ('not classified (value only)','same-fact chunks carry most','other-pair context carries most') and 0.2<r6['share']<0.8
-    w=[_rec(N,rng,1.0,s,with_d=True,inwin=4.0) for s in range(3)];r9=rule9(w);assert r9['d']==1 and r9['interpretable'] and r9['P2']['exit_drop_W_in_minus_out'][0]>0.1 and r9['P2']['write_share_W_in_minus_W0_in'][1]<r9['P2']['write_share_W_in_minus_W0_in'][0]<r9['P2']['write_share_W_in_minus_W0_in'][2]
-    w9=[_rec(N,rng,0.0,s,with_d=9,inwin=4.0) for s in range(3)];r99=rule9(w9);assert r99['d']==9 and r99['interpretable'] is None and abs(r99['P2']['exit_drop_W_in_minus_out'][0])<0.15
-    print(report({'NAT':nat,'SWD':swd,'SWD@p9':swd9}))
-    print('e55_analyze SELFTEST OK (synthetic scores)')
-def stage0(nat_files,swd_files,a=16,out=None):
-    """records of the stage-0 cells (e55_gpu.make_records, one file per cell and seed) -> text report: table of the changes vs W0, rules 1-3 and, when the records carry in-window reads, rule 9. No verdict wording beyond the pre-registered rule outputs."""
-    load=lambda fs:[json.load(open(f)) for f in fs.split(',')];nat=load(nat_files);swd=load(swd_files) if swd_files else None;L=['# E55 stage 0 (%s) -- pre-registered rule outputs'%('NAT vs SWD' if swd else 'NAT only'),'',report({'NAT':nat,**({'SWD':swd} if swd else {})},a),'']
-    if swd:r1=rule1(nat,swd,a);L.append(f'rule 1 (unreadable if BOTH cells have P2 < chance+0.03 and P1 CI contains 0): unreadable={r1["unreadable"]} per cell {r1["per_cell_unreadable"]}')
-    for nm,r in (('NAT',nat),)+((('SWD',swd),) if swd else ()):x=rule2(r,a);L.append(f'rule 2 {nm}: binding present={x["binding"]}')
-    if swd:x=rule3(nat,swd,a);L.append(f'rule 3 S = SWD - NAT: P2 {x["S_P2"][0]:+.3f} [{x["S_P2"][1]:+.3f}, {x["S_P2"][2]:+.3f}], P1 {x["S_P1"][0]:+.3f} [{x["S_P1"][1]:+.3f}, {x["S_P1"][2]:+.3f}] -> shadowing flag={x["shadowing"]}; negative control (|S|<=0.02 and CI contains 0)={x["negctrl_pass"]} (only meaningful for p=9)')
-    if all('in' in r['read'].get(str(a),{}) for r in nat):
-        x=rule9(nat,a);L.append('');L.append(f'rule 9 (window readout, NAT; every pair read in its own group context just before its next appearance, d = {x["d"]} chunks; d >= 9 = outside the 8-chunk window)')
-        for met in ('P2','P1'):
-            v=x[met];L.append(f'  {met}: in-window {v["W_in"][0]:+.3f} [{v["W_in"][1]:+.3f}, {v["W_in"][2]:+.3f}], out-of-window {v["W_out"][0]:+.3f}, W0 in-window {v["W0_in"][0]:+.3f}; exit drop (in - out) {v["exit_drop_W_in_minus_out"][0]:+.3f} [{v["exit_drop_W_in_minus_out"][1]:+.3f}, {v["exit_drop_W_in_minus_out"][2]:+.3f}]; write share (W in - W0 in) {v["write_share_W_in_minus_W0_in"][0]:+.3f} [{v["write_share_W_in_minus_W0_in"][1]:+.3f}, {v["write_share_W_in_minus_W0_in"][2]:+.3f}]')
-        L.append(f'  W0 check (only at d = 1): top-1 {x["check_i_W0_top1"]} -> interpretable={x["interpretable"]}')
+import e55_metrics as MT
+def _items(rec,a,ctx):
+    """per-item arrays for the existence check: u (W), u (W0), familiarity (W, W0), kind mask, valid mask"""
+    m=rec['meta'];n=len(m['kind']);ex=np.asarray(m['cand_exposed'],bool);gold=np.asarray(m['gold_idx']);K=int(m['n_rank'][0])
+    def full(S):
+        S=np.asarray(S,float)
+        if len(S)==n:return S
+        F=np.full((n,16),np.nan);F[m['item_idx'][str(a)][ctx]]=S;return F
+    S=full(rec['read'][str(a)][ctx]);W0=rec['W0'];S0=full(W0[f'{ctx}@{a}'] if f'{ctx}@{a}' in W0 else W0[ctx]);r=np.arange(n)
+    def stats(X):
+        sg=X[r,gold];rank=1+((X>sg[:,None])&ex).sum(1);u=(K-rank)/(K-1)
+        exn=ex.copy();exn[r,gold]=False;fam=np.where((~ex).any(1),(np.where(~ex,X,0).sum(1)/np.maximum((~ex).sum(1),1)),np.nan)-(np.where(exn,X,0).sum(1)/np.maximum(exn.sum(1),1));return u,fam
+    u,f=stats(S);u0,f0=stats(S0);valid=~np.isnan(S).any(1)
+    if ctx!='out':
+        d=m['d'][str(a)][ctx];valid&=np.array([x is not None and 1<=x<=8 for x in d])
+    return {'u':u,'u0':u0,'fam':f,'fam0':f0,'fact':(np.asarray(m['kind'])=='fact')&valid,'ctrl':(np.asarray(m['kind'])!='fact')&valid}
+def existence(nat_files,swd_files=None,a_list=(4,16),out=None):
+    load=lambda fs:[json.load(open(f)) for f in fs.split(',')];nat=load(nat_files);swd=load(swd_files) if swd_files else None
+    L=['# E55 existence check (stage 0-prime): K = %d exposed candidates, u = (K - rank)/(K - 1) (chance 0.5; gain = u(W) - u(W0)); %d seeds'%(int(nat[0]['meta']['n_rank'][0]),len(nat)),'']
+    def cat(recs,a,ctx,key,kind='fact'):return np.concatenate([_items(r,a,ctx)[key][_items(r,a,ctx)[kind]] for r in recs])
+    cells={'NAT':nat,**({'SWD':swd} if swd else {})};ctxs=['out']+sorted(c for c in nat[0]['read'].get(str(max(a_list)),{}) if c!='out')
+    L+=['| cell | read | context | gain in u [95% CI] | u(W) | u(W0) | familiarity change (unexposed - exposed non-gold, nats) [95% CI] | control items u (fake gold; expect ~0.5) | per-seed gain in u |','|'+'---|'*9]
+    for nm,recs in cells.items():
+        for a in a_list:
+            for ctx in (['out'] if a!=max(a_list) else ctxs):
+                if str(a) not in recs[0]['read'] or ctx not in recs[0]['read'][str(a)]:continue
+                g=cat(recs,a,ctx,'u')-cat(recs,a,ctx,'u0');fam=cat(recs,a,ctx,'fam')-cat(recs,a,ctx,'fam0');cu=cat(recs,a,ctx,'u','ctrl')
+                ps=[float((_items(r,a,ctx)['u']-_items(r,a,ctx)['u0'])[_items(r,a,ctx)['fact']].mean()) for r in recs]
+                L.append(f'| {nm} | appearance {a} | {ctx} | {MT.fmt(MT.ci(g))} | {cat(recs,a,ctx,"u").mean():.3f} | {cat(recs,a,ctx,"u0").mean():.3f} | {MT.fmt(MT.ci(fam))} | {cu.mean():.3f} (n={len(cu)}) | {", ".join("%+.3f"%x for x in ps)} |')
+    if swd:
+        a=max(a_list);gN=cat(nat,a,'out','u')-cat(nat,a,'out','u0');gS=cat(swd,a,'out','u')-cat(swd,a,'out','u0')
+        L+=['',f'shadowing contrast SWD - NAT at appearance {a}, out-of-window, gain in u (paired by fact): {MT.fmt(MT.ci(gS-gN))}']
+    L+=['','Existence: gain in u > 0 with the CI excluding 0 at the last appearance (and the control items near 0.5) = the binding exists in this setting; the familiarity column separates "knows these places" from "knows which place goes with the name".']
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
     return t
+def is_existence(files):return json.load(open(files.split(',')[0]))['meta'].get('n_rank',[16])[0]<16
+def curve(nat,alts,out_apps=None):
+    """binding curve (seeds with the full per-chunk read): per appearance G_rank / PM2 / PM3 of every arm (out-of-window), contrasts alt - NAT (paired by fact), and the in-window readout at the appearances that have one. nat: records of NAT, alts: {name: records}; only records whose 'read' holds more than 4 appearances."""
+    full=lambda rs:[r for r in rs if len(r['read'])>4];nf=full(nat)
+    if not nf:return ''
+    apps=sorted(int(x) for x in nf[0]['read']);L=['','## binding curve (seed(s) with the full read: %s), out-of-window read after every appearance'%(','.join(str(r['meta']['seed']) for r in nf)),'','| appearance | arm | G_rank [95% CI] | PM2 | PM3 | contrast vs NAT: G_rank |','|---|---|---|---|---|---|']
+    for a in apps:
+        if 'out' not in nf[0]['read'][str(a)]:continue
+        t=MT.cell_table(nf,a,'out');L.append(f'| {a} | NAT | {MT.fmt(t["G_rank"])} | {MT.fmt(t["PM2"])} | {MT.fmt(t["PM3"])} | |')
+        for nm,rs in alts.items():
+            rf=[r for r in full(rs) if r['meta']['seed'] in [x['meta']['seed'] for x in nf]]
+            if rf:t=MT.cell_table(rf,a,'out');c=MT.contrast(rf,[x for x in nf if x['meta']['seed'] in [y['meta']['seed'] for y in rf]],a,'out');L.append(f'| {a} | {nm} | {MT.fmt(t["G_rank"])} | {MT.fmt(t["PM2"])} | {MT.fmt(t["PM3"])} | {MT.fmt(c["G_rank"])} |')
+    L+=['','in-window readout (contexts shorter than 8 chunks while a < 8; decision column = exit drop rank(out) - rank(in)):']
+    for nm,rs in (('NAT',nf),)+tuple((k,full(v)) for k,v in alts.items()):
+        for a in apps:
+            ins=sorted(c for c in rs[0]['read'][str(a)] if c!='out') if rs else []
+            if ins:
+                w=MT.window_effect(rs,a,ins);L.append(f'  {nm} a={a}: exit drop {MT.fmt(w["exit_rank"])}, G_in-G_out {MT.fmt(w["G_in_minus_G_out"])}, W0 in-window rank {MT.fmt(w["W0_in_rank"])}'+(' [metric mismatch: no call]' if w['metric_mismatch'] else ''))
+    return '\n'.join(L)+'\n'
+def w0_report(recs,a=16,ctx='out'):
+    """W0 (before training) rank of the gold place per question frame: histogram over ranks 1..16, mean, and the ceiling rate (W0 rank 1: no rank gain possible) / floor rate (W0 rank 16: no rank loss possible), pooled over the records; facts only"""
+    rk=[];qf=[]
+    for r in recs:
+        it=MT.rec_items(r,a,ctx);m=MT._sel(r,a,ctx);rk+=list(it['rank_W0'][m]);qf+=list(np.asarray(r['meta']['qframe'])[m])
+    rk=np.asarray(rk);qf=np.asarray(qf);L=['','## W0 rank of the gold place per question frame (before any update; chance mean 8.5)','','| question frame | n | mean rank W0 | ceiling (rank 1) | floor (rank 16) | histogram rank 1..16 |','|---|---|---|---|---|---|']
+    for q in [None]+sorted(set(qf.tolist())):
+        x=rk if q is None else rk[qf==q];h=np.bincount(x.astype(int),minlength=17)[1:17]
+        L.append(f"| {'all' if q is None else q} | {len(x)} | {x.mean():.2f} | {np.mean(x==1):.3f} | {np.mean(x==16):.3f} | {' '.join(map(str,h))} |")
+    return '\n'.join(L)+'\n'
+def train_summary(saved_files):
+    """per arm and seed from the saved.json logs: mean pre-clip gradient norm, mean clip coefficient c (1 = not clipped), share of clipped chunks, mean / cumulative update norm, mean CE (the per-chunk values are in the log of the file)"""
+    L=['','## training statistics per arm and seed (from the per-chunk logs)','','| arm | seed | chunks | mean pre-clip gnorm | mean clip coefficient c | clipped chunks | mean update norm | cumulative update norm | mean CE |','|---|---|---|---|---|---|---|---|---|']
+    for f in saved_files.split(','):
+        r=json.load(open(f));lg=r['log'];g=lambda k:np.asarray([e[k] for e in lg],float)
+        L.append(f"| {Path(f).name.split('_')[2]} | {r.get('world_seed')} | {len(lg)} | {g('gnorm').mean():.4g} | {g('coef').mean():.3f} | {np.mean(g('coef')<1):.2f} | {g('update_norm').mean():.4g} | {g('update_norm').sum():.4g} | {g('ce').mean():.3f} |")
+    return '\n'.join(L)+'\n'
+def stage0(nat_files,swd_files=None,a=16,out=None,swb_files=None,saved=None):
+    if is_existence(nat_files):return existence(nat_files,swd_files,(4,16),out)
+    load=lambda fs:[json.load(open(f)) for f in fs.split(',')]
+    t=MT.stage0(nat_files,swd_files,a,None)
+    if swb_files:
+        nat=load(nat_files);swb=load(swb_files);sh=[r for r in nat if r['meta']['seed'] in [x['meta']['seed'] for x in swb]];sb=[x for x in swb if x['meta']['seed'] in [r['meta']['seed'] for r in sh]]
+        s_=MT.shadowing(sh,sb,a);t+=f"\nSWD-B (fact sentences removed, background fill; seeds {[r['meta']['seed'] for r in sb]}) - NAT: G_rank {MT.fmt(s_['S']['G_rank'])}, PM2 {MT.fmt(s_['S']['PM2'])}, PM3 {MT.fmt(s_['S']['PM3'])} -> {s_['shadowing']}"+(' (METRIC MISMATCH)' if s_['metric_mismatch'] else '')+'\n'
+    t+=w0_report(load(nat_files),a)
+    t+=curve(load(nat_files),{**({'SWD-A':load(swd_files)} if swd_files else {}),**({'SWD-B':load(swb_files)} if swb_files else {})})
+    if saved:t+=train_summary(saved)
+    if out:Path(out).write_text(t)
+    return t
+def selftest():
+    rng=np.random.default_rng(1);K=8;nf=8
+    def rec(sig,fam=0.0):
+        n=nf+4;gold=rng.integers(0,K,n);ex=np.array([[True]*K+[False]*8]*n);meta={'kind':['fact']*nf+['ctrl']*4,'gold_idx':gold.tolist(),'cand_exposed':ex.tolist(),'n_rank':[K]*n,'d':{'16':{'in_g0':[1]*nf+[None]*4}},'item_idx':{'16':{'in_g0':list(range(n))}}}
+        base=rng.normal(size=(n,16));W=base+0.2*rng.normal(size=(n,16));W[np.arange(nf),gold[:nf]]+=sig;W[:,8:]+=fam
+        return {'meta':meta,'read':{'4':{'out':W},'16':{'out':W,'in_g0':W}},'W0':{'out':base,'in_g0@16':base}}
+    import tempfile,os
+    d=tempfile.mkdtemp();fs=[]
+    for i,sig in enumerate((3.0,3.0,3.0,3.0)):
+        r=rec(sig);r['read']={k:{c:np.asarray(v).tolist() for c,v in cs.items()} for k,cs in r['read'].items()};r['W0']={c:np.asarray(v).tolist() for c,v in r['W0'].items()};fn=f'{d}/s{i}.json';json.dump(r,open(fn,'w'));fs.append(fn)
+    t=existence(','.join(fs),','.join(fs));assert 'shadowing contrast' in t and '| NAT | appearance 16 | out |' in t
+    print(t.splitlines()[3]);print('e55_analyze SELFTEST OK (existence report on synthetic records)')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--nat',default=None,help='comma list of NAT read records');ap.add_argument('--swd',default=None);ap.add_argument('--a',type=int,default=16);ap.add_argument('--out',default=None);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--nat');ap.add_argument('--swd',default=None);ap.add_argument('--swb',default=None);ap.add_argument('--saved',default=None,help='comma list of *.saved.json (training statistics table)');ap.add_argument('--a',type=int,default=16);ap.add_argument('--out',default=None);a=ap.parse_args()
     if a.selftest:selftest()
-    elif a.nat:print(stage0(a.nat,a.swd,a.a,a.out))
-    else:print(__doc__)
+    else:print(stage0(a.nat,a.swd,a.a,a.out,a.swb,a.saved))

@@ -2,7 +2,7 @@
   (1) compose_state: the carried suffix-layer SWA state (stacked over the suffix layers; K and V each [L, 8192, hidden], block of lag j = rows [(8-j)*1024, (9-j)*1024), merged heads, pre-RoPE, after qk_norm, RoPE applied inside the window at window-relative positions; all verified on the public e2e source a4fc4788, ttt/model/attention.py SWA) composed from the real / decoy / background-only chains per e55_swap.plan,
   (2) Ladder55.run_stream: the stream is read ONCE; chunk k is always WRITTEN with its real tokens; the attention window of the write forward is composed per arm (prefix layers: recorded post-RoPE K,V of the three streams via e55_swap.compose_window; suffix layers: compose_state), the three suffix chains are advanced with the SAME current weights, weights are saved at the read chunks.
 Every arm goes through the same write path (prefix_masked + write_step); NAT = nothing swapped (U1 shows it equals native_step). Absolute chunk positions are unchanged: a decoy slot holds the K,V the decoy stream has at the same absolute chunk index (RoPE of the prefix layers is absolute, that of the suffix layers window-relative, so both stay aligned).
-Arms: NAT, SWD, SWDS, SWDO, MSK implemented; SWB (background-only stream) needs a background-only realisation of the world that gen_world_ctl does not provide yet (stage 2): refused.
+Arms: NAT, SWD, SWB, SWDS, SWDO, MSK implemented. SWB = every window slot taken from a background-only stream (gen_facts.bg_stream: same kind of text, no fact sentence at all); at p = 1 SWDS is NAT and SWDO is not NAT-equivalent either, so SWD / SWB are the arms that replace the whole window.
 STATUS: tested on CPU with a tiny random e2e model (e55_units.py); the 3B GPU run is NOT done."""
 import time,hashlib,json
 from pathlib import Path
@@ -11,7 +11,7 @@ import e55_swap as E
 import s3
 jax,jnp,eqx=s3.jax,s3.jnp,s3.eqx
 CH=1024;WIN=8192;NW=E.NW
-IMPLEMENTED=('NAT','SWD','SWDS','SWDO','MSK')
+IMPLEMENTED=('NAT','SWD','SWB','SWDS','SWDO','MSK')
 def compose_state(chains,pl,counter=None):
     """suffix-layer SWA state with the slot blocks taken from the chain that plan `pl` names ('real' | 'decoy' | 'bg'; 'mask' and absent slots keep the real chain's block, the mask is applied through the key mask). Every other leaf (chunk index) is the real chain's. counter (list) collects the number of KV leaves composed (must be 2: K and V)."""
     def f(*ls):
@@ -57,10 +57,10 @@ class Ladder55(s3.Ladder3):
             Kw,_=E.compose_window(src_k,k,pl,CH,axis=1);Vw,_=E.compose_window(src_v,k,pl,CH,axis=1);Kc,Vc=jnp.asarray(Kw),jnp.asarray(Vw)
             st=compose_state({'real':sts['real'],'decoy':sts.get('decoy',sts['real']),'bg':sts.get('bg',sts['real'])},pl,counter)
         return Kc,Vc,keep,st,pl
-    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None):
+    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None,read_hook=None,hook_chunks=()):
         """-> {'log': per-chunk dicts, 'reads': {chunk: {...state file / hash / canary}}, 'stream_hash', 'clip_bind_frac'}"""
         assert arm in E.ARMS,arm
-        if arm not in IMPLEMENTED:raise NotImplementedError(f'arm {arm} is not implemented (SWB needs a background-only stream)')
+        if arm not in IMPLEMENTED:raise NotImplementedError(f'arm {arm} is not implemented')
         rt=self.rt;n=len(real_ids)//CH;nch=nch or n;assert nch<=n and len(real_ids)%CH==0
         names=['real']+(['decoy'] if arm in ('SWD','SWDS','SWDO') else [])+(['bg'] if arm=='SWB' else [])
         ids_={'real':np.asarray(real_ids),'decoy':None if decoy_ids is None else np.asarray(decoy_ids),'bg':None if bg_ids is None else np.asarray(bg_ids)}
@@ -85,6 +85,8 @@ class Ladder55(s3.Ladder3):
                 un=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=un
                 ent={'k':k,'gnorm':float(gn),'coef':float(coef),'update_norm':un,'ce':float(ce),'sec':time.monotonic()-t0,'n_swapped_slots':sum(1 for v in pl.values() if v not in ('real',)),'n_masked_slots':sum(1 for v in pl.values() if v=='mask')}
                 out['log'].append(ent)
+                if read_hook is not None and k in hook_chunks:
+                    t1=time.monotonic();out.setdefault('inline',{})[k]=read_hook(k,m);ent['sec_inline_read']=time.monotonic()-t1      # frozen-weight reads: m is only passed to pure scoring functions
                 if k in read_chunks:
                     r={**self.save_state(m,f'state_{tag}_{k:03d}.npz')}
                     if self.canary and (canary_chunks is None or k in canary_chunks):r['canary']=self.canary(m)

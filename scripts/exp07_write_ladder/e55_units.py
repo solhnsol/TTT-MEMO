@@ -63,7 +63,7 @@ def u1():
     assert abs(float(ce)-float(ce2))<1e-4 and dn<1e-5 and abs(float(gn)-float(gn2))<1e-3*max(1,float(gn2)),(float(ce),float(ce2),dn,float(gn),float(gn2))
     RES['U1']=f'NAT write path vs native_step at chunk {k}: |ce diff| {abs(float(ce)-float(ce2)):.2e}, max|new params diff| {dn:.2e}, |gnorm diff| {abs(float(gn)-float(gn2)):.2e}, masked-prefix vs natural prefix output max|diff| {dp:.2e} (CPU fp32, tiny model)'
 def run(arm,p,dec,nch=NCH,reads=(),tag='u'):
-    return L.run_stream(arm,p,REAL,decoy_ids=dec,read_chunks=reads,nch=nch,tag=tag,log=lambda *a:None)
+    return L.run_stream(arm,p,REAL,decoy_ids=dec,bg_ids=dec,read_chunks=reads,nch=nch,tag=tag,log=lambda *a:None)
 _cache={}
 def nat():
     if 'nat' not in _cache:_cache['nat']=run('NAT',2,None)
@@ -123,55 +123,108 @@ def u8():
     assert h==r['reads'][2]['_hash']==r['final_hash'] and r['reads'][1]['_hash']!=r['reads'][2]['_hash']
     RES['U8']=f"state saved after chunk 2 reloaded: weight hash {h} == the streamed weights; the two read-point states differ"
 def u9():
-    import gen_world_ctl as G
-    enc=G.StubTok();bg=G._synth_bg(6000);w1=G.build_ctl_world(55,8,1,2,16,'50',enc,bg);w2=G.build_ctl_world(55,8,1,2,16,'50',enc,bg)
-    s1=G.stream_sha(G.realize(w1,False,enc));s2=G.stream_sha(G.realize(w2,False,enc));d1=G.stream_sha(G.realize(w1,False,enc,decoy=True));b1=G.stream_sha(G.realize(w1,True,enc))
-    assert s1==s2 and s1!=d1 and s1!=b1
-    RES['U9']=f'same seed twice: stream hash A {s1} == {s2}; decoy {d1}; world B {b1} (stub tokenizer; the real-tokenizer reproducibility is job 164)'
+    import gen_facts as G
+    enc=G.StubTok();bg=G._synth_bg(9000);w1=G.build_fact_world(55,enc=enc,bg=bg,**G.CELLS['base']);w2=G.build_fact_world(55,enc=enc,bg=bg,**G.CELLS['base']);w3=G.build_fact_world(56,enc=enc,bg=bg,**G.CELLS['base'])
+    s1=G.stream_sha(G.realize(w1));s2=G.stream_sha(G.realize(w2));d1=G.stream_sha(G.realize(w1,'world'));s3_=G.stream_sha(G.realize(w3))
+    assert s1==s2 and s1!=d1 and s1!=s3_
+    RES['U9']=f'same seed twice: stream hash {s1} == {s2}; decoy {d1}; seed 56 {s3_} (stub tokenizer; the real-tokenizer reproducibility is the server dry run)'
 def u10():
     out={}
     for arm in ('NAT','SWD','SWDS','SWDO','MSK'):
         r=run(arm,2,DEC,nch=4,reads=(1,3),tag='u10'+arm);out[arm]=(r['final_hash'],r['clip_bind_frac'],len(r['reads']));assert len(r['log'])==4 and all(np.isfinite(e['ce']) for e in r['log'])
-    try:
-        run('SWB',2,DEC,nch=2);ok=False
-    except NotImplementedError:ok=True
-    assert ok
-    RES['U10']='smoke, 4 chunks, read points after chunks 1 and 3: '+'; '.join(f'{a} hash {v[0]} clip-bind {v[1]:.2f}' for a,v in out.items())+'; SWB refused (needs a background-only stream)'
+    r=run('SWB',1,DEC,nch=4,reads=(3,),tag='u10SWB');out['SWB']=(r['final_hash'],r['clip_bind_frac'],len(r['reads']));assert len(r['log'])==4 and all(np.isfinite(e['ce']) for e in r['log'])
+    RES['U10']='smoke, 4 chunks, read points after chunks 1 and 3: '+'; '.join(f'{a} hash {v[0]} clip-bind {v[1]:.2f}' for a,v in out.items())+'; SWB refused (needs a no-fact stream)'
 def u11():
-    import gen_world_ctl as G,e55_read as R,e55_gpu as RG,e55_analyze as AN,hashlib
-    enc=G.StubTok();w=G.build_ctl_world(55,8,1,2,16,'50',enc,G._synth_bg(6000));pl=R.plan(w,enc);V=rt.cfg.model.vocab_size
-    items=pl['items'];n=len(items);NC=G.NCAND;assert n==40
+    import gen_facts as G,e55_read as R,e55_gpu as RG,e55_metrics as MT,hashlib
+    enc=G.StubTok();w=G.build_fact_world(55,enc=enc,bg=G._synth_bg(9000),**G.CELLS['base']);pl=R.plan(w);V=rt.cfg.model.vocab_size
+    items=pl['items'];n=len(items);NC=G.NCAND;assert n==36
     rng=np.random.default_rng(11);cand=rng.integers(3,V,size=(NC,3));pre=rng.integers(3,V,size=(n,9))
     raw=[(list(map(int,pre[i]))+list(map(int,cand[c])),(8,11)) for i in range(n) for c in range(NC)]
     assert RG.check_rows(raw,n,NC)==3
     mp=lambda t:[int(x)%(V-3)+3 for x in t]
-    ctxs={nm:{**c,'tail_A':mp(c['tail_A']),'tail_B':mp(c['tail_B'])} for nm,c in pl['read'][16]['ctx'].items()};read={16:{'read_chunk':31,'ctx':ctxs}}
-    assert set(ctxs)=={'in_g0','in_g1'} and all(len(c['tail_A'])==8192 for c in ctxs.values())
-    out_tail=[int(x) for x in rng.integers(3,V,size=7168)]
+    ctxs={nm:{**c,'tail':mp(c['tail'])} for nm,c in pl['read'][16]['ctx'].items()};read={16:{'read_chunk':31,'ctx':ctxs}}
+    assert set(ctxs)=={'in_g0','in_g1'} and all(len(c['tail'])==8192 for c in ctxs.values())
+    out_tail=[int(x) for x in rng.integers(3,V,size=8192)]
     rd=RG.Reader55(rt,rt,s3.packing if hasattr(s3,'packing') else sys.modules['packing'],H.TailCtx,reuse.get_filter_spec,reuse._hash_pytree,jax,H.eqx,jnp)
     m_base=rt.base;inner=m_base.inner_parameters();pert=L.set_inner(m_base,jax.tree.map(lambda x:x+0.02*jnp.ones_like(x),inner))
     fb=L.save_state(m_base,'u11_base.npz');fp=L.save_state(pert,'u11_pert.npz')
-    sf={'BASE':{16:{'A':(fb['_file'],fb['_hash']),'B':(fb['_file'],fb['_hash'])}},'PERT':{16:{'A':(fp['_file'],fp['_hash']),'B':(fp['_file'],fp['_hash'])}}}
-    t0=time.monotonic();rdd,W0=RG.read_world(rd,raw,n,NC,read,out_tail,sf,w0_model=m_base,log=lambda *a:None,only_apps=(16,))
+    sf={'BASE':{16:(fb['_file'],fb['_hash'])},'PERT':{16:(fp['_file'],fp['_hash'])}}
+    h_before=reuse._hash_pytree(pert.inner_parameters())[0]
+    t0=time.monotonic();rdd,W0,idx=RG.read_world(rd,raw,n,NC,read,out_tail,sf,w0_model=m_base,log=lambda *a:None,only_apps=(16,))
+    assert reuse._hash_pytree(pert.inner_parameters())[0]==h_before and reuse._hash_pytree(m_base.inner_parameters())[0]==fb['_hash']      # reading leaves the weights bit-identical
     P=rd.packed(raw,out_tail);s1=rd.score(P,m_base,n,NC);s2=rd.score(P,m_base,n,NC);assert np.array_equal(s1,s2) and np.array_equal(s1,W0['out'])
-    for w_ in 'AB':
-        assert np.array_equal(rdd['BASE'][16]['out'][w_],W0['out']) and np.array_equal(rdd['BASE'][16]['in'][w_],W0['in@16'][w_])
-        assert not np.allclose(rdd['PERT'][16]['out'][w_],W0['out']) and not np.allclose(rdd['PERT'][16]['in'][w_],W0['in@16'][w_])
-        assert not np.isnan(W0['in@16'][w_]).any()
-    # an exposed item of group 1 is scored in group 1's context (and not in group 0's): recompute that block directly
-    c1=ctxs['in_g1'];idx=np.asarray(c1['items']);Pg=rd.packed([raw[i*NC+k] for i in idx for k in range(NC)],c1['tail_A']);direct=rd.score(Pg,m_base,len(idx),NC);assert np.array_equal(direct,W0['in@16']['A'][idx])
-    c0=ctxs['in_g0'];assert set(c0['items'])&set(c1['items'])==set() or True
-    ex0=[i for i in c0['items'] if items[i]['kind']=='exposed'];ex1=[i for i in c1['items'] if items[i]['kind']=='exposed'];assert len(ex0)==len(ex1)==16 and not set(ex0)&set(ex1)
-    assert not np.array_equal(W0['in@16']['A'],W0['in@16']['B'])      # the in-window tails differ between the worlds (names), so W0 is stored per world
-    A_=G.realize(w,False,enc);tail_sha=hashlib.sha256(np.asarray(c1['tail_A'],np.int64).tobytes()).hexdigest()[:12];assert pl['read'][16]['ctx']['in_g1']['tail_A'][:1024]==A_[c1['end']-7]['ids'] and pl['read'][16]['ctx']['in_g1']['tail_A'][-1024:]==A_[c1['end']]['ids']
-    recs=RG.make_records(rdd,W0,R.item_meta(items),read,{'cell':'u11','p':2,'M':8,'s':1,'bank':'50','seed':55});rec=json.loads(json.dumps(recs['PERT']))
-    v=AN.change_vec(rec,16,'out','P2');v2=AN.change_vec(rec,16,'in','P1');assert len(v)==w['N'] and len(v2)==w['N']
-    RES['U11']=f"16 candidates x {n} items, rows packed, 3-token spans; W0 'out' scored twice identical (max|diff| 0), saved base weights reloaded -> scores identical to W0 (out and in-window, worlds A and B), a +0.02 weight shift moves them; each exposed item is scored in its own group's context (group 1 context = real chunks {c1['end']-7}..{c1['end']} of world A, recomputed directly: identical; sha12 {tail_sha}); tails of A and B differ so W0 is stored per world; the record round-trips through JSON into e55_analyze.change_vec ({len(v)} pairs) ({time.monotonic()-t0:.0f}s); random rows, tiny model, NOT 3B"
+    assert np.array_equal(rdd['BASE'][16]['out'],W0['out']) and not np.allclose(rdd['PERT'][16]['out'],W0['out'])
+    for nm in ctxs:
+        assert np.array_equal(rdd['BASE'][16][nm],W0[f'{nm}@16']) and not np.allclose(rdd['PERT'][16][nm],W0[f'{nm}@16']) and not np.isnan(W0[f'{nm}@16']).any()
+    # a fact of group 1 is scored in group 1's context (and not in group 0's): recompute that block directly
+    c1=ctxs['in_g1'];i1=np.asarray(c1['items']);Pg=rd.packed([raw[i*NC+k] for i in i1 for k in range(NC)],c1['tail']);direct=rd.score(Pg,m_base,len(i1),NC);assert np.array_equal(direct,W0['in_g1@16'])
+    c0=ctxs['in_g0'];ex0=[i for i in c0['items'] if items[i]['kind']=='fact'];ex1=[i for i in c1['items'] if items[i]['kind']=='fact'];assert len(ex0)==len(ex1)==16 and not set(ex0)&set(ex1) and len(c0['items'])==20 and len(c1['items'])==16
+    A_=G.realize(w);tail_sha=hashlib.sha256(np.asarray(pl['read'][16]['ctx']['in_g1']['tail'],np.int64).tobytes()).hexdigest()[:12];assert pl['read'][16]['ctx']['in_g1']['tail'][:1024]==A_[c1['end']-7]['ids'] and pl['read'][16]['ctx']['in_g1']['tail'][-1024:]==A_[c1['end']]['ids']
+    recs=RG.make_records(rdd,W0,G.item_meta(items),read,idx,{'cell':'u11','k':32,'n':1,'p':2,'bank':'50','seed':55});rec=json.loads(json.dumps(recs['PERT']))
+    assert rec['meta']['d']['16']['in_g1'][ex1[0]]==2 and rec['meta']['d']['16']['in_g1'][ex0[0]] is None
+    v=MT.vec([rec],16,'out','G_rank');v2=MT.vec([rec],16,['in_g0','in_g1'],'G_rank');assert len(v)==w['k'] and len(v2)==w['k'] and not np.isnan(v2).any()
+    RES['U11']=f"16 candidates x {n} items (32 facts + 4 control), rows packed, 3-token spans; W0 'out' scored twice identical, reading leaves the weights bit-identical (hash before == after), saved base weights reloaded -> scores identical to W0 (out and both group contexts), a +0.02 weight shift moves them; each fact is scored in its own group's context (group 1 context = real chunks {c1['end']-7}..{c1['end']} of the stream, recomputed directly: identical; sha12 {tail_sha}; d = 2 = p); the record round-trips through JSON into e55_metrics ({len(v)} facts, out and in-window) ({time.monotonic()-t0:.0f}s); random rows, tiny model, NOT 3B"
 def u12():
     import e55_run as RUN
     r=RUN.unit_checks(rt,L,s3,REAL,DEC,NCH,1e-3,2e-3);assert r['PASS'],r
     RES['U12']=f"e55_run.unit_checks (the check list the server runs on the 3B model) on the tiny model, 10 chunks: PASS; U1 |ce diff| {r['U1']['abs_ce_diff']:.1e}, rel update diff {r['U1']['rel_update_diff']:.1e}; U2 hash equal {r['U2']['final_hash_equal']} (swapped slots {r['U2']['swapped_slots']}); U5 hash equal {r['U5']['final_hash_equal']} (swapped {r['U5']['swapped_slots']}); U4 window slots changed {r['U4']['prefix_window_slots_changed']}"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12}
+def u13():
+    """arm SWB at p = 1 (fact-free fake window): every existing lag 1..8 comes from the no-fact stream, in the prefix-layer window and in the carried suffix state; bg := real stream -> NAT bit for bit; a real bg stream changes CE / update; the written ids are the real chunk"""
+    k=9;S=setup(NCH,{'real':REAL,'bg':DEC});recs=S['rec'];m=rt.base;st_all=s3.clone_state(rt.state_all);sts={'real':s3.clone_state(rt.state_suffix),'bg':s3.clone_state(rt.state_suffix)}
+    with rt.mesh:
+        for i in range(k):
+            sts['real']=L.read_state(m,sts['real'],rt.chunk(S['seq']['real'],i),S['pref']['real'][i*CH:(i+1)*CH]);sts['bg']=L.read_state(m,sts['bg'],rt.chunk(S['seq']['bg'],i),S['pref']['bg'][i*CH:(i+1)*CH])
+        Kc,Vc,keep,st_w,pl=L.window_inputs('SWB',k,1,recs,sts);assert set(pl.values())=={'bg'} and sorted(pl)==list(range(1,9)) and keep.all()
+        Kb=np.asarray(recs['bg'][0].astype(jnp.float32));Kw=np.asarray(Kc.astype(jnp.float32))
+        for j in range(1,9):
+            c=k-j;assert np.array_equal(Kw[:,(8-j)*CH:(9-j)*CH],Kb[:,c*CH:(c+1)*CH]),j      # prefix-layer window slot = the bg recording of chunk k-j
+        kv=[x for x in jax.tree.leaves(st_w) if getattr(x,'ndim',0)==3 and x.shape[1]==W];kb=[x for x in jax.tree.leaves(sts['bg']) if getattr(x,'ndim',0)==3 and x.shape[1]==W];kr=[x for x in jax.tree.leaves(sts['real']) if getattr(x,'ndim',0)==3 and x.shape[1]==W]
+        assert len(kv)==2 and all(np.array_equal(np.asarray(a),np.asarray(b)) for a,b in zip(kv,kb)) and not all(np.array_equal(np.asarray(a),np.asarray(b)) for a,b in zip(kv,kr))   # suffix state = bg chain, not the real chain
+    nat_=run('NAT',1,None);same=run('SWB',1,REAL);assert same['final_hash']==nat_['final_hash'] and [e['ce'] for e in same['log']]==[e['ce'] for e in nat_['log']]
+    swb=run('SWB',1,DEC);assert swb['final_hash']!=nat_['final_hash'] and sum(e['n_swapped_slots'] for e in swb['log'])==sum(min(i,8) for i in range(NCH))
+    seen=[];orig=L.prefix_masked
+    def spy(m_,ids_,*a,**kw):seen.append(np.asarray(ids_).copy());return orig(m_,ids_,*a,**kw)
+    L.prefix_masked=spy;run('SWB',1,DEC,nch=4);L.prefix_masked=orig;assert all(np.array_equal(seen[i],REAL[i*CH:(i+1)*CH]) for i in range(4))
+    RES['U13']=f"SWB p=1 at chunk {k}: all lags 1-8 are bg (prefix-layer window K slices equal the bg recording exactly; suffix state equals the bg chain, differs from the real chain); bg := real -> NAT bitwise (hash {same['final_hash']}), 'swapped slots' {sum(e['n_swapped_slots'] for e in swb['log'])} over {NCH} chunks, a real bg stream changes the weights, the written ids are the real chunk"
+def u14():
+    """fake windows of the (16,1,1)-style world (stub tokenizer, injective): 'names' (A) and 'nofact' (B) streams contain none of the real names / places / control names / never-exposed places; layout and lengths equal the real chunks; B contains none of the original fact-sentence tokens; a planted name is caught"""
+    import gen_facts as G
+    enc=G.StubTok();bg=G._synth_bg(9000);w=G.build_fact_world(55,enc=enc,bg=bg,**G.CELLS['p1']);v,A_=G.verify(w,enc);assert v['names_decoy_fact_free'] and v['nofact_fact_free'] and v['decoy_fact_free'] and v['names_decoy_disjoint']
+    N_=G.realize(w,'names');B_=G.realize(w,'nofact');ns=0
+    for a_,n_,b_ in zip(A_,N_,B_):
+        assert len(a_['ids'])==len(n_['ids'])==len(b_['ids'])==G.CH
+        for x in a_['sents']:
+            sent=a_['ids'][x['start']:x['end']];ns+=1
+            assert b_['ids'][x['start']:x['end']]!=sent and len(b_['ids'][x['start']:x['end']])==len(sent)
+            assert not any(b_['ids'][i:i+6]==sent[:6] for i in range(G.CH-5)),'original sentence tokens in the nofact chunk'         # the first 6 tokens of an original fact sentence never occur in B
+            assert n_['ids'][x['start']:x['end']]!=sent and n_['ids'][x['start']-1]==a_['ids'][x['start']-1]
+    t=enc(w['facts'][0]['X'])
+    for kd in ('names','nofact'):
+        w2=G.build_fact_world(55,enc=enc,bg=bg,**G.CELLS['p1']);w2[kd]['chunks'][0]['ids'][7:7+len(t)]=t
+        try:G.verify(w2,enc);ok=False
+        except AssertionError:ok=True
+        assert ok,kd
+    RES['U14']=f'p=1 world: names stream (A) and nofact stream (B) have the exact layout of the real chunks (1024 tokens, sentence spans identical, {ns} sentences), contain no name / place / control name / never-exposed place of the world (token search), B shares no original sentence prefix with the real chunks, and the other tokens of B equal the real chunk; a planted name is caught in both (stub tokenizer; the server dry run repeats it with the real tokenizer)'
+def u15():
+    """inline frozen-weight reads (e55_gpu.Reads via run_stream read_hook): per-chunk CE and the final weights are bit-identical with and without reads, for NAT and SWD; reads differ along the stream; W0 shared"""
+    import e55_gpu as RG
+    V=rt.cfg.model.vocab_size;rng=np.random.default_rng(15);NC=16;n=3;cand=rng.integers(3,V,size=(NC,3));pre=rng.integers(3,V,size=(n,9))
+    raw=[(list(map(int,pre[i]))+list(map(int,cand[c])),(8,11)) for i in range(n) for c in range(NC)]
+    out_tail=[int(x) for x in rng.integers(3,V,size=8192)]
+    plan={a:{'ctx':{'in_g0':{'group':0,'items':list(range(n)),'d':[1]*n,'tail':[int(x) for x in rng.integers(3,V,size=min(a,8)*CH)],'window_chunks':min(a,8)}}} for a in (1,2,8)}
+    rd=RG.Reader55(rt,rt,s3.packing if hasattr(s3,'packing') else sys.modules['packing'],H.TailCtx,reuse.get_filter_spec,reuse._hash_pytree,jax,H.eqx,jnp)
+    t0=time.monotonic();R_=RG.Reads(rd,raw,n,NC,plan,out_tail,rt.base,{1,2,8},{1,8});got={}
+    def hook(k,m):got[k+1]=R_.at(k+1,m);return None
+    msg=[]
+    for arm in ('NAT','SWD'):
+        base=L.run_stream(arm,1,REAL,decoy_ids=DEC,nch=8,tag='u15a',log=lambda *a:None);got.clear()
+        with_=L.run_stream(arm,1,REAL,decoy_ids=DEC,nch=8,tag='u15b',log=lambda *a:None,read_hook=hook,hook_chunks=[0,1,7])
+        assert [e['ce'] for e in base['log']]==[e['ce'] for e in with_['log']] and base['final_hash']==with_['final_hash'],arm
+        assert set(got)=={1,2,8} and set(got[1])=={'out','in_g0'} and set(got[2])=={'out'} and got[8]['out'].shape==(n,NC) and not np.array_equal(got[1]['out'],got[8]['out'])
+        msg.append(f"{arm} hash {base['final_hash']}")
+    assert set(R_.W0)=={'out','in_g0@1','in_g0@8'} and np.array_equal(R_.W0['out'],rd.score(R_.P_out,rt.base,n,NC))
+    RES['U15']=f"reads at appearances 1, 2, 8 (out) and 1, 8 (in-window, window shorter than 8 chunks at a=1): per-chunk CE and final weight hash identical with and without reads ({'; '.join(msg)}); reads differ between chunk 1 and 8; W0 stored once ({time.monotonic()-t0:.0f}s, tiny model, random rows)"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
