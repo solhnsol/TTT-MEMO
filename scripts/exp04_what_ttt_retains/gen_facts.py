@@ -98,6 +98,11 @@ def _alloc(seed,k,enc,bank,decoy_world=True,nu=0):
         assert len(left)>=rest+(k if decoy_world else 0),(what,'pool too small for control / decoy-world names',len(left))
         res[what]=([a for a,_ in use],[b for _,b in use],left[:rest],left[rest:rest+(k if decoy_world else 0)],L)
     return res
+def fresh_places(world,enc,n=16):
+    """E55 design 17: n never-exposed place names with the SAME token length as the world's places (modal class, leading space), disjoint from every place of the real world, the fake window ('names'), the decoy world and the existence-check unexposed list; deterministic in (seed, world). They never occur in any stream."""
+    used={f['P'] for f in world['facts']}|{f['P'] for f in world.get('names',{}).get('facts',[])}|{f['P'] for f in world.get('decoy',{}).get('facts',[])}|set(world.get('unexposed',[]))
+    L=world['place_len'];cls=sorted({a+b for a in PL_PREX for b in PL_SUFX if len(enc(' '+a+b))==L}-used);assert len(cls)>=n,('too few fresh places',len(cls));r=random.Random(f"E55fresh|{world['seed']}|{world['k']}")
+    out=r.sample(cls,n);assert len(set(out))==n and not set(out)&used and all(len(enc(' '+x))==L for x in out);return out
 def make_units(bg,enc,sep,maxtok=UNIT_TOK):
     """background units: [(ids + sep, text)], each <= maxtok tokens (+ sep), cut at sentence ends (a sentence longer than maxtok is cut by tokens)"""
     out=[]
@@ -117,7 +122,27 @@ def make_units(bg,enc,sep,maxtok=UNIT_TOK):
             cur+=ids;txt.append(s)
         flush()
     return out
+def latin_frames(seed,tag,k,nf):
+    """E55 design 19.1 (frames = shared64): k x nf Latin rectangle: row f = the frame order of fact f, a random permutation of the nf shared frames, different per fact; each column (= one appearance, i.e. one chunk) holds k DIFFERENT frames. Built row by row: the allowed-edge graph (appearance -> frame not yet used in that column) is (nf - f)-regular for row f, so a perfect matching always exists (Hall); randomized Kuhn matching."""
+    import sys;sys.setrecursionlimit(10000);r=random.Random(f'E55lat|{seed}|{tag}');used=[set() for _ in range(nf)];rows=[]
+    for f in range(k):
+        adj=[[x for x in range(nf) if x not in used[a]] for a in range(nf)]
+        for l in adj:r.shuffle(l)
+        order=list(range(nf));r.shuffle(order);match={}          # frame -> appearance
+        def aug(a,seen):
+            for x in adj[a]:
+                if x in seen:continue
+                seen.add(x)
+                if x not in match or aug(match[x],seen):match[x]=a;return True
+            return False
+        for a in order:assert aug(a,set()),('no perfect matching (cannot happen)',f)
+        row=[None]*nf
+        for x,a in match.items():row[a]=x;used[a].add(x)
+        rows.append(row)
+    return rows
 def _make_facts(names,places,seed,k,tag,bank_kind,bank,owner,n,n_app):
+    if bank_kind=='shared64':
+        assert n==1 and n_app==len(bank)==64,'shared64: one sentence per fact and chunk, one appearance per frame (n_app = 64)';lat=latin_frames(seed,tag,k,64);r=random.Random(f'E55f|{seed}|occ|{tag}');return [{'id':f,'group':None,'X':names[f],'P':places[f],'o':r.choice(OCC),'frames':lat[f]} for f in range(k)]
     r=random.Random(f'E55f|{seed}|occ|{tag}');return [{'id':f,'group':None,'X':names[f],'P':places[f],'o':r.choice(OCC),'frames':G0.person_frames(bank_kind,bank,owner,f'{seed}|{tag}',f,f,n_app*n)} for f in range(k)]
 def _stream(facts,k,n,p,n_app,bank,enc,units,seed,tag,sep):
     """-> chunks [{'k','group','app','ids' (exactly 1024),'sents':[{fact,frame,app,start,end}]}], units used"""
@@ -239,7 +264,7 @@ def verify(world,enc):
     res['min_gap_between_appearances']=mn
     if p>=9:assert mn>=WIN+1,('appearance distance',mn)
     res['frame_repeats_per_fact']=max(len(f['frames'])-len(set(f['frames'])) for f in world['facts'])
-    if world['bank_kind'] in ('50','disjoint','300'):assert res['frame_repeats_per_fact']==0
+    if world['bank_kind'] in ('50','disjoint','300','shared64'):assert res['frame_repeats_per_fact']==0
     res['question_ngram_overlap']=question_overlap(world['bank']);assert res['question_ngram_overlap']==0
     names={x['X'] for x in world['facts']}|{x['X'] for x in world['ctrl']};pl={x['P'] for x in world['facts']};assert len(names)==k+NCTRL and len(pl)==k
     if 'decoy' in world:
@@ -292,7 +317,9 @@ def fmt_stats(rows_):
 CELLS={'base':dict(k=32,n=1,p=2,bank='50'),'p1':dict(k=16,n=1,p=1,bank='50'),'p4':dict(k=64,n=1,p=4,bank='50'),'p9':dict(k=144,n=1,p=9,bank='50'),'k16':dict(k=16,n=1,p=2,bank='50'),'k64':dict(k=64,n=1,p=2,bank='50'),'n2':dict(k=32,n=2,p=2,bank='50'),'n2k16':dict(k=16,n=2,p=2,bank='50'),'bank12':dict(k=32,n=1,p=2,bank='12'),'disjoint':dict(k=32,n=1,p=2,bank='disjoint'),'exist8':dict(k=8,n=1,p=1,bank='50'),
        # design v3 (E55 section 13): 128 exposures per fact, bank of 300 frames, p = 1; read points in APPEARANCES = exposures / n (exposures 16, 32, 64, 128)
        'v3_16_1':dict(k=16,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),'v3_8_1':dict(k=8,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),'v3_8_4':dict(k=8,n=4,p=1,bank='300',n_app=32,read_apps=(4,8,16,32)),
-       'v3_4_8':dict(k=4,n=8,p=1,bank='300',n_app=16,read_apps=(2,4,8,16)),'v3_4_1':dict(k=4,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128))}
+       'v3_4_8':dict(k=4,n=8,p=1,bank='300',n_app=16,read_apps=(2,4,8,16)),'v3_4_1':dict(k=4,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),
+       # design 19 (R2 + R3): 64 exposures per fact, k = 16, p = 1; frames unique per fact (64 of the 300) or the same 64 frames for every fact (Latin assignment)
+       'ic_u64':dict(k=16,n=1,p=1,bank='300',n_app=64,read_apps=(16,32,64)),'ic_s64':dict(k=16,n=1,p=1,bank='shared64',n_app=64,read_apps=(16,32,64))}
 def cell_world(seed,name,enc,bg,**kw):
     """build_fact_world for a named cell (a cell may carry its own n_app / read_apps; the older cells use n_app = 16)"""
     return build_fact_world(seed,enc=enc,bg=bg,**{'n_app':16,**CELLS[name],**kw})

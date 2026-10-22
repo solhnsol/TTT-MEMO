@@ -33,13 +33,13 @@ def _full3(self,hidden_states,seq,state):
         xq,xk,xv=self.get_attention_input(hidden_states,position_ids=q0+jnp.arange(n,dtype=jnp.int32))
         K=jnp.concatenate([Kc.astype(xk.dtype),xk],axis=0);V=jnp.concatenate([Vc.astype(xv.dtype),xv],axis=0)
         qi=(q0+jnp.arange(n,dtype=jnp.int32))[:,None];kj=(q0-WIN+jnp.arange(WIN+n,dtype=jnp.int32))[None,:]
-        mask=(qi>=kj)&(qi-kj<WIN)&(kj>=0)&keep[None,:]
+        mask=(qi>=kj)&(qi-kj<WIN)&(kj>=0)&(keep if keep.ndim==2 else keep[None,:])      # E55 design 19: keep may be a per-query [n, WIN+n] mask (arm KMASK); the 1-D path is unchanged
         o=jax.nn.dot_product_attention(xq,K,V,mask=mask,implementation='xla');o=self._merge_heads(o)
         return (self.get_attention_output(o),state)
     raise ValueError(mode)
 def _mask3(self,chunk_id):
     m=_prev_mask(self,chunk_id)
-    if 'kmask' in S3SUF:m=m&S3SUF['kmask'][None,:]
+    if 'kmask' in S3SUF:km=S3SUF['kmask'];m=m&(km if km.ndim==2 else km[None,:])
     return m
 SWA.full_sw_attention=_full3;SWA.sw_causal_mask=_mask3
 class Ladder3(LD.Ladder):
