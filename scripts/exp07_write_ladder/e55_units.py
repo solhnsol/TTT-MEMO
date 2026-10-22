@@ -337,6 +337,27 @@ def u22():
         e0=E.token_masks('SENT',0,ch,CH)[0];assert e0.all() and E.token_masks('KMASK',0,ch,CH)[0].all()
         e1=E.token_masks('SENT',5,[{'sents':[]}]*10,CH)[0];assert e1.all()
     RES['U22']='; '.join(f'{c} k={k}: SENT hides {a} tokens ({100*a/W:.1f}% of the window), KMASK {b} distinct keys' for c,k,a,b in out[:2]+out[-2:])+'; hidden-key lists equal the independent computation; KMASK subset of SENT; per-query KMASK; Latin frames ok'
+def u29():
+    """E55 design 26.4: SENTO (sentence rows hide the earlier sentences of the OTHER facts) vs KMASK (same fact): per row independent computation, KMASK and SENTO hidden pairs disjoint, intersection of their keeps == SENT keep on every sentence row, background rows see everything, chunk 0 / empty table mask nothing"""
+    import gen_facts as G
+    enc=G.StubTok();bg=G._synth_bg(9000);n=0
+    w=G.cell_world(61,'ic_u64',enc,bg,decoys=('names','nofact'));ch=G.realize(w);G.verify(w,enc)
+    for k in (0,1,5,9,40,63):
+        ks,_=E.token_masks('SENT',k,ch,CH);km,_=E.token_masks('KMASK',k,ch,CH);so,nso=E.token_masks('SENTO',k,ch,CH)
+        assert so.shape==(CH,W+CH);inside=np.zeros(CH,bool)
+        assert ((~km)&(~so)).sum()==0
+        for xq in ch[k]['sents']:
+            inside[xq['start']:xq['end']]=True;exp=set()
+            for c in range(max(0,k-8),k):
+                for x in ch[c]['sents']:
+                    if x['fact']!=xq['fact']:exp|=set(range(c*CH+x['start'],c*CH+x['end']))
+            for r in range(xq['start'],xq['end']):
+                assert {k*CH-W+j for j in np.nonzero(~so[r])[0]}==exp,(k,xq['fact'])
+                assert np.array_equal(km[r]&so[r],ks),(k,r)
+                n+=1
+        assert so[~inside].all()
+    assert E.token_masks('SENTO',0,ch,CH)[0].all() and E.token_masks('SENTO',5,[{'sents':[]}]*10,CH)[0].all()
+    RES['U29']=f'SENTO rows == independent other-fact computation ({n} rows), KMASK/SENTO disjoint, intersection of keeps == SENT keep on every sentence row, background rows unmasked, empty/chunk0 unmasked'
 def u23():
     """model level (CPU tiny model): (a) SENT / KMASK with an EMPTY sentence table == NAT bit for bit (CE and final weights); (b) SENT with sentences changes CE from chunk 1 on; (c) perturbing K,V at SENT-hidden positions does not change the write update (bitwise), perturbing a visible position does; (d) a per-query 2-D mask with identical rows == the 1-D keep (same update), and a 2-D mask hiding a window key only for rows [a,b) leaves the prefix outputs of rows before a bit-identical and changes rows in [a,b)"""
     emp=[{'sents':[]} for _ in range(NCH)];tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
@@ -490,7 +511,7 @@ def u28():
     Tf=I.cum_target(np.full(64,0.01));tg_f=I.fos_targets(Tf,segs2,ends);assert len(tg_f)==ends[-1]+1 and abs(tg_f[:ends[0]+1].sum()-(Tf[8]-Tf[0]))<1e-12 and abs(tg_f.sum()-Tf[16])<1e-12
     ids_t=ids_f[:3*1024]%(V-3)+3;nt=np.asarray([0.004,0.006,0.005]);os_=Li.run_stream('NATM',1,ids_t,nch=3,tag='u',log=lambda *x:None,norm_targets=nt);assert all(abs(e['update_norm']-nt[i])<1e-3*nt[i] for i,e in enumerate(os_['log']))
     RES['U28']=f"FOS: stream padded to 1024 multiples (pad {pad}), targets sum to the NAT increments, NATM run hits the per-chunk targets; ISOB: 64 rounds, rows concatenated == chunk tokens, 1 packed chunk per round, fact share 30-40%; ISOD: 64 rounds x 16 sentence rows, 1 chunk each; per-step norm == NAT per-chunk norm ({[round(e['update_norm'],5) for e in o['log']]} vs {[round(float(x),5) for x in norms[:3]]}); read_at honoured; bigstep targets = NAT norm x {16}/{J1} per segment"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28}
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
