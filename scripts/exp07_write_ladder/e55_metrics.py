@@ -36,6 +36,27 @@ def item_stats(S,gi,fi,world):
 def place_stats(S,idx):
     """f(S, place) for a given candidate index per item: (rank, top1, pm3)"""
     S=np.asarray(S,float);r=np.arange(len(S));R=ranks(S);return R[r,idx].astype(float),(R[r,idx]==1).astype(float),S[r,idx]-(S.sum(1)-S[r,idx])/(NC-1)
+def group_stats(S,gi,grp,cgrp):
+    """pairless design: grp (n,) group number of the item's fact, cgrp (n,16) group number of each candidate's fact. Same-group = candidates (not the target) of the item's own group, other-group = the rest. -> mean rank of each class, share of wrong top-1 answers that is a same-group candidate"""
+    S=np.asarray(S,float);n=len(S);r=np.arange(n);R=ranks(S);grp=np.asarray(grp);cgrp=np.asarray(cgrp);tgt=np.zeros_like(S,bool);tgt[r,gi]=True
+    same=(cgrp==grp[:,None])&~tgt;oth=(cgrp!=grp[:,None])&~tgt;top=S.argmax(1);wrong=R[r,gi]!=1
+    return {'rank_same':np.where(same.sum(1)>0,(R*same).sum(1)/np.maximum(same.sum(1),1),np.nan),'rank_other':(R*oth).sum(1)/np.maximum(oth.sum(1),1),'wrong_same':(wrong&same[r,top]).astype(float),'wrong':wrong.astype(float),'n_same':same.sum(1).astype(float),'n_other':oth.sum(1).astype(float)}
+def group_table(recs,a=16,ctx='out'):
+    """optional group stratification (needs meta['group'] and meta['cand_group']); W and W0 mean ranks of same-group vs other-group candidates, rank gain, wrong top-1 share that is same-group (uniform = n_same/(n_same+n_other))"""
+    res={};acc={'same_W':[],'same_W0':[],'oth_W':[],'oth_W0':[],'ws':[],'wr':[],'uni':[]}
+    for rec in recs:
+        m=rec['meta'];gi=np.asarray(m['gi']);S=rec['read'][str(a)][ctx];W0=_w0(rec,ctx,a);w='A' if 'A' in S else list(S)[0]
+        sel=_sel(rec);pr=_pairs(rec,sel)
+        gw=group_stats(S[w],gi,m['group'],m['cand_group']);g0=group_stats(W0[w],gi,m['group'],m['cand_group'])
+        for key,src,nm in (('same_W',gw,'rank_same'),('same_W0',g0,'rank_same'),('oth_W',gw,'rank_other'),('oth_W0',g0,'rank_other')):acc[key].append(ES.pair_means(np.nan_to_num(src[nm][sel],nan=8.5),pr))
+        acc['ws'].append(_gsum(gw['wrong_same'][sel],pr));acc['wr'].append(_gsum(gw['wrong'][sel],pr));acc['uni'].append(_gsum((gw['wrong']*gw['n_same']/(gw['n_same']+gw['n_other']))[sel],pr))
+    c=lambda k:np.concatenate(acc[k])
+    res['rank_gain_same_group']=ci(c('same_W0')-c('same_W'));res['rank_gain_other_group']=ci(c('oth_W0')-c('oth_W'));res['rank_same_W']=ci(c('same_W'));res['rank_other_W']=ci(c('oth_W'))
+    res['wrong_top1_is_same_group']=ratio_ci(c('ws'),c('wr'));res['uniform_expectation']=float(c('uni').sum()/max(c('wr').sum(),1e-9));return res
+def _gsum(x,pr):
+    d={}
+    for v,p in zip(x,pr):d[p]=d.get(p,0)+v
+    return np.asarray([d[k] for k in sorted(d,key=lambda s:int(str(s).lstrip('px')))])
 def _w0(rec,ctx,a):
     W=rec['W0'];S=W[f'{ctx}@{a}'] if f'{ctx}@{a}' in W else W[ctx];return S if isinstance(S,dict) else {'A':S,'B':S}
 def _sel(rec,a=None,ctx=None,dmin=None,dmax=None):
@@ -215,6 +236,11 @@ def selftest():
     def trim(r):
         n=32;r2=a_only(r);r2['meta']['gi']=r['meta']['gi'][:n];r2['W0']={'out':np.asarray(r['W0']['out'])[:n]};r2['read']={'16':{'out':{'A':np.asarray(r['read']['16']['out']['A'])[:n]}}};return r2
     sa=[trim(r) for r in swd];bs=binding(sa);assert bs['binding'] and np.isnan(bs['table']['AB_G_rank'][0]) and np.isnan(bs['table']['G_rank_partner'][0]),bs['table']
+    # 10 group stratification (pairless design): planted same-group boost
+    n=32;grp=np.arange(n)%4;cg=rng.integers(0,4,size=(n,16));cg[:,0]=grp;gi0=np.zeros(n,int)
+    def grec(boost):
+        B=rng.normal(size=(n,16));X=B+0.3*rng.normal(size=(n,16))+boost*((cg==grp[:,None])&(np.arange(16)[None,:]>0));return {'meta':{'gi':gi0.tolist(),'group':grp.tolist(),'cand_group':cg.tolist(),'pair':[f'p{i}' for i in range(n)]},'W0':{'out':B},'read':{'16':{'out':{'A':X}}}}
+    gt=group_table([grec(3.0) for _ in range(2)]);assert gt['rank_gain_same_group'][0]>gt['rank_gain_other_group'][0]+2 and gt['wrong_top1_is_same_group'][0]>gt['uniform_expectation']+0.2,gt
     # 9 window mismatch flag: raw rank drop and G_in-G_out of opposite sign -> no call
     wm=dict(we);wm['metric_mismatch']=True;assert prediction_A({1:wm,2:we,4:we})['verdict'].startswith('cannot judge')
     print(table({'NAT':nat,'SWD':swd,'partner-boost only':pb}))
