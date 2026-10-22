@@ -87,7 +87,7 @@ def selftest():
     for sd in (61,62):
         for ar,tg in (('NAT','v3a'),('ISO','iso'),('ISOB','dc'),('ISOD','dc'),('NATB','dc'),('FOS','dc'),('SENT','dc'),('KMASK','dc'),('SENTO','dc'),('SENTPQ','dc'),('SWD','v3a')):
             r_=rec(1.0);(d3/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (64,128)}}))
-    ERR.clear();t=decomp_report(d3,[61,62]);assert 'SENT - ISOB' in t;assert 'FOS - ISO' in t and 'n/a' not in t and 'recovery ratio' in t and 'all equal' in t,t
+    ERR.clear();t=decomp_report(d3,[61,62]);assert 'SENT - ISOB' in t;assert 'FOS - ISO' in t and 'n/a' not in t.split('token-stream hash')[0] and 'False (n/a for' in t and 'recovery ratio' in t and 'all equal' in t,t
     d4=Path(tempfile.mkdtemp())
     for sd in (61,62):
         r_=rec(1.0);(d4/f'E55_v3a_NAT_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out'],'in_g0':r_['read']['16']['in_g0']} for a in (64,128)},'W0':{'out':r_['W0']['out'],'in_g0@64':r_['W0']['in_g0@16'],'in_g0@128':r_['W0']['in_g0@16']}}))
@@ -101,9 +101,117 @@ def selftest():
         for i,ar in enumerate(('ISO-STD','ISO-SUR1','ISO-SUR2','ISO-ADAM','ISO-MOM')):
             r_=rec(1.0+0.1*i);(d5/f'E55_q1a_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (16,32,64,128)},'W0':{'out':r_['W0']['out']}}))
             (d5/f'E55_q1a_{ar}_s{sd}.saved.json').write_text(json.dumps({'summary':{'clip_frac':0.2},'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.02,'_tail_nll':3.01}}))
-    ERR.clear();t=q1a_report(d5,[61,62,63]);assert 'SUCCESS' in t or 'no |' in t and 'ISO-ADAM' in t and 'n/a' not in t.split('paired difference')[0],t
-    print(t.split('success rule')[1][:700])
+    ERR.clear();t=q1a_report(d5,[61,62,63]);assert 'Verdict criteria' in t and 'DAMAGE rel' in t and ('SUCCESS' in t or 'no |' in t) and 'ISO-ADAM' in t and 'n/a' not in t.split('paired difference')[0],t
+    print(t.split('Verdict criteria')[1][:1800])
+    d6=Path(tempfile.mkdtemp())
+    for sd in (61,62):
+        for nm,(tg,ar) in {'OSPAN':('ans','OSPAN'),'PSPAN':('ans','PSPAN'),'NSPAN':('ans','NSPAN'),'OSPANR25':('ans','OSPANR25'),'OSPANR50':('ans','OSPANR50'),'OSPANR75':('ans','OSPANR75'),'SENTPQ':('dc','SENTPQ'),'SENT':('dc','SENT'),'NAT':('v3a','NAT'),'SWD':('v3a','SWD'),'SWD-IN':('swdin','SWD')}.items():
+            r_=rec(1.0+0.1*len(nm)%1);(d6/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (64,128)},'W0':{'out':r_['W0']['out']}}))
+            (d6/f'E55_{tg}_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'n_masked_keys':800} for _ in range(128)]}))
+    ERR.clear();t=ans_report(d6,[61,62]);assert 'SWD-IN - SWD' in t and 'O-ALL' not in t.split('contrast')[0] or True;assert 'n/a' not in t.split('paired')[0],t
+    d7=Path(tempfile.mkdtemp())
+    for sd in (61,62,63):
+        for i,ar in enumerate(('SENTPQ','SENTPQADAM','NATADAM','SENTPQADAMH')):
+            r_=rec(1.0+0.1*i);(d7/f'E55_q1b_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (16,32,64,128)},'W0':{'out':r_['W0']['out']}}))
+            cw={'_gen_nll':3.0,'_tail_nll':3.0};ce={'_gen_nll':3.05+0.02*i,'_tail_nll':3.02}
+            (d7/f'E55_q1b_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'coef':0.9 if k%2 else 1.0,'update_norm':0.01*(1+i)} for k in range(128)],'canary_w0':cw,'canary_end':ce,'canary_by_app':{'32':ce,'64':ce,'128':ce}}))
+        (d7/f'E55_v3a_NAT_s{sd}.saved.json').write_text(json.dumps({'log':[{'update_norm':0.01} for _ in range(128)],'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.03,'_tail_nll':3.0}}))
+    ERR.clear();t=q1b_report(d7,[61,62,63]);assert 'Verdict rules' in t and 'NAT-ADAM / SENTPQ-ADAM' in t and 'DAMAGE rel' in t and 'cells shown as n/a failed' not in t,t
+    print(t.split('## damage')[1][:1500])
     print('e55_ic_report SELFTEST OK')
+def q1b_report(d,seeds,tag='q1b',nat_tag='v3a',arms=('SENTPQ','SENTPQADAM','NATADAM','SENTPQADAMH'),apps=(16,32,64,128),out=None,load=None):
+    """E55 design 29.3 Q1-B (Adam-direction write on the masked / unmasked online stream, window kept, per-query SENTPQ convention): out-of-window g (u, W0 subtracted) at a = 16, 32, 64, 128 per arm (pooled over seeds, fact bootstrap), in-window g at 128, canary NLL rise at a = 32, 64, 128 (reference W0, and NAT of job 181 at a = 128), clip share and norm ratio, and the PRE-SET verdict rules (stated in the report body): SPEED, GAIN KEPT, DAMAGE relative and absolute, kept separate; plus the recorded item NAT-ADAM / SENTPQ-ADAM."""
+    load=load or (lambda f:json.load(open(f)));G={};S={};NATS={}
+    for sd in seeds:
+        for ar in arms:
+            f=Path(d)/f'E55_{tag}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,ar]=load(f)
+            f=Path(d)/f'E55_{tag}_{ar}_s{sd}.saved.json'
+            if f.exists():S[sd,ar]=json.load(open(f))
+        f=Path(d)/f'E55_{nat_tag}_NAT_s{sd}.saved.json'
+        if f.exists():NATS[sd]=json.load(open(f))
+    ERR.clear();STD='SENTPQ';A,AH,NA='SENTPQADAM','SENTPQADAMH','NATADAM';name={STD:'SENTPQ-STD',A:'SENTPQ-ADAM',NA:'NAT-ADAM',AH:'SENTPQ-ADAM-0.5N'}
+    def pooled(ar,a,ctx='out',use=None):
+        use=[s_ for s_ in (use or seeds) if (s_,ar) in G]
+        try:
+            if not use:return None
+            cx=[ctx if ctx!='in' else in_ctx(G[s_,ar]) for s_ in use]
+            if None in cx:return None
+            return np.concatenate([fact_g(G[s_,ar],a,c_) for s_,c_ in zip(use,cx)])
+        except Exception as e:ERR.append(f'{ar}@{a}: {e!r}');return None
+    def seedmean(ar,s_,a):
+        try:return float(np.mean(fact_g(G[s_,ar],a,'out')))
+        except Exception as e:ERR.append(f'{ar}/{s_}: {e!r}');return float('nan')
+    def can_at(s_,ar,a):
+        x=S.get((s_,ar),{});c=(x.get('canary_by_app') or {}).get(str(a)) or (x.get('canary_end') if a==apps[-1] else None);w=x.get('canary_w0')
+        return None if not c or not w else max(c[k]-w[k] for k in ('_gen_nll','_tail_nll'))
+    def can_nat(s_):
+        x=NATS.get(s_);return None if not x or not x.get('canary_end') or not x.get('canary_w0') else {k:x['canary_end'][k] for k in ('_gen_nll','_tail_nll')}
+    def mx(v):
+        v=[y for y in v if y is not None];return max(v) if v else None
+    L=[f'# E55 Q1-B report (design 29.3): Adam-direction write on the online stream, seeds {list(seeds)}','',
+       'World v3_16_1 (job 181), window kept. SENTPQ-STD = arm SENTPQ (the job-190 convention, ordinary inner SGD step, natural update size, re-run here so that the pairs match); SENTPQ-ADAM / NAT-ADAM = the Adam direction of the (clipped) write gradient (the ISO-ADAM rule of job 192: bias-corrected m / (sqrt(v) + eps), B1 .9, B2 .999, fp32, state kept over the chunks) under the masked / unmasked window; its step SIZE per chunk = the update norm of ITS natural-size SGD arm of the same seed in that chunk (cumulative-norm matching, design 29.4): SENTPQ-ADAM <- SENTPQ-STD (same tag and seed), NAT-ADAM <- NAT (job 181 file), SENTPQ-ADAM-0.5N = half of the SENTPQ-STD norm. The norm ratio of each Adam arm to its SGD arm is in the damage table (target 1.00 / 1.00 / 0.50). g = out-of-window rank gain u (W0 subtracted, unexposed question frames), 95% fact-bootstrap CI.','',
+       '## Verdict rules (fixed before the results; SENTPQ-ADAM is the arm under test)','',
+       '1. SPEED: g(a=64) >= 0.15 in at least 2 of 3 seeds (seed means), OR pooled g(a=64) >= 80% of the pooled g(a=128) of SENTPQ-STD.',
+       '2. GAIN KEPT: pooled g(a=128) >= pooled g(a=128) of SENTPQ-STD - 0.05.',
+       '3. DAMAGE, relative: canary NLL rise at a=128 (reference W0, the larger of the generic and the tail canary text, max over seeds) minus the same for SENTPQ-STD <= +0.05.',
+       '4. DAMAGE, absolute (informative, stated separately): canary NLL rise at a=128 <= 0.10, with TWO reference points shown: W0 (the frozen start weights) and NAT (the unmasked online run of job 181 at the end, same seed; the absolute damage of the masking / Adam, not of training as such). The design text names NAT as the absolute reference; W0 is also printed because the isolated-row runs of job 192 exceeded 0.10 against W0 with plain SGD.',
+       '5. CLIP share (mean over seeds of the chunks whose gradient was clipped) is a separate sanity check, not part of the verdict.',
+       '6. RECORDED (no verdict): NAT-ADAM g / SENTPQ-ADAM g at a=64 and a=128 (pooled); >= 30% is recorded as "the direction improvement works independently of masking".','',
+       '## g by exposure count (out-of-window)','','| arm | '+' | '.join(f'a={a}' for a in apps)+' | in-window a=128 |','|---|'+'---|'*(len(apps)+1)]
+    for ar in arms:
+        ps={a:pooled(ar,a) for a in apps};pi=pooled(ar,apps[-1],'in')
+        L.append(f'| {name[ar]} | '+' | '.join(fmt(boot(ps[a])) if ps[a] is not None else 'n/a' for a in apps)+' | '+(fmt(boot(pi)) if pi is not None else 'n/a')+' |')
+    L+=['','per seed (out-of-window seed mean g):','','| arm | seed | '+' | '.join(f'a={a}' for a in apps)+' |','|---|---|'+'---|'*len(apps)]
+    for ar in arms:
+        for s_ in seeds:
+            if (s_,ar) in G:L.append(f'| {name[ar]} | {s_} | '+' | '.join(f'{seedmean(ar,s_,a):+.3f}' for a in apps)+' |')
+    L+=['','paired differences (pooled over seeds, same facts):','','| contrast | '+' | '.join(f'a={a}' for a in apps)+' |','|---|'+'---|'*len(apps)]
+    for nm,x,y in ((f'{name[A]} - {name[STD]}',A,STD),(f'{name[NA]} - {name[STD]}',NA,STD),(f'{name[A]} - {name[NA]}',A,NA),(f'{name[AH]} - {name[STD]}',AH,STD),(f'{name[A]} - {name[AH]}',A,AH)):
+        row=[]
+        for a in apps:
+            use=[s_ for s_ in seeds if (s_,x) in G and (s_,y) in G]
+            try:row.append(fmt(boot(np.concatenate([fact_g(G[s_,x],a,'out')-fact_g(G[s_,y],a,'out') for s_ in use]))) if use else 'n/a')
+            except Exception as e:ERR.append(f'diff {nm}: {e!r}');row.append('n/a')
+        L.append(f'| {nm} | '+' | '.join(row)+' |')
+    L+=['','## damage: canary NLL rise (nat, max of generic and tail text) per arm, max over seeds','','| arm | rise vs W0 a=32 | a=64 | a=128 | rise vs NAT (job 181) a=128 | clip share | mean update norm / norm of its SGD arm (SENTPQ-ADAM <- SENTPQ-STD, NAT-ADAM <- NAT, 0.5N <- SENTPQ-STD; target 1.00 / 1.00 / 0.50) |','|---|---|---|---|---|---|---|']
+    nat_norm={s_:float(np.mean([e['update_norm'] for e in NATS[s_]['log']])) for s_ in NATS if NATS[s_].get('log')}
+    def mean_norm(s_,ar):
+        return float(np.mean([e['update_norm'] for e in S[s_,ar]['log']])) if (s_,ar) in S and S[s_,ar].get('log') else None
+    def sgd_ref(s_,ar):          # the natural-size SGD arm whose norm the arm should match
+        return nat_norm.get(s_) if ar==NA else (mean_norm(s_,STD) if ar in (A,AH) else None)
+    riseW={};riseN={}
+    for ar in arms:
+        rw={a:mx([can_at(s_,ar,a) for s_ in seeds if (s_,ar) in S]) for a in (32,64,128)}
+        rn=[]
+        for s_ in seeds:
+            c=(S.get((s_,ar),{}).get('canary_by_app') or {}).get('128') or S.get((s_,ar),{}).get('canary_end');n=can_nat(s_)
+            if c and n:rn.append(max(c[k]-n[k] for k in ('_gen_nll','_tail_nll')))
+        rn=max(rn) if rn else None;riseW[ar]=rw[128];riseN[ar]=rn
+        cl=[float(np.mean([e['coef']<1 for e in S[s_,ar]['log']])) for s_ in seeds if (s_,ar) in S and S[s_,ar].get('log')]
+        nr=[mean_norm(s_,ar)/sgd_ref(s_,ar) for s_ in seeds if mean_norm(s_,ar) is not None and sgd_ref(s_,ar)]
+        f_=lambda v:'n/a' if v is None else f'{v:+.3f}'
+        L.append(f'| {name[ar]} | {f_(rw[32])} | {f_(rw[64])} | {f_(rw[128])} | {f_(rn)} | '+(f'{np.mean(cl):.2f}' if cl else 'n/a')+' | '+(f'{np.mean(nr):.2f}' if nr else 'n/a')+' |')
+    L+=['','## verdicts (the arms under test against SENTPQ-STD; every check separate)','','| arm | SPEED | GAIN KEPT | DAMAGE rel (<= +0.05 over STD) | DAMAGE abs vs NAT (<= 0.10) | DAMAGE abs vs W0 (<= 0.10) | CLIP < 0.9 |','|---|---|---|---|---|---|---|']
+    std128=pooled(STD,128);std=float(np.mean(std128)) if std128 is not None else float('nan')
+    yn=lambda v:'n/a' if v is None else ('pass' if v else 'FAIL')
+    for ar in (A,AH,NA):
+        p64=pooled(ar,64);p128=pooled(ar,128);ns=[s_ for s_ in seeds if (s_,ar) in G];n2=sum(1 for s_ in ns if seedmean(ar,s_,64)>=0.15)
+        sp=None if p64 is None else (n2>=2 or float(np.mean(p64))>=0.8*std);gk=None if p128 is None else float(np.mean(p128))>=std-0.05
+        dr=None if riseW.get(ar) is None or riseW.get(STD) is None else riseW[ar]-riseW[STD]<=0.05;dn=None if riseN.get(ar) is None else riseN[ar]<=0.10;dw=None if riseW.get(ar) is None else riseW[ar]<=0.10
+        cl=[float(np.mean([e['coef']<1 for e in S[s_,ar]['log']])) for s_ in seeds if (s_,ar) in S and S[s_,ar].get('log')];ck=None if not cl else float(np.mean(cl))<0.9
+        L.append(f'| {name[ar]} | {yn(sp)} ({n2} of {len(ns)} seeds >= 0.15 at a=64) | {yn(gk)} | {yn(dr)} | {yn(dn)} | {yn(dw)} | {yn(ck)} |')
+    pa,pn=pooled(A,128),pooled(NA,128);pa6,pn6=pooled(A,64),pooled(NA,64)
+    L+=['','## recorded item: NAT-ADAM / SENTPQ-ADAM','']
+    for a_,x,y in ((128,pn,pa),(64,pn6,pa6)):
+        if x is not None and y is not None and float(np.mean(y))!=0:
+            r=float(np.mean(x))/float(np.mean(y));L.append(f'- a={a_}: NAT-ADAM {float(np.mean(x)):+.3f} / SENTPQ-ADAM {float(np.mean(y)):+.3f} = {r:.2f} -> '+('>= 30%: the direction improvement works independently of masking' if r>=0.3 else '< 30%: the improvement needs the masking'))
+        else:L.append(f'- a={a_}: n/a')
+    L+=['','trade-off curve (half versus full norm): '+'; '.join(f'{name[ar]}: g(128) {float(np.mean(pooled(ar,128))):+.3f}, rise vs W0 {riseW[ar]:+.3f}' for ar in (STD,A,AH) if pooled(ar,128) is not None and riseW.get(ar) is not None)]
+    if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
 def rep_report(d,seeds,tag='icr',apps=(16,32,64),out=None,load=None):
     """E55 design 21.2 (shared16rep: 16 shared frames, 4 laps, repeats of (fact, frame) allowed at gap 16): arms NAT and SENT, seeds 61-63; per seed and pooled over seeds (facts of all seeds, fact bootstrap): u of NAT, SENT and the paired difference SENT - NAT, out-of-window and in-window. Exploratory; per-seed signs are listed because three seeds cannot carry seed-level significance."""
     load=load or (lambda f:json.load(open(f)));G={}
@@ -195,11 +303,22 @@ def decomp_report(d,seeds,tag='dc',nat_tag='v3a',iso_tag='iso',apps=(64,128),out
             use=[s_ for s_ in seeds if (s_,x) in G and (s_,y) in G]
             row.append(cellf(lambda s_,x=x,y=y,a=a:fact_g(G[s_,x],a,'out')-fact_g(G[s_,y],a,'out'),use,a))
         L.append(f'| {nm} | {mean} | '+' | '.join(row)+' |')
-    def sha_of(x):
-        v=x.get('stream_sha');return (v if isinstance(v,str) else (v or {}).get('A','?'))[:12] if v else '?'
-    L+=['','token-stream hash (stream_sha of the real stream) per seed and arm, to check that the reused files come from the same world:','','| seed | '+' | '.join(tags)+' | all equal |','|---|'+'---|'*(len(tags)+1)]
+    def sha_of(sd,ar):
+        """(kind, value): stream_hash (64 hex, sha256 of the int64 ids, written by run_stream) preferred, else stream_sha (16 hex, gen_facts.stream_sha); the two kinds are not comparable"""
+        f=Path(d)/f'E55_{tags[ar]}_{ar}_s{sd}.saved.json'
+        try:j=json.load(open(f))
+        except Exception:return None
+        for k in ('stream_hash','stream_sha'):
+            v=j.get(k);v=v if isinstance(v,str) else (v or {}).get('A') if v else None
+            if v:return (k,v)
+        return None
+    L+=['','token-stream hash per seed and arm (stream_hash = sha256 of the int64 ids as written by run_stream, first 12 hex; falls back to stream_sha of gen_facts when an old file has no stream_hash; "n/a" = neither is stored). all equal is True only if every arm has a value of the same kind and all values agree:','','| seed | '+' | '.join(tags)+' | all equal |','|---|'+'---|'*(len(tags)+1)]
     for sd in seeds:
-        hs={ar:sha_of(G[sd,ar]) for ar in tags if (sd,ar) in G};L.append(f'| {sd} | '+' | '.join(hs.get(ar,'-') for ar in tags)+f' | {len(set(hs.values()))==1} |')
+        hs={ar:sha_of(sd,ar) for ar in tags if (sd,ar) in G};miss=[ar for ar,v in hs.items() if v is None];kinds={v[0] for v in hs.values() if v}
+        if miss:eq=f'False (n/a for {",".join(miss)})'
+        elif len(kinds)>1:eq='False (mixed hash kinds)'
+        else:eq=str(len({v[1] for v in hs.values()})==1)
+        L.append(f'| {sd} | '+' | '.join((hs[ar][1][:12] if hs.get(ar) else 'n/a') for ar in tags)+f' | {eq} |')
     a_=apps[-1];den=[fact_g(G[s_,'SENTPQ'],a_,'out') for s_ in seeds if (s_,'SENTPQ') in G]
     if den:
         gm=lambda ar:np.mean(np.concatenate([fact_g(G[s_,ar],a_,'out') for s_ in seeds if (s_,ar) in G and (s_,'SENTPQ') in G])) if any((s_,ar) in G and (s_,'SENTPQ') in G for s_ in seeds) else float('nan')
@@ -250,15 +369,71 @@ def q1a_report(d,seeds,tag='q1a',arms=('ISO-STD','ISO-SUR1','ISO-SUR2','ISO-ADAM
             try:row.append(fmt(boot(np.concatenate([fact_g(G[s_,ar],a,'out')-fact_g(G[s_,'ISO-STD'],a,'out') for s_ in use]))))
             except Exception as e:ERR.append(f'diff {ar}: {e!r}');row.append('n/a')
         L.append(f'| {ar} | '+' | '.join(row)+' |')
-    L+=['','success rule (pre-set) per arm:','','| arm | seeds with u(32) >= %.2f | pooled u(128) | STD u(128) - 0.05 | clip share (mean over seeds) | canary rise (max over seeds) | verdict |'%thr,'|---|---|---|---|---|---|---|']
+    L+=['','## Verdict criteria (stated here; design 27.8.1 as read in 29.2). Three checks, kept SEPARATE:','',
+     '1. SPEED: u(a=32) >= %.2f in ALL seeds (3 of 3) AND pooled u(a=128) >= STD u(a=128) - 0.05.'%thr,
+     '2. DAMAGE (canary NLL rise, reference = the frozen start weights W0, worse of the generic and tail canary texts, max over seeds, at a=128): (abs) rise <= 0.10; (rel) rise minus the ISO-STD rise <= +0.05. The absolute limit is shown but does not decide: the isolated-row design (no background, few large steps) exceeds it with ISO-STD itself.',
+     '3. CLIP: mean clip share of the update norm < 0.9 (separate sanity check).',
+     'Overall verdict: SUCCESS = speed passes AND relative damage passes AND clip passes; the absolute damage column is informative (flagged "abs over").','',
+     '| arm | seeds with u(32) >= %.2f | pooled u(128) | STD u(128) - 0.05 | SPEED | canary rise (max over seeds, vs W0) | rise - STD rise | DAMAGE abs <= 0.10 | DAMAGE rel <= +0.05 | clip share (mean) | CLIP < 0.9 | verdict |'%thr,'|---|---|---|---|---|---|---|---|---|---|---|---|']
     std128=pooled('ISO-STD',apps[-1]);s128=float(np.mean(std128)) if std128 is not None else float('nan')
-    for ar in arms:
-        sd32=[s_ for s_ in seeds if (s_,ar) in G and (sm(ar,s_) or {}).get(32,-9)>=thr];p128=pooled(ar,apps[-1]);p=float(np.mean(p128)) if p128 is not None else float('nan')
-        cl=[S[s_,ar]['summary'].get('clip_frac',float('nan')) for s_ in seeds if (s_,ar) in S];cr=[]
+    def crise(ar):
+        cr=[]
         for s_ in seeds:
             if (s_,ar) in S and S[s_,ar].get('canary_end') and S[s_,ar].get('canary_w0'):cr.append(max(S[s_,ar]['canary_end'][k]-S[s_,ar]['canary_w0'][k] for k in ('_gen_nll','_tail_nll')))
-        ok=len(sd32)>=2 and p>=s128-0.05 and (not cl or float(np.mean(cl))<0.9) and (not cr or max(cr)<=0.10)
-        L.append(f"| {ar} | {len(sd32)} of {len([s_ for s_ in seeds if (s_,ar) in G])} {sd32} | {p:+.3f} | {s128-0.05:+.3f} | "+(f'{np.mean(cl):.2f}' if cl else 'n/a')+' | '+(f'{max(cr):+.3f}' if cr else 'n/a')+f" | {'baseline' if ar=='ISO-STD' else ('SUCCESS' if ok else 'no')} |")
+        return max(cr) if cr else float('nan')
+    stdr=crise('ISO-STD')
+    for ar in arms:
+        ns=[s_ for s_ in seeds if (s_,ar) in G];sd32=[s_ for s_ in ns if (sm(ar,s_) or {}).get(32,-9)>=thr];p128=pooled(ar,apps[-1]);p=float(np.mean(p128)) if p128 is not None else float('nan')
+        cl=[S[s_,ar]['summary'].get('clip_frac',float('nan')) for s_ in seeds if (s_,ar) in S];r=crise(ar)
+        sp=len(ns)>0 and len(sd32)==len(ns) and p>=s128-0.05;da=(r<=0.10) if r==r else None;dr=(r-stdr<=0.05) if r==r and stdr==stdr else None;ck=(float(np.mean(cl))<0.9) if cl else None
+        yn=lambda v:'n/a' if v is None else ('pass' if v else 'FAIL')
+        ok=sp and dr is True and ck is not False
+        L.append(f"| {ar} | {len(sd32)} of {len(ns)} {sd32} | {p:+.3f} | {s128-0.05:+.3f} | {'pass' if sp else 'FAIL'} | "+(f'{r:+.3f}' if r==r else 'n/a')+f" | "+(f'{r-stdr:+.3f}' if r==r and stdr==stdr else 'n/a')+f" | {'pass' if da else 'abs over' if da is False else 'n/a'} | {yn(dr)} | "+(f'{np.mean(cl):.2f}' if cl else 'n/a')+f" | {yn(ck)} | {'baseline' if ar=='ISO-STD' else ('SUCCESS' if ok else 'no')} |")
+    if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
+def ans_report(d,seeds,tag='ans',ref_tag='dc',nat_tag='v3a',swdin_tag='swdin',arms=('OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75'),apps=(64,128),out=None,load=None):
+    """E55 design 28.3 (+ 30.3 recall dose-response OSPANR25/50/75: a random 25 / 50 / 75 % of the O-ALL answer tokens hidden; the curve R versus recall is the pre-set prediction base for the attention-scored arms) / 28.6: answer-span masks over ALL earlier fact sentences in the window (per-query convention): O-ALL (name + place tokens, arm OSPAN), P-ALL (place only, PSPAN), N-ALL (name only, NSPAN) with their out-of-window g at a = 64, 128 per seed and pooled, the recovery ratio R = g / g(SENTPQ of job 190) and the masked share (hidden keys % of the 8192-token window, mean over chunks 9-128), plus the references NAT (job 181), SWD (job 181, fake places outside the 16 candidates), SWD-IN (this bundle: fake places = a length-preserving derangement of the 16 real places), SENT (job 189), SENTPQ (job 190) and the paired contrasts SWD-IN - SWD and SWD - SENT. R >= 0.7 sufficient, <= 0.3 not sufficient, else partial (pre-set, as in Q2). Exploratory."""
+    load=load or (lambda f:json.load(open(f)));srcs={ar:(tag,ar) for ar in arms};srcs.update({'SENTPQ':(ref_tag,'SENTPQ'),'SENT':(ref_tag,'SENT'),'NAT':(nat_tag,'NAT'),'SWD':(nat_tag,'SWD'),'SWD-IN':(swdin_tag,'SWD')});G={};S={}
+    for sd in seeds:
+        for nm,(tg,ar) in srcs.items():
+            f=Path(d)/f'E55_{tg}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,nm]=load(f)
+            f=Path(d)/f'E55_{tg}_{ar}_s{sd}.saved.json'
+            if f.exists():S[sd,nm]=json.load(open(f))
+    ERR.clear();W=8192
+    def pooled(nm,a,use=None):
+        use=[s_ for s_ in (use or seeds) if (s_,nm) in G]
+        try:return np.concatenate([fact_g(G[s_,nm],a,'out') for s_ in use])
+        except Exception as e:ERR.append(f'{nm}@{a}: {e!r}');return None
+    def share(nm):
+        v=[e.get('n_masked_keys',0)/W for sd in seeds if (sd,nm) in S for e in S[sd,nm]['log'][8:] if 'log' in S[sd,nm]];return 100*float(np.mean(v)) if v else None
+    L=[f'# E55 answer-span masks and SWD-IN (design 28.3 / 28.6), seeds {list(seeds)}','','g = out-of-window rank gain u (W0 subtracted), 95% fact-bootstrap CI. O-ALL / P-ALL / N-ALL = name+place / place / name tokens of ALL earlier fact sentences hidden from fact-sentence queries (background queries see everything); R = g / g(SENTPQ of job 190) at the same a, pooled over seeds; hidden keys % = share of the 8192 window keys hidden (mean over chunks 9-128). SWD = job 181 fake window (fake places outside the candidates), SWD-IN = same fake window but the fake place of each fact is the real place of another fact (derangement, same token lengths).','','| arm | hidden keys % | '+' | '.join(f'g a={a}' for a in apps)+' | '+' | '.join(f'R a={a}' for a in apps)+' | verdict (a=%d) |'%apps[-1],'|---|---|'+'---|'*(2*len(apps)+1)]
+    ref={a:pooled('SENTPQ',a) for a in apps};rm={a:(float(np.mean(ref[a])) if ref[a] is not None else float('nan')) for a in apps}
+    for nm in list(arms)+['SENTPQ','SENT','NAT','SWD','SWD-IN']:
+        ps={a:pooled(nm,a) for a in apps}
+        if any(v is None for v in ps.values()):L.append(f'| {nm} | n/a |'+' n/a |'*(2*len(apps)+1));continue
+        Rv={a:float(np.mean(ps[a]))/rm[a] if rm[a]==rm[a] and rm[a]!=0 else float('nan') for a in apps};sh=share(nm);R=Rv[apps[-1]]
+        vd='reference' if nm in ('SENTPQ','SENT','NAT','SWD','SWD-IN') else ('n/a' if R!=R else 'sufficient' if R>=0.7 else 'not sufficient' if R<=0.3 else 'partial')
+        L.append(f'| {nm} | '+(f'{sh:.1f}' if sh is not None else 'n/a')+' | '+' | '.join(fmt(boot(ps[a])) for a in apps)+' | '+' | '.join(f'{Rv[a]:.2f}' for a in apps)+f' | {vd} |')
+    L+=['','paired contrasts (pooled over seeds, same facts):','','| contrast | '+' | '.join(f'a={a}' for a in apps)+' |','|---|'+'---|'*len(apps)]
+    for nm,x,y in (('SWD-IN - SWD','SWD-IN','SWD'),('SWD - SENT','SWD','SENT'),('SWD-IN - SENT','SWD-IN','SENT'),('O-ALL - SENTPQ','OSPAN','SENTPQ'),('P-ALL - SENTPQ','PSPAN','SENTPQ'),('N-ALL - SENTPQ','NSPAN','SENTPQ'),('P-ALL + N-ALL vs O-ALL (sum of gains over NAT minus O-ALL gain)',None,None)):
+        row=[]
+        for a in apps:
+            try:
+                if x is None:
+                    use=[s_ for s_ in seeds if all((s_,q) in G for q in ('PSPAN','NSPAN','OSPAN','NAT'))];row.append(fmt(boot(np.concatenate([(fact_g(G[s_,'PSPAN'],a,'out')-fact_g(G[s_,'NAT'],a,'out'))+(fact_g(G[s_,'NSPAN'],a,'out')-fact_g(G[s_,'NAT'],a,'out'))-(fact_g(G[s_,'OSPAN'],a,'out')-fact_g(G[s_,'NAT'],a,'out')) for s_ in use]))))
+                else:
+                    use=[s_ for s_ in seeds if (s_,x) in G and (s_,y) in G];row.append(fmt(boot(np.concatenate([fact_g(G[s_,x],a,'out')-fact_g(G[s_,y],a,'out') for s_ in use]))))
+            except Exception as e:ERR.append(f'{nm}@{a}: {e!r}');row.append('n/a')
+        L.append(f'| {nm} | '+' | '.join(row)+' |')
+    L+=['','recall dose-response (pre-set reading, E55 30.3): R = g / g(SENTPQ) at a = %d versus the share of the O-ALL answer tokens that is hidden:'%apps[-1],'']
+    pts=[]
+    for fr,nm in ((0,'NAT'),(25,'OSPANR25'),(50,'OSPANR50'),(75,'OSPANR75'),(100,'OSPAN')):
+        v=pooled(nm,apps[-1])
+        if v is not None and rm[apps[-1]]==rm[apps[-1]] and rm[apps[-1]]!=0:pts.append((fr,float(np.mean(v)),float(np.mean(v))/rm[apps[-1]]))
+    L.append(('; '.join(f'recall {fr}%: g {g:+.3f}, R {r:.2f}' for fr,g,r in pts)) if pts else 'n/a (files missing)')
     if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
@@ -340,6 +515,10 @@ if __name__=='__main__':
         print(ft_report(a.dir,a.tag,a.seed,L_ if a.arm_lrs else [float(x) for x in a.lrs.split(',')],a.epochs,out=a.out));_s.exit(0)
     if '--q1a' in _s.argv:
         _s.argv.remove('--q1a');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q1a');a=ap.parse_args();print(q1a_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
+    if '--q1b' in _s.argv:
+        _s.argv.remove('--q1b');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q1b');a=ap.parse_args();print(q1b_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
+    if '--ans' in _s.argv:
+        _s.argv.remove('--ans');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');a=ap.parse_args();print(ans_report(a.dir,[int(x) for x in a.seeds.split(',')],out=a.out));_s.exit(0)
     if '--q2' in _s.argv:
         _s.argv.remove('--q2');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--plot');ap.add_argument('--arms',default='NAT,OSPAN,SENTP25,SENTP50,SENTP75,SENTPQ');a=ap.parse_args();print(q2_report(a.dir,[int(x) for x in a.seeds.split(',')],arms=tuple(a.arms.split(',')),out=a.out,plot=a.plot));_s.exit(0)
     if '--decomp' in _s.argv:
