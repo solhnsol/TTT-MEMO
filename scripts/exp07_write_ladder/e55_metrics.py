@@ -18,7 +18,7 @@ def ratio_ci(num,den,nb=NB):
     return (float(num.sum()/den.sum()) if den.sum()>0 else float('nan')),*np.nanpercentile(b,[2.5,97.5]).tolist()
 def excl0(c):return c[1]>0 or c[2]<0
 def ranks(S):
-    S=np.asarray(S,float);return 1+(S[:,None,:]>S[:,:,None]).sum(2)
+    S=np.asarray(S,float);return 1+(S[:,None,:]>S[:,:,None]).sum(2)+0.5*((S[:,None,:]==S[:,:,None]).sum(2)-1)       # ties = average rank (analysis plan 11h)
 def _gold(meta):return np.asarray(meta['gold_idx'] if 'gold_idx' in meta else meta['gi'])
 def item_stats(S,gold,same=None):
     """S (n,16), gold (n,), same (n,16) bool or None -> per-item arrays"""
