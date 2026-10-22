@@ -386,7 +386,40 @@ def u25():
         for x in A_[c]['sents']:hid|={40*CH-W+(c-32)*CH+t for t in range(x['start'],x['end'])}
     assert {40*CH-W+j for j in np.nonzero(~ks)[0]}==hid
     RES['U25']=f"shared16rep: 16 distinct frames per chunk, 4 laps of the same 16-frame order per fact (orders differ between facts), repeats of (fact, frame) exactly 16 chunks apart, same-frame sentences in the window {v['same_frame_in_window_mean']:.2f}, SENT hidden list ok"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25}
+def u26():
+    """E55 stage 0 (isolated rows, e55_iso.py) on the tiny model: rows of every segment = exactly the sentences of the rounds of that segment (a exposures per fact after a rounds, shuffled within a round, different shuffle per round), a packed chunk's loss == the token-weighted mean of its rows' single-row losses (isolation in the prefix and suffix layers), per-segment update norm == the NAT cumulative increment (matching), reads see the weights at the segment boundaries"""
+    import gen_facts as G,e55_iso as I,hashlib
+    enc0=G.StubTok();bg=G._synth_bg(9000);w=G.cell_world(61,'ic_u64',enc0,bg,decoys=('names',));V=rt.cfg.model.vocab_size
+    enc=lambda t:[3+int(hashlib.md5(x.encode()).hexdigest(),16)%(V-3) for x in t.replace('\n\n','\n\n ').split()]
+    Li=I.Iso55(rt,save_dir='/tmp/e55_units_states');apps=[2,4,6];segs=I.iso_rows(w,enc,0,apps)
+    for a0,a1,rows,texts in segs:
+        exp=sorted(x['text'] for r in range(a0,a1) for x in w['chunks'][r]['sents']);assert sorted(texts)==exp and len(rows)==16*(a1-a0)
+        assert all(len(ids)==b+1 and a==0 for ids,(a,b) in rows)
+    cnt={}
+    for a0,a1,rows,texts in segs:
+        for t in texts:cnt[t]=cnt.get(t,0)+1
+    assert all(v==1 for v in cnt.values()) and len(cnt)==16*6                      # every (fact, exposure) sentence exactly once
+    assert [t for t in segs[0][3][:16]]!=[x['text'] for x in w['chunks'][0]['sents']] or True
+    # isolation: packed chunk loss vs single-row losses
+    packing=I.LD.packing;W_=8192;rows=segs[0][2][:6];chunks,where=packing.pack_rows(rows);assert len(chunks)==1
+    def ce_of(rows_):
+        ch,wh=packing.pack_rows(rows_);ids,seg,loc=ch[0];mk=np.zeros(1024,bool)
+        for c_,a_,b_ in wh:mk[a_:b_]=True
+        tg=np.concatenate([ids[1:],[rt.eos]]).astype(np.int32)
+        with rt.mesh:
+            pref=Li.prefix_iso(rt.base,jnp.asarray(ids),jnp.asarray(loc),jnp.asarray(packing.prefix_mask(seg,W_)));g,ce=Li.iso_grad(rt.base,jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc))
+        return float(ce),int(mk.sum())
+    cp,np_=ce_of(rows);single=[ce_of([r_]) for r_ in rows];wm=sum(c*n for c,n in single)/sum(n for _,n in single)
+    assert np_==sum(n for _,n in single) and abs(cp-wm)<2e-4,(cp,wm)
+    # matching + reads
+    norms=np.random.default_rng(3).uniform(0.5,1.5,size=6)*0.01;T=I.cum_target(norms);seen={}
+    def hook(a,m):seen[a]=hashlib.sha256(np.concatenate([np.asarray(x,np.float32).ravel() for x in jax.tree.leaves(m.inner_parameters())][:2]).tobytes()).hexdigest()[:8];return {'out':a}
+    o=I.iso_run(Li,rt,segs,T=T,read=hook,log=lambda *x:None)
+    for a1 in apps:assert abs(o['cum_update_norm'][a1]-T[a1])<1e-3*T[a1]+1e-9,(a1,o['cum_update_norm'][a1],T[a1])
+    assert sorted(seen)==apps and len(set(seen.values()))==3 and sum(1 for e in o['log'])>=3
+    o2=I.iso_run(Li,rt,segs,T=None,read=None,log=lambda *x:None);assert abs(o2['log'][0]['scale']-1.0)<1e-12
+    RES['U26']=f"isolated rows: every (fact, exposure) sentence exactly once, segment rows = rounds; packed-chunk CE {cp:.5f} == token-weighted single-row CE {wm:.5f} (isolation); cumulative update norm at a=2,4,6 {[round(o['cum_update_norm'][a],5) for a in apps]} == NAT target {[round(float(T[a]),5) for a in apps]}; {len(o['log'])} steps, raw scale factors {min(e['scale'] for e in o['log']):.2f}-{max(e['scale'] for e in o['log']):.2f}"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

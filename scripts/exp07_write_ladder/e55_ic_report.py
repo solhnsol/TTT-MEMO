@@ -72,6 +72,9 @@ def selftest():
     for sd in (61,62,63):
         for i,ar in enumerate(('NAT','SENT')):(d/f'E55_icr_{ar}_s{sd}.read.json').write_text(json.dumps(rec(1.0*i)))
     ERR.clear();t=rep_report(d,[61,62,63],apps=(16,));assert 'pooled' in t and 'SENT - NAT' in t and 'in-window (in_g0)' in t and 'n/a' not in t,t
+    for sd in (61,62,63):
+        for ar,tg in (('NAT','v3a'),('ISO','iso')):(d/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**rec(1.0*(ar=='NAT')),'read':{str(a):{'out':rec(1.0)['read']['16']['out']} for a in (16,32,64,128)}}))
+    ERR.clear();t=iso_report(d,[61,62,63]);assert 'ISO - NAT' in t and 'n/a' not in t,t
     print('e55_ic_report SELFTEST OK')
 def rep_report(d,seeds,tag='icr',apps=(16,32,64),out=None,load=None):
     """E55 design 21.2 (shared16rep: 16 shared frames, 4 laps, repeats of (fact, frame) allowed at gap 16): arms NAT and SENT, seeds 61-63; per seed and pooled over seeds (facts of all seeds, fact bootstrap): u of NAT, SENT and the paired difference SENT - NAT, out-of-window and in-window. Exploratory; per-seed signs are listed because three seeds cannot carry seed-level significance."""
@@ -100,8 +103,30 @@ def rep_report(d,seeds,tag='icr',apps=(16,32,64),out=None,load=None):
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
     return t
+def iso_report(d,seeds,nat_tag='v3a',iso_tag='iso',apps=(16,32,64,128),out=None,load=None):
+    """E55 design 22.3 stage 0: NAT (online stream, job 181 files, tag v3a) vs ISO (isolated rows, cumulative update norm matched to NAT), out-of-window reads at a = 16, 32, 64, 128; per seed and pooled: u = (W0 rank - rank)/15 with fact-bootstrap CI and the paired ISO - NAT."""
+    load=load or (lambda f:json.load(open(f)));G={}
+    for sd in seeds:
+        for ar,tg in (('NAT',nat_tag),('ISO',iso_tag)):
+            f=Path(d)/f'E55_{tg}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,ar]=load(f)
+    L=[f'# E55 stage 0 report: isolated rows (ISO, norm-matched) vs the online stream (NAT), seeds {list(seeds)}','','u = (W0 rank - rank)/15, mean over facts, 95% fact-bootstrap CI; out-of-window read, question frames never seen in the stream; 0.15 u = reference threshold, exploratory.','','| seed | quantity | '+' | '.join(f'a={a}' for a in apps)+' |','|---|---|'+'---|'*len(apps)]
+    for sd in list(seeds)+['pooled']:
+        use=[s_ for s_ in seeds if (s_,'NAT') in G and (s_,'ISO') in G]
+        for nm,fn in (('NAT',lambda a,s_:fact_g(G[s_,'NAT'],a,'out')),('ISO',lambda a,s_:fact_g(G[s_,'ISO'],a,'out')),('ISO - NAT',lambda a,s_:fact_g(G[s_,'ISO'],a,'out')-fact_g(G[s_,'NAT'],a,'out'))):
+            row=[]
+            for a in apps:
+                try:x=np.concatenate([fn(a,s_) for s_ in use]) if sd=='pooled' else fn(a,sd);row.append(fmt(boot(x)))
+                except Exception as e:row.append('n/a');ERR.append(repr(e))
+            L.append(f'| {sd} | {nm} | '+' | '.join(row)+' |')
+    if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:3]}']
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
 if __name__=='__main__':
     import sys as _s
+    if '--iso' in _s.argv:
+        _s.argv.remove('--iso');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');a=ap.parse_args();print(iso_report(a.dir,[int(x) for x in a.seeds.split(',')],out=a.out));_s.exit(0)
     if '--rep' in _s.argv:
         _s.argv.remove('--rep');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='icr');a=ap.parse_args();print(rep_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--dir');ap.add_argument('--seed',type=int,default=61);ap.add_argument('--out');a=ap.parse_args()
