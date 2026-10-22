@@ -659,7 +659,37 @@ def u28():
     Tf=I.cum_target(np.full(64,0.01));tg_f=I.fos_targets(Tf,segs2,ends);assert len(tg_f)==ends[-1]+1 and abs(tg_f[:ends[0]+1].sum()-(Tf[8]-Tf[0]))<1e-12 and abs(tg_f.sum()-Tf[16])<1e-12
     ids_t=ids_f[:3*1024]%(V-3)+3;nt=np.asarray([0.004,0.006,0.005]);os_=Li.run_stream('NATM',1,ids_t,nch=3,tag='u',log=lambda *x:None,norm_targets=nt);assert all(abs(e['update_norm']-nt[i])<1e-3*nt[i] for i,e in enumerate(os_['log']))
     RES['U28']=f"FOS: stream padded to 1024 multiples (pad {pad}), targets sum to the NAT increments, NATM run hits the per-chunk targets; ISOB: 64 rounds, rows concatenated == chunk tokens, 1 packed chunk per round, fact share 30-40%; ISOD: 64 rounds x 16 sentence rows, 1 chunk each; per-step norm == NAT per-chunk norm ({[round(e['update_norm'],5) for e in o['log']]} vs {[round(float(x),5) for x in norms[:3]]}); read_at honoured; bigstep targets = NAT norm x {16}/{J1} per segment"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34}
+def u35():
+    """E55 design 29.3 Q1-B Adam arms on the tiny model: per-chunk update norm == factor x the NAT norm target (NATADAM 1.0, SENTPQADAM 1.0, SENTPQADAMH 0.5, within 2%); NATADAM chunk-0 CE == NAT chunk 0 and the weights differ from the NAT run (different direction); SENTPQADAM chunk CE == SENTPQ's at chunk 0/1 (same window, chunk 1 uses different weights, so only chunk 0/1 before the first masked effect) and masked pairs logged; NATADAM logs no masked pairs; missing norm_targets refused."""
+    tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
+    a=nat();tg=[e['update_norm'] for e in a['log']];n=5
+    r1=L.run_stream('NATADAM',2,REAL,nch=n,tag='u',log=lambda *x:None,chunks_meta=tab,norm_targets=tg)
+    r2=L.run_stream('SENTPQADAM',2,REAL,nch=n,tag='u',log=lambda *x:None,chunks_meta=tab,norm_targets=tg)
+    r3=L.run_stream('SENTPQADAMH',2,REAL,nch=n,tag='u',log=lambda *x:None,chunks_meta=tab,norm_targets=tg)
+    for r,f in ((r1,1.0),(r2,1.0),(r3,0.5)):
+        assert all(abs(e['update_norm']-f*tg[k])<=0.02*f*tg[k] for k,e in enumerate(r['log'])),([e['update_norm'] for e in r['log']],[f*x for x in tg[:n]])
+    assert abs(r1['log'][0]['ce']-a['log'][0]['ce'])<2e-4 and r1['final_hash']!=a['final_hash'] and all(e['n_masked_pairs']==0 for e in r1['log']) and all(e['n_masked_pairs']>0 for e in r2['log'][1:])
+    sq=L.run_stream('SENTPQ',2,REAL,nch=2,tag='u',log=lambda *x:None,chunks_meta=tab);assert abs(r2['log'][0]['ce']-sq['log'][0]['ce'])<2e-4 and abs(r2['log'][1]['ce']-sq['log'][1]['ce'])>1e-9
+    try:L.run_stream('NATADAM',2,REAL,nch=2,tag='u',log=lambda *x:None,chunks_meta=tab);raise SystemExit('norm_targets not required')
+    except AssertionError:pass
+    RES['U35']='Adam arms: per-chunk update norm == factor x NAT norm (within 2%, factors 1 / 1 / 0.5), NATADAM chunk-0 CE == NAT and different final weights, SENTPQADAM chunk-0 CE == SENTPQ, masked pairs logged only for the masked arm, norm_targets required'
+def u36():
+    """E55 design 30.3 OSPAN-R25/50/75 (CPU): hidden key sets are nested R25 < R50 < R75 < OSPAN (same fixed draws), each a subset of the answer-span keys, shares of the OSPAN keys about 25 / 50 / 75 % (within 8 points), the same rows for every fact-sentence query, background queries unmasked, deterministic (two calls equal)."""
+    import gen_facts as G
+    enc=G.StubTok();bg=G._synth_bg(9000);w=G.cell_world(61,'ic_u64',enc,bg,decoys=('names','nofact'));ch=G.realize(w);assert E.annotate_answers(ch,w['facts'],enc)==(0,0)
+    hk=lambda m:set(np.nonzero(~m.all(0))[0].tolist())
+    for k in (9,40):
+        o,no=E.token_masks('OSPAN',k,ch,CH);r={f:E.token_masks(f'OSPANR{f}',k,ch,CH) for f in (25,50,75)}
+        H=[hk(r[f][0]) for f in (25,50,75)];ho=hk(o)
+        assert H[0]<=H[1]<=H[2]<=ho and H[0] and len(H[2])<len(ho),(len(H[0]),len(H[1]),len(H[2]),len(ho))
+        for f,h in zip((25,50,75),H):assert abs(len(h)/len(ho)-f/100)<0.08,(k,f,len(h)/len(ho))
+        for f in (25,50,75):
+            m=r[f][0];rows=m[np.nonzero(~m.all(1))[0]];assert (rows==rows[0]).all();assert E.token_masks(f'OSPANR{f}',k,ch,CH)[0].tobytes()==m.tobytes()
+            inside=np.zeros(CH,bool)
+            for xq in ch[k]['sents']:inside[xq['start']:xq['end']]=True
+            assert m[~inside].all()
+    RES['U36']='OSPAN-R25/50/75: nested subsets of the OSPAN answer-span keys, shares about 25 / 50 / 75 %, identical rows for all fact-sentence queries, background unmasked, deterministic'
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

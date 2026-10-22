@@ -11,8 +11,8 @@ import e55_swap as E
 import s3
 jax,jnp,eqx=s3.jax,s3.jnp,s3.eqx
 CH=1024;WIN=8192;NW=E.NW
-IMPLEMENTED=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT')
-CHUNK_META_ARMS=E.MASK_ARMS+tuple(E.MIX)+('ALT',)
+IMPLEMENTED=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT','NATADAM','SENTPQADAM','SENTPQADAMH')
+CHUNK_META_ARMS=E.MASK_ARMS+tuple(E.MIX)+tuple(E.ADAM)+('ALT',)
 def compose_state(chains,pl,counter=None):
     """suffix-layer SWA state with the slot blocks taken from the chain that plan `pl` names ('real' | 'decoy' | 'bg'; 'mask' and absent slots keep the real chain's block, the mask is applied through the key mask). Every other leaf (chunk index) is the real chain's. counter (list) collects the number of KV leaves composed (must be 2: K and V)."""
     def f(*ls):
@@ -37,8 +37,18 @@ class Ladder55(s3.Ladder3):
         """no Readouts / old world: only what build3 and the step functions need"""
         from ttt.model.data import Batch
         self.rt=rt;cfg=rt.cfg.training.optimizer_inner;self.lr=float(cfg.lr);self.clip=float(cfg.clip_gradient);self.lr_scale=1.0;self.Batch=Batch
-        self.f=s3.reuse.get_filter_spec(rt.base,rt.cfg.training.spec_inner,'inner parameters');self.save_dir=save_dir;self._nsave=0;self.canary=canary;self.build3();self.build_mix()
+        self.f=s3.reuse.get_filter_spec(rt.base,rt.cfg.training.spec_inner,'inner parameters');self.save_dir=save_dir;self._nsave=0;self.canary=canary;self.build3();self.build_mix();self.build_adam()
         self.n_masked_keys=0;self.n_masked_pairs=0
+    def build_adam(self):
+        """E55 29.3 Q1-B: Adam direction on the (clipped) write gradient, same rule as e55_iso (job 192 ISO-ADAM): bias-corrected m / (sqrt(v) + eps), B1 .9, B2 .999, eps 1e-8, fp32; the step SIZE is set by the caller (factor x the NAT update norm of the chunk)"""
+        f32=jnp.float32;clip=self.clip;B1,B2,EPS=0.9,0.999,1e-8
+        @eqx.filter_jit
+        def adam_dir(g,mu,nu,t):
+            g=jax.tree.map(lambda x:x.astype(f32),g);gn=jnp.sqrt(sum(jnp.sum(x*x) for x in jax.tree.leaves(g)));coef=jnp.where(gn<clip,1.0,clip/jnp.maximum(gn,1e-30));g=jax.tree.map(lambda x:x*coef,g)
+            mu=jax.tree.map(lambda a,x:B1*a+(1-B1)*x,mu,g);nu=jax.tree.map(lambda a,x:B2*a+(1-B2)*x*x,nu,g);t1=t+1.0;c1=1-B1**t1;c2=1-B2**t1
+            d=jax.tree.map(lambda a,b:(a/c1)/(jnp.sqrt(b/c2)+EPS),mu,nu)
+            return d,mu,nu,gn,coef
+        self.adam_dir=adam_dir
     def build_mix(self):
         """E55 27.5: one write step on the SUM of two forward/backward passes of the same chunk (unmasked window and masked window), loss = sum_i w_i nll_i with per-token weights ws[pass] (already divided by the number of valid targets, so that w = valid / N in one pass is exactly lm_loss); one clip and one inner SGD step as in write_step. Returns (new inner params, pre-clip gnorm, clip coef, per-pass mean CE over all valid tokens)."""
         lr,clip=self.lr,self.clip;optax=s3.optax;S3SUF=s3.S3SUF
@@ -77,9 +87,9 @@ class Ladder55(s3.Ladder3):
     def window_inputs(self,arm,k,p,recs,sts,counter=None):
         """what the write forward of chunk k gets: (Kc,Vc,keep,st_suffix,plan). recs[name] = (Kh,Vh) numpy [layers,T,nh,d]; sts[name] = suffix chain state."""
         pl=E.plan(arm,k,p);keep=keep_vector(pl)
-        if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','SENTP25','SENTP50','SENTP75'):
+        if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75'):
             Kc,Vc=self.ctx_kv(*recs['real'],k);st=sts['real']
-            if arm in ('SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','SENTP25','SENTP50','SENTP75'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW);self.n_masked_pairs=int((~keep).sum()) if keep.ndim==2 else int((~keep).sum())*CH
+            if arm in ('SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW);self.n_masked_pairs=int((~keep).sum()) if keep.ndim==2 else int((~keep).sum())*CH
         else:
             src_k={n:recs[n][0] for n in recs};src_v={n:recs[n][1] for n in recs}
             Kw,_=E.compose_window(src_k,k,pl,CH,axis=1);Vw,_=E.compose_window(src_v,k,pl,CH,axis=1);Kc,Vc=jnp.asarray(Kw),jnp.asarray(Vw)
@@ -106,7 +116,8 @@ class Ladder55(s3.Ladder3):
         ids_={'real':np.asarray(real_ids),'decoy':None if decoy_ids is None else np.asarray(decoy_ids),'bg':None if bg_ids is None else np.asarray(bg_ids)}
         for nm in names:assert ids_[nm] is not None and len(ids_[nm])>=nch*CH,(nm,'stream missing or too short')
         out={'log':[],'reads':{},'arm':arm,'p':p,'tag':tag,'n_chunks':nch,'stream_hash':hashlib.sha256(np.asarray(real_ids[:nch*CH],np.int64).tobytes()).hexdigest()}
-        m=weights0 if weights0 is not None else rt.base;st_all=s3.clone_state(rt.state_all);cum=0.0
+        m=weights0 if weights0 is not None else rt.base;st_all=s3.clone_state(rt.state_all);cum=0.0;adam=None
+        if arm in E.ADAM:assert norm_targets is not None and len(norm_targets)>=nch,'Adam arms need the per-chunk update norms of the NAT run of the same seed (norm_targets)'
         with rt.mesh:
             seqs={nm:self._stream_seq(ids_[nm],nch) for nm in names};prefs={nm:rt.prefix(rt.base,seqs[nm]) for nm in names}
             recs={}
@@ -125,11 +136,17 @@ class Ladder55(s3.Ladder3):
                     w_u,w_m,nf=self.mix_weights(chunks_meta[k]['sents'],np.asarray(c.loss_masks),lam)
                     newp,gn,coef,ces=self.write_step_mix(m,st_all,st_w,c,(pref_u,pref_m),(jnp.asarray(keep_u),jnp.asarray(keep_m)),(jnp.asarray(w_u),jnp.asarray(w_m)));ce=ces[0];extra_log={'ce_masked_pass':float(ces[1]),'mix_lambda':lam,'fact_loss_positions':nf}
                 else:
-                    arm_k=('SENTPQ' if k%2==0 else 'NAT') if arm=='ALT' else arm       # ALT: masked loss on the 1st, 3rd, ... chunk (k even), unmasked on the others, one forward each
+                    arm_k=('SENTPQ' if k%2==0 else 'NAT') if arm=='ALT' else (E.ADAM[arm][0] if arm in E.ADAM else arm)       # ALT: masked loss on the 1st, 3rd, ... chunk (k even), unmasked on the others, one forward each
                     Kc,Vc,keep,st_w,pl=self.window_inputs(arm_k,k,p,recs,sts,cnt)
                     if cnt:assert len(cnt)==2,('expected exactly the K and V leaves of the suffix SWA state, got',len(cnt))
                     pref_w=self.prefix_masked(m,jnp.asarray(ids_['real'][k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep))
-                    newp,gn,coef,ce=self.write_step(m,st_all,st_w,c,pref_w,jnp.asarray(keep))
+                    if arm in E.ADAM:
+                        f32=jnp.float32;g_,ce=self.grad_mask(m,st_w,c,pref_w,jnp.asarray(keep))
+                        if adam is None:z=jax.tree.map(lambda x:jnp.zeros(x.shape,f32),m.inner_parameters());adam={'mu':z,'nu':jax.tree.map(jnp.zeros_like,z),'t':jnp.asarray(0.0,f32)}
+                        d_,mu_,nu_,gn,coef=self.adam_dir(g_,adam['mu'],adam['nu'],adam['t']);adam={'mu':mu_,'nu':nu_,'t':adam['t']+1.0}
+                        dn=float(jnp.sqrt(sum(jnp.sum(x*x) for x in jax.tree.leaves(d_))));adam_scale=E.ADAM[arm][1]*float(norm_targets[k])/dn if dn>0 else 1.0
+                        newp=jax.tree.map(lambda p_,x:(p_.astype(f32)-adam_scale*x).astype(p_.dtype),m.inner_parameters(),d_)      # fp32 direction, size = factor x NAT update norm of this chunk
+                    else:newp,gn,coef,ce=self.write_step(m,st_all,st_w,c,pref_w,jnp.asarray(keep))
                     if arm=='ALT':extra_log={'alt_masked_chunk':k%2==0}
                     if diag_multi is not None and k in diag_chunks:
                         # E55 28.3: forward-only evaluation of the chunk under several window conditions (weights before the write of the chunk): {cond: (Kc, Vc, keep, st_suffix)}
@@ -139,7 +156,7 @@ class Ladder55(s3.Ladder3):
                         out.setdefault('diag_multi',{})[k]=diag_multi(k,m,conds,ids_['real'][k*CH:(k+1)*CH],c,out['log'])
                     if diag_fn is not None and k in diag_chunks:out.setdefault('diag',{})[k]=diag_fn(k,m,Kc,Vc,keep,ids_['real'][k*CH:(k+1)*CH])      # E55 27.8: forward-only attention diagnostic with the window inputs of this chunk, weights before its write
                 for nm in names:sts[nm]=self.read_state(old,sts[nm],rt.chunk(seqs[nm],k),prefs[nm][k*CH:(k+1)*CH])   # same weights (start of the chunk) for every chain
-                scale=1.0
+                scale=adam_scale if arm in E.ADAM else 1.0
                 if arm=='NATM':          # size-matched NAT: the NAT update of chunk k is rescaled to the update norm norm_targets[k] (the per-chunk norm of arm SWD of the same seed); direction unchanged
                     assert norm_targets is not None and len(norm_targets)>=nch,'NATM needs the per-chunk update norms of the arm to match'
                     f32=jnp.float32;raw=sum(float(jnp.sum((a.astype(f32)-b.astype(f32))**2)) for a,b in zip(jax.tree.leaves(newp),jax.tree.leaves(old.inner_parameters())))**0.5
