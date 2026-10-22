@@ -267,7 +267,22 @@ def u18():
         pl=R.plan(w);assert sorted(pl['read'])==w['read_apps'];Rr,t,ok=GT.check(w,enc,bg);assert ok,t;out.append(f"{nm}: {w['n_chunks']} chunks, exposures at read points {exp}, 128 distinct frames per fact, gates pass (stream background ratio {Rr['e_ratio_real_half']:.1f})")
     w=G.cell_world(61,'v3_8_4',enc,bg,decoys=('names','nofact'));bg2=bg[:];bg2[1]=bg2[0];w2=G.cell_world(61,'v3_8_4',enc,bg2,decoys=('names','nofact'));assert not GT.check(w2,enc,bg2)[2]
     RES['U18']='; '.join(out)+'; an injected duplicate paragraph is caught by the gate'
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18}
+def u19():
+    """background pool filter (CPU, stub tokenizer, patched paragraph source): the filter drops a paragraph with a unit already kept, one that shares a 13-gram with an earlier kept paragraph, one with a phrase repeated inside, one that shares a 13-gram with a reference text; keeps the clean ones; the order of the result is seed-specific; cell worlds built on the filtered pool pass the gates."""
+    import gen_facts as G,e55_gates as GT,random
+    enc=G.StubTok();r=random.Random(11);vocab=[f'v{i}' for i in range(20000)];mk=lambda n:' '.join(r.choice(vocab) for _ in range(n))+'.'
+    clean=[mk(70) for _ in range(4000)];dup_unit=clean[3];shared=clean[5].split()[:30];ref_txt=' '.join(clean[7].split()[:25])
+    bad_dup=dup_unit;bad_shared=' '.join(shared)+' '+mk(20);bad_inner=mk(15)+' '+mk(15)+' '+'aa bb cc dd ee ff gg hh ii jj kk ll mm nn'+' '+mk(10)+' aa bb cc dd ee ff gg hh ii jj kk ll mm nn.';bad_ref=ref_txt+' '+mk(20)
+    paras=clean+[bad_shared,bad_inner,bad_ref]
+    orig=G._clean_paragraphs;G._clean_paragraphs=lambda books:paras
+    try:
+        refs={'ref':G._grams(enc(ref_txt)),'unused':set()};G._POOL_CACHE.clear();pool=G.default_bg_pool(1,enc,refs);G._POOL_CACHE.clear()
+        assert bad_ref not in pool and clean[7] not in pool and ((bad_shared in pool)!=(clean[5] in pool)),'a bad paragraph survived (exactly one of the two paragraphs sharing a phrase may stay)'
+        assert len(pool)>=len(clean)-3,len(pool);pool2=G.default_bg_pool(2,enc,refs);assert pool!=pool2 and sorted(pool)==sorted(pool2)
+        w=G.cell_world(61,'v3_4_8',enc,pool,decoys=('names','nofact'));R_,t,ok=GT.check(w,enc,pool,refs);assert ok,t
+    finally:G._clean_paragraphs=orig;G._POOL_CACHE.clear()
+    RES['U19']=f"pool filter: injected shared-13-gram (one of the pair) and reference-overlapping paragraphs dropped ({len(paras)-len(pool)} dropped of {len(paras)}), seed-specific order, gates pass on the filtered pool"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

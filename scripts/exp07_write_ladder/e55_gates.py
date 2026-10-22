@@ -37,7 +37,7 @@ def check(world,enc,bg,refs=None,ratio_min=1.5):
     status={}
     for nm,txt in (refs or {}).items():
         if txt is None:status[nm]='NOT CHECKED (file missing)';continue
-        refg[nm]=grams(enc(txt));status[nm]='checked'
+        refg[nm]=txt if isinstance(txt,set) else grams(enc(txt));status[nm]='checked'
     R['c_overlap_stream_vs_ref']={nm:len(allg&set(own)) for nm,allg in refg.items()};R['c_ref_status']=status
     # (d) filler: exactly the tokens the nofact stream takes from the spare half
     need_fill=sum(x['end']-x['start'] for c in world['chunks'] for x in c['sents']);fill=[t for u in spare for t in u[0][:-ls]]
@@ -75,17 +75,13 @@ def selftest():
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--cell');ap.add_argument('--seed',type=int);ap.add_argument('--ref',action='append',default=[]);ap.add_argument('--require-refs',action='store_true',help='a reference whose file is missing = failure (exit 2)');ap.add_argument('--default-refs',action='store_true',help='server: SQuAD dev paragraphs [:400] (the neutral readout context), canary books pg11 / pg1342, E35 probe text');ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--out',default=None);a=ap.parse_args()
     if a.selftest:selftest();sys.exit(0)
-    ROOT=HERE.parents[1];enc=G.load_enc(a.tokenizer_file or str(ROOT/'data/tokenizer/llama3/tokenizer.json'));bg=G.default_bg_pool(a.seed)
-    refs={}
-    if a.default_refs:
-        import json
-        sq=ROOT/'data/squad/dev-v1.1.json';refs['SQuAD readout context']=' '.join(' '.join(p['context'].split()) for p in [p for x in json.load(open(sq))['data'] for p in x['paragraphs']][:400]) if sq.exists() else None
-        for b in ('pg11','pg1342'):
-            f=ROOT/f'data/narrative_gutenberg/{b}.txt';refs['canary '+b]=f.read_text(errors='ignore') if f.exists() else None
+    ROOT=HERE.parents[1];enc=G.load_enc(a.tokenizer_file or str(ROOT/'data/tokenizer/llama3/tokenizer.json'));refs={}
+    if a.default_refs:refs=G.reference_grams(enc,ROOT)               # SQuAD readout context, canary books pg11 / pg1342, frame bank, question frames (None = file missing)
     for x in a.ref:
         nm,_,pth=x.partition('=');refs[nm]=Path(pth).read_text(errors='ignore') if Path(pth).exists() else None
     miss=[k for k,v in refs.items() if v is None]
     if a.require_refs and miss:print('reference files missing:',miss);sys.exit(2)
+    bg=G.default_bg_pool(a.seed,enc,refs) if a.default_refs else G.default_bg_pool(a.seed)
     w=G.cell_world(a.seed,a.cell,enc,bg,decoys=('names','nofact'));R,t,ok=check(w,enc,bg,refs);print(t)
     if a.out:Path(a.out).write_text(t)
     sys.exit(0 if ok else 1)

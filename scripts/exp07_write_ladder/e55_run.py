@@ -35,7 +35,7 @@ def decoy_kinds(arms,decoy):
 def build(a,seed=None,read_apps=None,arms=None):
     seed=a.seed if seed is None else seed;arms=(a.arms.split(',') if arms is None else arms)
     if getattr(a,'stub',False):enc=G.StubTok();bg=G._synth_bg(9000);tf=__file__                       # CPU test without tokenizers / lab data
-    else:tf=a.tokenizer_file or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.load_enc(tf);bg=G.default_bg_pool(seed) if getattr(a,'bg','default')=='pool' else G.default_bg()    # pool (design v3 13.3): 4 books, deduplicated, seed-specific order, no cycling
+    else:tf=a.tokenizer_file or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.load_enc(tf);bg=G.default_bg_pool(seed,enc,G.reference_grams(enc,ROOT)) if getattr(a,'bg','default')=='pool' else G.default_bg()    # pool (design v3 13.3): 4 books, deduplicated, seed-specific order, no cycling
     kw={} if read_apps is None else {'read_apps':tuple(sorted(read_apps))}
     w=G.cell_world(seed,a.cell,enc,bg,decoys=decoy_kinds(arms,getattr(a,'decoy','names')) or ('names',),**kw);return enc,w,tf
 def streams(w,enc=None):

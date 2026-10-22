@@ -28,8 +28,21 @@ def _contexts(bank,slot):
         pre,post=f.split(slot,1);pre=' '.join(pre.split(' ')[-4:]) if pre and pre.strip() else pre;post=' '.join(post.split(' ')[:4])
         out.add(re.sub(r'\{\w+\}','Aldmere',pre)+'{N}'+re.sub(r'\{\w+\}','Aldmere',post))
     return sorted(out)
-def default_bg_pool(seed,books=('pg98.txt','pg1260.txt','pg768.txt','pg766.txt'),dedup=True):
-    """E55 v3 (design 13.3): the paragraph pool of the four narrative books, cleaned like default_bg_all (names stripped, 200-900 characters), exact duplicates removed (cross-book), shuffled with a SEED-SPECIFIC order. Every consumer takes paragraphs from the front of its own slice (no cycling, no reuse); the caller asserts the need / available ratio (e55_gates.py)."""
+def _grams(ids,n=13):
+    ids=list(ids);return {tuple(ids[i:i+n]) for i in range(len(ids)-n+1)}
+def reference_grams(enc,root=None):
+    """13-gram sets (token ids) of the texts the background must never share a phrase with: the neutral SQuAD readout context (dev paragraphs [:400]), the canary books pg11 / pg1342, the frame bank sentences (slots removed) and the question frames. A missing file = None (the callers treat that as failure)."""
+    import gen_world as gw
+    root=root or gw.ROOT;out={};sq=root/'data/squad/dev-v1.1.json'
+    out['SQuAD readout context']=_grams(enc(' '.join(' '.join(p['context'].split()) for p in [p for x in json.load(open(sq))['data'] for p in x['paragraphs']][:400]))) if sq.exists() else None
+    for b in ('pg11','pg1342'):
+        f=root/f'data/narrative_gutenberg/{b}.txt';out['canary '+b]=_grams(enc(f.read_text(errors='ignore'))) if f.exists() else None
+    bank=G0.frame_bank('300',0,0,0)[0];g=set()
+    for t in bank:
+        for x in re.split(r'\{\w+\}',t):
+            if len(x.split())>=3:g|=_grams(enc(x))
+    out['frame bank (slots removed)']=g;out['question frames']=set().union(*[_grams(enc(q.replace('{X}','X'))) for q in QFRAMES]);return out
+def _clean_paragraphs(books):
     import gen_world as gw
     out=[];seen=set()
     for f in sorted((gw.ROOT/'data/narrative_gutenberg').glob('pg*.txt')):
@@ -37,11 +50,27 @@ def default_bg_pool(seed,books=('pg98.txt','pg1260.txt','pg768.txt','pg766.txt')
         t=f.read_text(errors='ignore');t=t[t.find('CHAPTER'):] if 'CHAPTER' in t else t;t=t[len(t)//5:];t=re.sub(r'\r','',t)
         for p in [p for p in re.split(r'\n\s*\n',t) if 200<len(p)<900 and not re.search(r'CHAPTER|\bVol|\[|\]|\*',p)]:
             p=re.sub(r'(?<=[a-z,;] )(?:[A-Z][a-z]+)(?: [A-Z][a-z]+)*','someone',p);p=re.sub(r"\b(?:Mr|Mrs|Miss|Dr|Sir|Lady|Lord)\.? \w+",'the stranger',p);p=' '.join(p.split())
-            if dedup:
-                if p in seen:continue
-                seen.add(p)
-            out.append(p)
-    random.Random(f'E55bgpool|{seed}').shuffle(out);return out
+            if p not in seen:seen.add(p);out.append(p)           # exact duplicates (after the name stripping) removed
+    return out
+_POOL_CACHE={}
+def default_bg_pool(seed,enc=None,refs=None,books=('pg98.txt','pg1260.txt','pg768.txt','pg766.txt')):
+    """E55 v3 (design 13.3): paragraph pool of the four narrative books, cleaned like default_bg_all (names stripped, 200-900 characters), exact duplicates removed, and (when enc is given) FILTERED at the level of the background units the streams really use (make_units): in a fixed canonical order a paragraph is dropped if any of its units is a unit already kept, if any of its 13-grams was already kept in another paragraph, or if it shares a 13-gram with a reference text (refs = reference_grams(enc): SQuAD readout context, canary books, frame bank, question frames; a None entry raises). The kept paragraphs are then shuffled with a SEED-SPECIFIC order; consumers take paragraphs from the front of their own slice (no cycling)."""
+    key=(tuple(books),id(enc) if enc is not None else None)
+    if enc is None:paras=_clean_paragraphs(books)
+    else:
+        assert refs is not None and all(v is not None for v in refs.values()),'reference texts missing: '+str([k for k,v in (refs or {}).items() if v is None])
+        if key not in _POOL_CACHE:
+            sep=enc('\n\n');ref=set().union(*refs.values());seen_u=set();seen_g=set();kept=[];drop={'unit':0,'13gram':0,'ref':0}
+            for p in sorted(_clean_paragraphs(books)):
+                us=[tuple(u[0][:-len(sep)]) for u in make_units([p],enc,sep)];per=[_grams(u) for u in us];gs=set().union(*per) if us else set()
+                if sum(len(x) for x in per)!=len(gs):drop['13gram']+=1;continue            # a phrase repeated inside the paragraph (two units share a 13-gram)
+                if len(us)!=len(set(us)) or any(u in seen_u for u in us):drop['unit']+=1;continue
+                if gs&ref:drop['ref']+=1;continue
+                if gs&seen_g:drop['13gram']+=1;continue
+                seen_u.update(us);seen_g|=gs;kept.append(p)
+            _POOL_CACHE[key]=(kept,drop)
+        paras=_POOL_CACHE[key][0]
+    out=paras[:];random.Random(f'E55bgpool|{seed}').shuffle(out);return out
 def default_bg_all(n=40000):
     """background paragraphs of ALL four narrative books of the E35 source (same cleaning as gen_world.background, which uses one random book): about 4x more units, needed for the largest worlds (p = 9: 144 chunks). NOT the default of the 180a / 180b runs (they use gen_world_ctl.default_bg, whose streams are pinned by their stream hashes)."""
     import gen_world as gw
