@@ -8,7 +8,7 @@ set -eo pipefail
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=50cf2de08f393bc48dcf7955cb202a43e435b5a4
+COMMIT=e96016ed23f1767f9c72ee287b855b485d299405
 FILES="$D4/gen_facts.py $D4/gen_world_ctl.py $D/e55_swap.py $D/e55_read.py $D/e55_analyze.py $D/e55_metrics.py $D4/frame_bank.py"
 : "${PY:=python3}"; : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}}"
 if [ -z "$NO_INSTALL" ]; then
@@ -21,11 +21,14 @@ if [ -z "$SKIP_VERIFY" ]; then
     G=$(sha256sum $D/$F | cut -c1-12)
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH (exit 5)"; exit 5; }
   done <<'MANIFEST'
-f51de80be2d3 e55_swap.py
+27b6807f6529 e55_run.py
+210b40d2df40 e55_core.py
+9827e34dcde6 e55_gpu.py
+b0cd3acd36bb e55_swap.py
 a6d506949071 e55_read.py
-a6ef4073a976 e55_analyze.py
+575149220523 e55_analyze.py
 1a28133d518d e55_metrics.py
-73ac56e67bd7 ../exp04_what_ttt_retains/gen_facts.py
+c34815a3c655 ../exp04_what_ttt_retains/gen_facts.py
 ada39e55ccc3 ../exp04_what_ttt_retains/gen_world_ctl.py
 eeaaa9135907 ../exp04_what_ttt_retains/frame_bank.py
 MANIFEST
