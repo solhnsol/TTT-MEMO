@@ -362,11 +362,13 @@ def u29():
 def u23():
     """model level (CPU tiny model): (a) SENT / KMASK with an EMPTY sentence table == NAT bit for bit (CE and final weights); (b) SENT with sentences changes CE from chunk 1 on; (c) perturbing K,V at SENT-hidden positions does not change the write update (bitwise), perturbing a visible position does; (d) a per-query 2-D mask with identical rows == the 1-D keep (same update), and a 2-D mask hiding a window key only for rows [a,b) leaves the prefix outputs of rows before a bit-identical and changes rows in [a,b)"""
     emp=[{'sents':[]} for _ in range(NCH)];tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
-    a=nat();r={ar:L.run_stream(ar,2,REAL,nch=NCH,tag='u',log=lambda *x:None,chunks_meta=emp) for ar in ('SENT','KMASK')}
+    a=nat();r={ar:L.run_stream(ar,2,REAL,nch=NCH,tag='u',log=lambda *x:None,chunks_meta=emp) for ar in ('SENT','KMASK','SENTO','SENTPQ')}
     for ar,b in r.items():assert b['final_hash']==a['final_hash'] and [e['ce'] for e in b['log']]==[e['ce'] for e in a['log']],ar
     b=L.run_stream('SENT',2,REAL,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab);ce_a=[e['ce'] for e in a['log']][:5];ce_b=[e['ce'] for e in b['log']]
     assert ce_a[0]==ce_b[0] and all(x!=y for x,y in zip(ce_a[1:],ce_b[1:])),(ce_a,ce_b);
     nm=[e['n_masked_keys'] for e in b['log']];assert nm==[0,130,260,390,520],nm
+    for ar_ in ('KMASK','SENTO','SENTPQ'):
+        b_=L.run_stream(ar_,2,REAL,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab);assert all(np.isfinite(e['ce']) for e in b_['log']) and [e['ce'] for e in b_['log']][0]==ce_b[0],ar_
     k=3;S=setup(5,{'real':REAL});m=rt.base;st_all=s3.clone_state(rt.state_all);sts={'real':s3.clone_state(rt.state_suffix)}
     with rt.mesh:
         for i in range(k):sts['real']=L.read_state(m,sts['real'],rt.chunk(S['seq']['real'],i),S['pref']['real'][i*CH:(i+1)*CH])
