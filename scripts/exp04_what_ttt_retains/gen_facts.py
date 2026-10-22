@@ -98,6 +98,11 @@ def _alloc(seed,k,enc,bank,decoy_world=True,nu=0):
         assert len(left)>=rest+(k if decoy_world else 0),(what,'pool too small for control / decoy-world names',len(left))
         res[what]=([a for a,_ in use],[b for _,b in use],left[:rest],left[rest:rest+(k if decoy_world else 0)],L)
     return res
+def fresh_places(world,enc,n=16):
+    """E55 design 17: n never-exposed place names with the SAME token length as the world's places (modal class, leading space), disjoint from every place of the real world, the fake window ('names'), the decoy world and the existence-check unexposed list; deterministic in (seed, world). They never occur in any stream."""
+    used={f['P'] for f in world['facts']}|{f['P'] for f in world.get('names',{}).get('facts',[])}|{f['P'] for f in world.get('decoy',{}).get('facts',[])}|set(world.get('unexposed',[]))
+    L=world['place_len'];cls=sorted({a+b for a in PL_PREX for b in PL_SUFX if len(enc(' '+a+b))==L}-used);assert len(cls)>=n,('too few fresh places',len(cls));r=random.Random(f"E55fresh|{world['seed']}|{world['k']}")
+    out=r.sample(cls,n);assert len(set(out))==n and not set(out)&used and all(len(enc(' '+x))==L for x in out);return out
 def make_units(bg,enc,sep,maxtok=UNIT_TOK):
     """background units: [(ids + sep, text)], each <= maxtok tokens (+ sep), cut at sentence ends (a sentence longer than maxtok is cut by tokens)"""
     out=[]

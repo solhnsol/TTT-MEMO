@@ -288,7 +288,25 @@ def u20():
         K1,V1,h1=L.record(REAL[:3*CH]);K0,V0,h0=s3.Ladder3.record(L,REAL[:3*CH])
     assert K1.dtype==K0.dtype and K1.shape==K0.shape and np.array_equal(K1,K0) and np.array_equal(V1,V0) and np.array_equal(np.asarray(h1),np.asarray(h0))
     RES['U20']=f'Ladder55.record == s3.Ladder3.record bitwise: K,V {K1.shape} {K1.dtype}, last hidden state equal'
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20}
+def u21():
+    """design 17 readout (tiny model, random rows): fresh places are disjoint from every place of the worlds and have the world's token length; fam items have [gold, 15 exposed, 16 fresh]; read_fam scores the same rows at W0 and at saved states with frozen weights: BASE state == W0 bitwise, PERT differs; first-token scores differ from full-span scores; per_fact arithmetic."""
+    import gen_facts as G,e55_fam as F,e55_gpu as RG,hashlib
+    enc=G.StubTok();w=G.build_fact_world(55,enc=enc,bg=G._synth_bg(9000),**G.CELLS['base']);fresh=G.fresh_places(w,enc,F.NF)
+    used={f['P'] for f in w['facts']}|{f['P'] for f in w['names']['facts']}|{f['P'] for f in w['decoy']['facts']};assert not set(fresh)&used and len(set(fresh))==16 and all(len(enc(' '+x))==w['place_len'] for x in fresh) and fresh==G.fresh_places(w,enc,F.NF)
+    items=F.fam_items(w,fresh);n=len(items);assert n==32 and all(len(it['cands'])==F.NCF and it['cands'][0]==' '+w['facts'][it['fact']]['P'] and it['cands'][1+F.NE:]==[' '+x for x in fresh] for it in items) and all(len(set(it['cands']))==F.NCF for it in items)
+    V=rt.cfg.model.vocab_size;rng=np.random.default_rng(5);cand=rng.integers(3,V,size=(F.NCF,3));pre=rng.integers(3,V,size=(n,9))
+    raw=[(list(map(int,pre[i]))+list(map(int,cand[c])),(8,11)) for i in range(n) for c in range(F.NCF)];assert RG.check_rows(raw,n,F.NCF)==3;first=F.first_rows(raw);assert all(b-a==1 for _,(a,b) in first)
+    rd=RG.Reader55(rt,rt,s3.packing if hasattr(s3,'packing') else sys.modules['packing'],H.TailCtx,reuse.get_filter_spec,reuse._hash_pytree,jax,H.eqx,jnp)
+    m_base=rt.base;pert=L.set_inner(m_base,jax.tree.map(lambda x:x+0.02*jnp.ones_like(x),m_base.inner_parameters()));fb=L.save_state(m_base,'u21_base.npz');fp=L.save_state(pert,'u21_pert.npz')
+    out_tail=[int(x) for x in rng.integers(3,V,size=8192)];hb=reuse._hash_pytree(pert.inner_parameters())[0]
+    res=F.read_fam(rd,raw,first,n,out_tail,{'BASE':{1:(fb['_file'],fb['_hash'])},'PERT':{1:(fp['_file'],fp['_hash'])}},m_base,log=lambda *x:None)
+    assert reuse._hash_pytree(pert.inner_parameters())[0]==hb
+    for wh in ('full','first'):
+        assert res['W0'][wh].shape==(n,F.NCF) and np.array_equal(res['BASE'][1][wh],res['W0'][wh]) and not np.allclose(res['PERT'][1][wh],res['W0'][wh]) and np.isfinite(res['PERT'][1][wh]).all()
+    assert not np.allclose(res['W0']['full'],res['W0']['first']) and np.all(res['W0']['full']<=0)
+    pf=F.per_fact(res['PERT'][1],res['W0'],'full');assert all(len(v)==n for v in pf.values()) and np.allclose(pf['familiarity']+pf['binding'],pf['gold']-pf['fresh'])
+    RES['U21']=f"fam readout: fresh places disjoint (16, token length {w['place_len']}), items [gold, 15 exposed, 16 fresh] x {n} facts, BASE state == W0 bitwise, PERT differs, first-token != full-span, weights unchanged, familiarity + binding = gold - fresh"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

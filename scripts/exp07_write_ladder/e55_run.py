@@ -234,9 +234,38 @@ def read(a):
     for ar,rec in RG.make_records(read_,W0,G.item_meta(items),P['read'],idx,info).items():
         if fnout(ar).exists() and not a.rerun:print('exists, not overwritten:',fnout(ar));continue
         json.dump(rec,open(fnout(ar),'w'));print('wrote',fnout(ar))
+def fam(a):
+    """design 17 familiarity-vs-binding read on saved states (e55_fam.py): per fact the candidates [gold, 15 exposed, 16 fresh never-exposed places of the same token length], full-span and first-token log-probs at W0 and at the saved state of every arm (appearance --apps, default the last one with a state); frozen weights. --seeds: one model load for several seeds (a seed whose saved states are missing is skipped with a message)."""
+    OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));arms=a.arms.split(',');seeds=[int(x) for x in a.seeds.split(',')] if a.seeds else [a.seed];LD,s3,C=lab()
+    import e55_gpu as RG,e55_fam as F,stage2
+    fnout=lambda ar,sd:OUT/f'E55_{a.tag}_fam_{ar}_s{sd}.json';rt=None
+    for sd in seeds:
+        todo=[ar for ar in arms if a.rerun or not fnout(ar,sd).exists()]
+        if not todo:print(f'seed {sd}: all fam records exist');continue
+        sv=[OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json' for ar in todo]
+        if not all(x.exists() for x in sv):print(f'seed {sd}: saved.json missing {[str(x) for x in sv if not x.exists()]}: skipped',flush=True);continue
+        enc,w,tf=build(a,sd,arms=todo);assert w['k']>=G.NCAND,'fam readout needs k >= 16';sf={}
+        for ar in todo:
+            r=json.load(open(OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json'));have=[(ai,r['reads'][str(k)]) for ai,k in zip(w['read_apps'],w['read_chunks']) if str(k) in r['reads'] and '_file' in r['reads'][str(k)]]
+            want=[int(x) for x in a.apps.split(',')] if a.apps else ([max(ai for ai,_ in have)] if have else []);sf[ar]={ai:(e['_file'],e['_hash']) for ai,e in have if ai in want};assert sf[ar],('no saved state for',ar,want,[ai for ai,_ in have])
+        fresh=G.fresh_places(w,enc,F.NF);items=F.fam_items(w,fresh);n=len(items)
+        if rt is None:
+            rt=LD.Runtime();rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
+        tok=rt.tok;slot=stage2.make_slot(tok,None);raw=[]
+        for it in items:
+            for c in it['cands']:ids,span=stage2.item_ids(tok,slot,it['prefix'],c);raw.append((ids,(span[0]-1,span[1]-1)))
+        pl=RG.check_rows(raw,n,F.NCF);print(f'seed {sd}: fam candidates per fact:',F.NCF,'span length (tokens):',pl,'world place_len:',w['place_len'],'fresh places:',fresh,flush=True);assert pl==w['place_len']
+        forbid=[x['X'] for x in w['facts']+w['ctrl']]+[x['P'] for x in w['facts']]+fresh+([x['X'] for x in w['decoy']['facts']]+[x['P'] for x in w['decoy']['facts']] if 'decoy' in w else [])
+        out_tail=out_tail_8192(LD,tok,rt.bos,forbid);t0=time.monotonic()
+        res=F.read_fam(rd,raw,F.first_rows(raw),n,out_tail,{ar:sf[ar] for ar in todo},rt.base,log=lambda *x:print(*x,flush=True))
+        for ar in todo:
+            for ai,S in res[ar].items():
+                rec={'arm':ar,'seed':sd,'cell':a.cell,'tag':a.tag,'app':ai,'scores':{k:np.asarray(v).tolist() for k,v in S.items()},'W0':{k:np.asarray(v).tolist() for k,v in res['W0'].items()},'fresh':fresh,'facts':[it['fact'] for it in items],'gold_idx16':[it['gold_idx16'] for it in items],'code':git_rev(),'sec_read':time.monotonic()-t0,'out_tail_sha12':hashlib.sha256(np.asarray(out_tail,np.int64).tobytes()).hexdigest()[:12]}
+                if fnout(ar,sd).exists() and not a.rerun:print('exists, not overwritten:',fnout(ar,sd));continue
+                json.dump(rec,open(fnout(ar,sd),'w'));print('wrote',fnout(ar,sd))
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('cmd',choices=['dry','run','read','unit']);ap.add_argument('--cell',default='base',choices=list(G.CELLS));ap.add_argument('--seed',type=int,default=55);ap.add_argument('--arms',default='NAT,SWD');ap.add_argument('--tag',default='st0')
+    ap=argparse.ArgumentParser();ap.add_argument('cmd',choices=['dry','run','read','unit','fam']);ap.add_argument('--cell',default='base',choices=list(G.CELLS));ap.add_argument('--seed',type=int,default=55);ap.add_argument('--arms',default='NAT,SWD');ap.add_argument('--tag',default='st0')
     ap.add_argument('--out',default=None);ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--smoke-chunks',type=int,default=0);ap.add_argument('--no-canary',action='store_true');ap.add_argument('--rerun',action='store_true');ap.add_argument('--stub',action='store_true',help='dry only: stub tokenizer and synthetic background (CPU test)');ap.add_argument('--host-gib-limit',type=float,default=100.0)
     ap.add_argument('--save-apps',default=None,help='run: appearances at which states are saved (default 2,4,8,16)');ap.add_argument('--canary-apps',default=None,help='run: appearances with a canary read (default = save-apps; W0 always)');ap.add_argument('--apps',default=None,help='read: appearances to read (default all saved)');ap.add_argument('--in-apps',default=None,help='read: comma list of appearances at which the in-window contexts are also read (e.g. 16); default none')
     ap.add_argument('--seeds',default=None,help='run: comma list of world seeds (one model load for all)');ap.add_argument('--plan',default=None,help="run: per-seed read plan '55=all|1,2,4,8,16;56=2,4,8,16|16' (out-of-window appearances | in-window appearances)");ap.add_argument('--read-apps',default=None,help='run: default out-of-window inline reads (appearances, or all)');ap.add_argument('--arm-seeds',default=None,help="run: restrict an arm to seeds, e.g. 'SWB:55'");ap.add_argument('--decoy',default='names',choices=['names','world'],help='fake window of SWD: names = same chunks with fake names / places (primary), world = another fact world');ap.add_argument('--bg',default='default',choices=['default','pool'],help='background paragraphs: default = the old one-book list (E55 stage 0 jobs), pool = design v3 pooled / deduplicated / seed-shuffled four-book pool');ap.add_argument('--unit-chunks',type=int,default=12);ap.add_argument('--tol-ce',type=float,default=1e-3);ap.add_argument('--tol-upd',type=float,default=2e-3)
-    a=ap.parse_args();{'dry':dry,'run':run,'read':read,'unit':unit}[a.cmd](a)
+    a=ap.parse_args();{'dry':dry,'run':run,'read':read,'unit':unit,'fam':fam}[a.cmd](a)
