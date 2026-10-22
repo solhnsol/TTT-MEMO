@@ -165,7 +165,7 @@ def decomp_report(d,seeds,tag='dc',nat_tag='v3a',iso_tag='iso',apps=(64,128),out
         for ar,tg in tags.items():
             f=Path(d)/f'E55_{tg}_{ar}_s{sd}.read.json'
             if f.exists():G[sd,ar]=load(f)
-    L=[f'# E55 decomposition report (design 24.3), seeds {list(seeds)}','','u = (W0 rank - rank)/15, out-of-window read, question frames never seen; mean over facts, 95% fact-bootstrap CI; exploratory. ISO from job 185 uses read segments 16/32/64/128, the arms here use 64/128 (the packing of the ISO steps differs slightly).','','| seed | arm | '+' | '.join(f'a={a}' for a in apps)+' |','|---|---|'+'---|'*len(apps)]
+    L=[f'# E55 decomposition report (design 24.3), seeds {list(seeds)}','','u = (W0 rank - rank)/15, out-of-window read, question frames never seen; mean over facts, 95% fact-bootstrap CI; exploratory. ISO from job 185 uses read segments 16/32/64/128, the arms here use 64/128 (the packing of the ISO steps differs slightly). Padding: in FOS the segment-end padding (at most 1023 newline tokens per segment, about 2-4% of a segment, count in extra.pad_tokens of the saved files) IS inside the chunk and therefore in the loss (the online write path scores every token of a chunk); in the isolated-row arms (ISO, ISOB, ISOD) the padding of a packed chunk is not in the loss (loss mask only inside rows) and not visible to the rows (segment id -1). The two differ in this respect.','','| seed | arm | '+' | '.join(f'a={a}' for a in apps)+' |','|---|---|'+'---|'*len(apps)]
     def cellf(fn,use,a):
         try:return fmt(boot(np.concatenate([fn(s_) for s_ in use])))
         except Exception as e:ERR.append(repr(e));return 'n/a'
