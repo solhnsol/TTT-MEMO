@@ -87,7 +87,7 @@ def selftest():
     for sd in (61,62):
         for ar,tg in (('NAT','v3a'),('ISO','iso'),('ISOB','dc'),('ISOD','dc'),('NATB','dc'),('FOS','dc'),('SENT','dc'),('KMASK','dc'),('SENTO','dc'),('SENTPQ','dc'),('SWD','v3a')):
             r_=rec(1.0);(d3/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (64,128)}}))
-    ERR.clear();t=decomp_report(d3,[61,62]);assert 'SENT - ISOB' in t;assert 'FOS - ISO' in t and 'n/a' not in t.split('token-stream hash')[0] and 'n/a (no hash stored)' in t and 'recovery ratio' in t and 'all equal' in t,t
+    ERR.clear();t=decomp_report(d3,[61,62]);assert 'SENT - ISOB' in t;assert 'FOS - ISO' in t and 'n/a' not in t.split('token-stream hash')[0] and 'False (n/a for' in t and 'recovery ratio' in t and 'all equal' in t,t
     d4=Path(tempfile.mkdtemp())
     for sd in (61,62):
         r_=rec(1.0);(d4/f'E55_v3a_NAT_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out'],'in_g0':r_['read']['16']['in_g0']} for a in (64,128)},'W0':{'out':r_['W0']['out'],'in_g0@64':r_['W0']['in_g0@16'],'in_g0@128':r_['W0']['in_g0@16']}}))
@@ -196,16 +196,21 @@ def decomp_report(d,seeds,tag='dc',nat_tag='v3a',iso_tag='iso',apps=(64,128),out
             row.append(cellf(lambda s_,x=x,y=y,a=a:fact_g(G[s_,x],a,'out')-fact_g(G[s_,y],a,'out'),use,a))
         L.append(f'| {nm} | {mean} | '+' | '.join(row)+' |')
     def sha_of(sd,ar):
+        """(kind, value): stream_hash (64 hex, sha256 of the int64 ids, written by run_stream) preferred, else stream_sha (16 hex, gen_facts.stream_sha); the two kinds are not comparable"""
         f=Path(d)/f'E55_{tags[ar]}_{ar}_s{sd}.saved.json'
-        try:v=json.load(open(f)).get('stream_sha')
+        try:j=json.load(open(f))
         except Exception:return None
-        v=v if isinstance(v,str) else (v or {}).get('A')
-        return v[:12] if v else None
-    L+=['','token-stream hash (stream_sha of the real stream, from the saved.json of each arm; "?" = not stored in that file, e.g. files written before this field existed) per seed and arm, to check that the reused files come from the same world:','','| seed | '+' | '.join(tags)+' | all equal |','|---|'+'---|'*(len(tags)+1)]
+        for k in ('stream_hash','stream_sha'):
+            v=j.get(k);v=v if isinstance(v,str) else (v or {}).get('A') if v else None
+            if v:return (k,v)
+        return None
+    L+=['','token-stream hash per seed and arm (stream_hash = sha256 of the int64 ids as written by run_stream, first 12 hex; falls back to stream_sha of gen_facts when an old file has no stream_hash; "n/a" = neither is stored). all equal is True only if every arm has a value of the same kind and all values agree:','','| seed | '+' | '.join(tags)+' | all equal |','|---|'+'---|'*(len(tags)+1)]
     for sd in seeds:
-        hs={ar:sha_of(sd,ar) for ar in tags if (sd,ar) in G};known=[v for v in hs.values() if v]
-        eq='n/a (no hash stored)' if not known else (str(len(set(known))==1)+(' (only %d of %d arms have a hash)'%(len(known),len(hs)) if len(known)<len(hs) else ''))
-        L.append(f'| {sd} | '+' | '.join(hs.get(ar) or '?' for ar in tags)+f' | {eq} |')
+        hs={ar:sha_of(sd,ar) for ar in tags if (sd,ar) in G};miss=[ar for ar,v in hs.items() if v is None];kinds={v[0] for v in hs.values() if v}
+        if miss:eq=f'False (n/a for {",".join(miss)})'
+        elif len(kinds)>1:eq='False (mixed hash kinds)'
+        else:eq=str(len({v[1] for v in hs.values()})==1)
+        L.append(f'| {sd} | '+' | '.join((hs[ar][1][:12] if hs.get(ar) else 'n/a') for ar in tags)+f' | {eq} |')
     a_=apps[-1];den=[fact_g(G[s_,'SENTPQ'],a_,'out') for s_ in seeds if (s_,'SENTPQ') in G]
     if den:
         gm=lambda ar:np.mean(np.concatenate([fact_g(G[s_,ar],a_,'out') for s_ in seeds if (s_,ar) in G and (s_,'SENTPQ') in G])) if any((s_,ar) in G and (s_,'SENTPQ') in G for s_ in seeds) else float('nan')
