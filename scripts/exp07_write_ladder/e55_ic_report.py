@@ -118,6 +118,12 @@ def selftest():
         (d7/f'E55_v3a_NAT_s{sd}.saved.json').write_text(json.dumps({'log':[{'update_norm':0.01} for _ in range(128)],'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.03,'_tail_nll':3.0}}))
     ERR.clear();t=q1b_report(d7,[61,62,63]);assert 'Verdict rules' in t and 'NAT-ADAM / SENTPQ-ADAM' in t and 'DAMAGE rel' in t and 'cells shown as n/a failed' not in t,t
     print(t.split('## damage')[1][:1500])
+    d8=Path(tempfile.mkdtemp())
+    for sd in (61,62,63):
+        for nm,(tg,ar) in {'ALLSPAN':('all','ALLSPAN'),'SENTPQ':('dc','SENTPQ'),'SENT':('dc','SENT'),'NAT':('v3a','NAT')}.items():
+            r_=rec(1.0+0.1*len(nm)%1);(d8/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (64,128)},'W0':{'out':r_['W0']['out']}}))
+            (d8/f'E55_{tg}_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'n_masked_keys':400} for _ in range(128)],'stream_sha':'abc','canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.02,'_tail_nll':3.0}}))
+    ERR.clear();t=all_report(d8,[61,62,63]);assert 'gain share' in t and 'equal' in t and 'cells shown as n/a failed' not in t and 'n/a' not in t.split('paired')[0],t
     print('e55_ic_report SELFTEST OK')
 def q1b_report(d,seeds,tag='q1b',nat_tag='v3a',arms=('SENTPQ','SENTPQADAM','NATADAM','SENTPQADAMH'),apps=(16,32,64,128),out=None,load=None):
     """E55 design 29.3 Q1-B (Adam-direction write on the masked / unmasked online stream, window kept, per-query SENTPQ convention): out-of-window g (u, W0 subtracted) at a = 16, 32, 64, 128 per arm (pooled over seeds, fact bootstrap), in-window g at 128, canary NLL rise at a = 32, 64, 128 (reference W0, and NAT of job 181 at a = 128), clip share and norm ratio, and the PRE-SET verdict rules (stated in the report body): SPEED, GAIN KEPT, DAMAGE relative and absolute, kept separate; plus the recorded item NAT-ADAM / SENTPQ-ADAM."""
@@ -208,6 +214,48 @@ def q1b_report(d,seeds,tag='q1b',nat_tag='v3a',arms=('SENTPQ','SENTPQADAM','NATA
             r=float(np.mean(x))/float(np.mean(y));L.append(f'- a={a_}: NAT-ADAM {float(np.mean(x)):+.3f} / SENTPQ-ADAM {float(np.mean(y)):+.3f} = {r:.2f} -> '+('>= 30%: the direction improvement works independently of masking' if r>=0.3 else '< 30%: the improvement needs the masking'))
         else:L.append(f'- a={a_}: n/a')
     L+=['','trade-off curve (half versus full norm): '+'; '.join(f'{name[ar]}: g(128) {float(np.mean(pooled(ar,128))):+.3f}, rise vs W0 {riseW[ar]:+.3f}' for ar in (STD,A,AH) if pooled(ar,128) is not None and riseW.get(ar) is not None)]
+    if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
+def all_report(d,seeds,tag='all',ref_tag='dc',nat_tag='v3a',arm='ALLSPAN',apps=(64,128),out=None,load=None):
+    """E55 design 31 (Hans 22 Oct): name + occupation + place tokens of ALL earlier fact sentences in the window hidden (per-query convention, like SENTPQ), compared with hiding whole sentences (SENTPQ, job 190; SENT, job 189/190) and with NAT (job 181). g out-of-window per seed and pooled (fact bootstrap), R = g / g(SENTPQ), the share of the NAT -> SENTPQ gain that the token mask gets, hidden keys % of the window, canary rise at a=128 (vs W0), clip share, and the stream hash check against the SENTPQ file (same world)."""
+    load=load or (lambda f:json.load(open(f)));srcs={arm:(tag,arm),'SENTPQ':(ref_tag,'SENTPQ'),'SENT':(ref_tag,'SENT'),'NAT':(nat_tag,'NAT')};G={};S={}
+    for sd in seeds:
+        for nm,(tg,ar) in srcs.items():
+            f=Path(d)/f'E55_{tg}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,nm]=load(f)
+            f=Path(d)/f'E55_{tg}_{ar}_s{sd}.saved.json'
+            if f.exists():S[sd,nm]=json.load(open(f))
+    ERR.clear();W=8192
+    def pooled(nm,a):
+        use=[s_ for s_ in seeds if (s_,nm) in G]
+        try:return np.concatenate([fact_g(G[s_,nm],a,'out') for s_ in use]) if use else None
+        except Exception as e:ERR.append(f'{nm}@{a}: {e!r}');return None
+    def share(nm):
+        v=[e.get('n_masked_keys',0)/W for sd in seeds if (sd,nm) in S for e in S[sd,nm].get('log',[])[8:]];return 100*float(np.mean(v)) if v else None
+    def rise(nm):
+        r=[max(S[s_,nm]['canary_end'][k]-S[s_,nm]['canary_w0'][k] for k in ('_gen_nll','_tail_nll')) for s_ in seeds if (s_,nm) in S and S[s_,nm].get('canary_end') and S[s_,nm].get('canary_w0')];return max(r) if r else None
+    name_={arm:'name+occupation+place tokens hidden (ALL)','SENTPQ':'SENTPQ (whole sentences hidden, job 190)','SENT':'SENT (whole sentences, 1-D)','NAT':'NAT (job 181)'}
+    L=[f'# E55 token mask of name / occupation / place (design 31), seeds {list(seeds)}','','g = out-of-window rank gain u (W0 subtracted, unexposed question frames), 95% fact-bootstrap CI. The arm hides, for every fact-sentence query token, the name, occupation and place tokens of ALL earlier fact sentences of the 8-chunk window (per-query convention as SENTPQ; background queries see everything). R = g / g(SENTPQ) at the same a; gain share = (g - g(NAT)) / (g(SENTPQ) - g(NAT)). Pre-set reading (as Q2): R >= 0.7 sufficient, <= 0.3 not sufficient, else partial. Exploratory.','']
+    ps={nm:{a:pooled(nm,a) for a in apps} for nm in srcs};ok=all(ps[nm][a] is not None for nm in srcs for a in apps)
+    L+=['| arm | hidden keys % of window | '+' | '.join(f'g a={a}' for a in apps)+' | '+' | '.join(f'R a={a}' for a in apps)+' | gain share a=%d | canary rise a=128 (vs W0) |'%apps[-1],'|---|---|'+'---|'*(2*len(apps)+2)]
+    for nm in (arm,'SENTPQ','SENT','NAT'):
+        if any(ps[nm][a] is None for a in apps):L.append(f'| {name_[nm]} | n/a |'+' n/a |'*(2*len(apps)+2));continue
+        sq={a:float(np.mean(ps['SENTPQ'][a])) if ps['SENTPQ'][a] is not None else float('nan') for a in apps};nt={a:float(np.mean(ps['NAT'][a])) if ps['NAT'][a] is not None else float('nan') for a in apps};m={a:float(np.mean(ps[nm][a])) for a in apps}
+        gs=(m[apps[-1]]-nt[apps[-1]])/(sq[apps[-1]]-nt[apps[-1]]) if sq[apps[-1]]==sq[apps[-1]] and sq[apps[-1]]!=nt[apps[-1]] else float('nan');sh=share(nm);rs=rise(nm)
+        L.append(f'| {name_[nm]} | '+(f'{sh:.1f}' if sh is not None else 'n/a')+' | '+' | '.join(fmt(boot(ps[nm][a])) for a in apps)+' | '+' | '.join(f'{m[a]/sq[a]:.2f}' for a in apps)+f' | {gs:.2f} | '+(f'{rs:+.3f}' if rs is not None else 'n/a')+' |')
+    L+=['','paired contrasts (pooled over seeds, same facts):','','| contrast | '+' | '.join(f'a={a}' for a in apps)+' |','|---|'+'---|'*len(apps)]
+    for nm,x,y in ((f'{arm} - SENTPQ',arm,'SENTPQ'),(f'{arm} - NAT',arm,'NAT'),('SENTPQ - NAT','SENTPQ','NAT')):
+        row=[]
+        for a in apps:
+            use=[s_ for s_ in seeds if (s_,x) in G and (s_,y) in G]
+            try:row.append(fmt(boot(np.concatenate([fact_g(G[s_,x],a,'out')-fact_g(G[s_,y],a,'out') for s_ in use]))) if use else 'n/a')
+            except Exception as e:ERR.append(f'diff {nm}: {e!r}');row.append('n/a')
+        L.append(f'| {nm} | '+' | '.join(row)+' |')
+    L+=['','per seed (out-of-window seed mean g at a=%d): '%apps[-1]+'; '.join(f'seed {s_}: '+', '.join(f"{nm} {float(np.mean(fact_g(G[s_,nm],apps[-1],'out'))):+.3f}" for nm in (arm,'SENTPQ','NAT') if (s_,nm) in G) for s_ in seeds)]
+    hs=[(s_,S[s_,arm].get('stream_sha'),S[s_,'SENTPQ'].get('stream_sha')) for s_ in seeds if (s_,arm) in S and (s_,'SENTPQ') in S]
+    L+=['','stream hash (same world as the SENTPQ file of job 190): '+('; '.join(f'seed {s_}: '+('equal' if a_==b_ and a_ else f'DIFFERENT ({a_} vs {b_}) - comparison void') for s_,a_,b_ in hs) if hs else 'n/a (files missing)')]
     if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
@@ -517,6 +565,8 @@ if __name__=='__main__':
         _s.argv.remove('--q1a');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q1a');a=ap.parse_args();print(q1a_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     if '--q1b' in _s.argv:
         _s.argv.remove('--q1b');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q1b');a=ap.parse_args();print(q1b_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
+    if '--all' in _s.argv:
+        _s.argv.remove('--all');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='all');a=ap.parse_args();print(all_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     if '--ans' in _s.argv:
         _s.argv.remove('--ans');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');a=ap.parse_args();print(ans_report(a.dir,[int(x) for x in a.seeds.split(',')],out=a.out));_s.exit(0)
     if '--q2' in _s.argv:

@@ -68,11 +68,11 @@ def maskdump(a):
     ex=[(c['k'],x['text']) for c in ch[9:10] for x in c['sents'][:3]]
     import hashlib as _h;sha=_h.sha256(b''.join(np.packbits(~E.token_masks('SENT',k,ch,CH)[0]).tobytes() for k in range(len(ch)))).hexdigest()[:12]
     info={'cell':a.cell,'seed':a.seed,'bank':w['bank_kind'],'sent_mask_sha12_all_chunks':sha,'rows':rows,'distinct_frames_per_chunk_min':min(len(set(r)) for r in fr),'frame_repeats_per_fact':max(len(f['frames'])-len(set(f['frames'])) for f in w['facts']),'mean_same_frame_other_sentences_in_window':float(np.mean(cnt)),'example_sentences_chunk9':ex,'ALL_OK':bool(ok)}
-    miss=E.annotate_answers(ch,w['facts'],enc);q2={'answer_span_miss_place_name':list(miss)};ok&=(miss==(0,0))
+    miss=E.annotate_answers(ch,w['facts'],enc,with_occ=True);q2={'answer_span_miss_place_name_occupation':list(miss)};ok&=(miss==(0,0,0))
     for k in (9,len(ch)//2,len(ch)-1):
         ks_,ns_=E.token_masks('SENT',k,ch,CH);r_={'SENT_keys':ns_}
         sets={}
-        for ar_ in ('OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75','SENTPQ'):
+        for ar_ in ('OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','SENTPQ'):
             m_,n_=E.token_masks(ar_,k,ch,CH);sets[ar_]=set(np.nonzero(~m_.all(0))[0].tolist());r_[ar_+'_keys']=n_;r_[ar_+'_pairs']=int((~m_).sum());ok&=(n_==len(sets[ar_]))
         ok&=(sets['SENTP25']<=sets['SENTP50']<=sets['SENTP75']<=sets['SENTPQ']) and (sets['SENTPQ']==set(np.nonzero(~ks_)[0].tolist())) and (sets['OSPAN']<=sets['SENTPQ'])
         r_['SENTP_shares']=[round(r_['SENTP%d_keys'%p]/max(ns_,1),3) for p in (25,50,75)];q2[f'chunk{k}']=r_
@@ -306,7 +306,7 @@ def ft(a):
                 except Exception:pass
                 r.update(stream_sha=sha,world_seed=sd,cell=a.cell,code=git_rev(),sec_total=time.monotonic()-t0,read_epochs=rep,window_reset_each_epoch=True,short_window_chunks_per_epoch=8,optimizer={'name':'AdamW','weight_decay':0.0,'clip':1.0,'betas':[0.9,0.999],'eps':1e-8,'master_dtype':'float32'},trainable='inner (fast) parameters only')
                 json.dump(r,open(fn,'w'),default=float);print('wrote',fn,f'{time.monotonic()-t0:.0f}s',flush=True)
-DECOMP_ARMS=('ISOB','ISOD','NATB','FOS','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT','NAT','NATADAM','SENTPQADAM','SENTPQADAMH')
+DECOMP_ARMS=('ISOB','ISOD','NATB','FOS','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT','NAT','NATADAM','SENTPQADAM','SENTPQADAMH')
 def decomp(a):
     """E55 design 24.3 decomposition between ISO and NAT, v3 world of --cell, reads (out-of-window, unexposed frames) at a = 64 and 128: ISOB = the stream chunks themselves (fact sentences + non-repeating background) cut into isolated rows, 128 steps; ISOD = isolated sentences, one round (16) per chunk, 128 steps; NATB = NAT with the window, every chunk step rescaled to the size of one stage-0 ISO step of its segment (NAT norm x chunks / ISO steps); FOS = fact-only stream: the stage-0 sentences as ordinary continuous text with the 8-chunk SWA window (segments padded to 1024 multiples), norm per chunk = the NAT segment increment spread equally. ISOB / ISOD norm per step = the NAT per-chunk norm (matched). Files E55_<tag>_<ARM>_s<seed>.read.json / .saved.json."""
     OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);seeds=[int(x) for x in a.seeds.split(',')] if a.seeds else [a.seed];arms=a.arms.split(',');apps=[int(x) for x in a.decomp_apps.split(',')];assert apps==sorted(apps) and apps[-1]==128,'decomp apps must end at 128 (canary / DCLM end reads)';assert all(x in DECOMP_ARMS for x in arms),[x for x in arms if x not in DECOMP_ARMS]
@@ -342,7 +342,7 @@ def decomp(a):
                     if ar=='NATADAM':ntg=norms;extra['norm_target']='NAT (norm file)'
                     else:
                         fq=OUT/f'E55_{a.tag}_SENTPQ_s{sd}.saved.json';assert fq.exists(),('SENTPQ of this seed and tag is needed first (norm target of the SENTPQ-ADAM arms)',fq);ntg=[e['update_norm'] for e in json.load(open(fq))['log']][:128];extra['norm_target']='SENTPQ (same tag and seed)'
-                if ar in E.SPAN:miss=E.annotate_answers(w['chunks'],w['facts'],enc);assert miss==(0,0),('answer span not found in sentences (place, name):',miss);extra={'answer_span_miss':list(miss)}          # E55 design 25.3 (A): the online stream with the window, earlier fact sentences hidden from attention (as job 183 SENT), no norm matching
+                if ar in E.SPAN:miss=E.annotate_answers(w['chunks'],w['facts'],enc,with_occ=True);assert miss==(0,0,0),('answer span not found in sentences (place, name, occupation):',miss);extra={'answer_span_miss':list(miss)}          # E55 design 25.3 (A): the online stream with the window, earlier fact sentences hidden from attention (as job 183 SENT), no norm matching
                 r=L.run_stream(ar,1,ids,nch=128,tag='dc'+ar,log=lg,read_hook=lambda k,m:hook(k+1,m),hook_chunks=[a_-1 for a_ in apps],chunks_meta=w['chunks'],norm_targets=ntg)
             elif ar=='NATB':
                 tg=I.bigstep_targets(norms,segs_iso,apps);extra={'target_mean_ratio_to_nat':float(np.mean(tg)/np.mean(norms))};print(f'  NATB: mean target norm / NAT norm = {extra["target_mean_ratio_to_nat"]:.3f}',flush=True)
@@ -361,7 +361,7 @@ def run(a):
     OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');seeds=[int(x) for x in a.seeds.split(',')] if a.seeds else [a.seed];plans=seed_plan(a,seeds)
     armseed=dict(x.split(':') for x in a.arm_seeds.split(';')) if a.arm_seeds else {}                  # e.g. 'SWB:55' = arm SWB only for seed 55
     if a.smoke_chunks:assert 'smoke' in a.tag,'a smoke run needs a tag containing smoke'
-    for ar in arms:assert ar in ('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT'),ar
+    for ar in arms:assert ar in ('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT'),ar
     tgt={}          # per seed: per-chunk update norms of arm SWD (the size to which NATM is rescaled)
     LD,s3,C=lab();rt=LD.Runtime();assert int(rt.cfg.model.sliding_window_size)==8192;can=None if a.no_canary else Canary55(LD,rt)
     inline=any(plans[s_][0] or plans[s_][1] for s_ in seeds);rd=None

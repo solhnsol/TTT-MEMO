@@ -689,7 +689,24 @@ def u36():
             for xq in ch[k]['sents']:inside[xq['start']:xq['end']]=True
             assert m[~inside].all()
     RES['U36']='OSPAN-R25/50/75: nested subsets of the OSPAN answer-span keys, shares about 25 / 50 / 75 %, identical rows for all fact-sentence queries, background unmasked, deterministic'
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36}
+def u37():
+    """E55 design 31 (Hans: occupation too) CPU: annotate_answers finds the occupation in every sentence (with_occ miss (0,0,0)), the span is the word after 'the' (token before it is not inside name/place spans); OCCSPAN keys = the occupation spans, ALLSPAN = OSPAN union OCCSPAN, OCCSPAN disjoint from OSPAN, per-query (background rows unmasked), the old two-tuple return is unchanged."""
+    import gen_facts as G
+    enc=G.StubTok();bg=G._synth_bg(9000);w=G.cell_world(61,'ic_u64',enc,bg,decoys=('names','nofact'));ch=G.realize(w)
+    assert E.annotate_answers(ch,w['facts'],enc)==(0,0) and E.annotate_answers(ch,w['facts'],enc,with_occ=True)==(0,0,0)
+    hk=lambda m:set(np.nonzero(~m.all(0))[0].tolist())
+    for c in ch[:3]:
+        for x in c['sents']:
+            assert len(x['ans_O'])==1 and len(x['ans_A'])==3 and x['ans_O'][0] not in x['ans'],x
+            a_,b_=x['ans_O'][0];assert list(c['ids'][a_:b_])==list(enc(w['facts'][x['fact']]['o'])) or list(c['ids'][a_:b_])==list(enc(' '+w['facts'][x['fact']]['o']))
+    for k in (9,40):
+        o,_=E.token_masks('OSPAN',k,ch,CH);oc,n_=E.token_masks('OCCSPAN',k,ch,CH);al,_=E.token_masks('ALLSPAN',k,ch,CH)
+        assert hk(oc) and hk(o)&hk(oc)==set() and hk(al)==hk(o)|hk(oc) and n_==len(hk(oc))
+        inside=np.zeros(CH,bool)
+        for xq in ch[k]['sents']:inside[xq['start']:xq['end']]=True
+        assert oc[~inside].all() and al[~inside].all()
+    RES['U37']='occupation spans found in every sentence (miss (0,0,0)), OCCSPAN keys = occupation spans, ALLSPAN = OSPAN union OCCSPAN, disjoint, background unmasked, two-tuple return unchanged'
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
