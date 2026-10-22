@@ -14,7 +14,7 @@ cd "$(dirname "$0")/../../.." 2>/dev/null || true
 case "$PY" in /*) ;; *) echo "PY must be an absolute path (got '$PY')"; exit 3;; esac
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=9a6fffb195a602dabb4d3bf280e420730d15155b
+COMMIT=754fa1944065053a9c02ec304e4ce3901b83d4f1
 FILES="$D/e55_run.py $D/e55_core.py $D/e55_gpu.py $D/e55_swap.py $D/e55_read.py $D/e55_analyze.py $D/e55_metrics.py $D4/gen_facts.py $D4/gen_world_ctl.py $D4/frame_bank.py $D/e55_gates.py $D4/frames300.txt"
 LADDER_OK="714b08ea3b90"
 : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}}"; export EXP07_OUT="$OUT"; mkdir -p "$OUT"
@@ -30,7 +30,7 @@ if [ -z "$SKIP_VERIFY" ]; then
     G=$(sha256sum $D/$F | cut -c1-12)
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH (exit 5)"; exit 5; }
   done <<'MANIFEST'
-dff229ee8328 e55_run.py
+04e4fdac18ff e55_run.py
 210b40d2df40 e55_core.py
 9827e34dcde6 e55_gpu.py
 b0cd3acd36bb e55_swap.py
