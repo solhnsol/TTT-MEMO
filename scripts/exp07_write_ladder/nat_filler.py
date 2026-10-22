@@ -34,6 +34,9 @@ def canary_grams():
 def select(nat_dir,stream,passes,layout='spread',seed=0,canary=None):
     """returns (pools {pass: [paragraphs]}, info). pass 1 is the stream's own background (not in pools)."""
     w=NW.load_world(world_path(nat_dir,stream,layout));own=bg_texts(w);rx=forbid_regex(w);ownset=set(own)
+    if w.get('filler_pools'):   # E52 worlds carry their audited paragraph-level pass pools (e52_insert.py); other worlds select from the other streams in nat_dir as before
+        fp={int(k):v for k,v in w['filler_pools'].items()};assert passes-1<=len(fp) and passes>=2,(passes,sorted(fp))
+        return {p:fp[p] for p in range(2,passes+1)},{'own_bg':len(own),'candidates':sum(len(v) for v in fp.values()),'dropped':{},'origin_streams':{p:['embedded'] for p in range(2,passes+1)},'n_slots':len(own)}
     others=sorted(Path(nat_dir).glob(f'nat_91*_{layout}.json'));others=[p for p in others if p.name!=world_path(nat_dir,stream,layout).name]
     cand=[];seen=set(ownset);drop={'forbid':0,'own_bg':0,'duplicate':0,'canary':0}
     for p in others:
