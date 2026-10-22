@@ -464,7 +464,33 @@ def u27():
     assert all(len(r)==8 for r,_ in eps) and sorted(map(tuple,[r[0] for r in eps[0][0]]))==sorted(map(tuple,[r[0] for r in eps[1][0]])) and [r[0] for r in eps[0][0]]!=[r[0] for r in eps[1][0]]
     o3=F.ft_iso(Lf,rt,eps,3e-4,(1,2),read=lambda e,mm_:called.append(('iso',e)),log=lambda *x:None,facts=None);assert ('iso',1) in called and ('iso',2) in called and len(o3['epochs'])==2
     RES['U27']=f"AdamW == optax (max|diff| {da:.1e}, clip coef {float(coef):.3f}); FT gradient + sgd_apply == write_step (max|diff| {d_b:.1e}); place tokens found/miss ok; pc items ok (prefix = latest exposure text before the place, same candidates); FT-NAT/FT-MASK 2 epochs: reads only after epoch 2, masked keys per chunk {dh}, FT-MASK != FT-NAT from chunk 1; FT-ISO 2 epochs reshuffled; trainable (inner) parameters {nin}"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27}
+def u28():
+    """E55 design 24.3 arms: (a) ISOB rows concatenated == the 1024 tokens of the stream chunk, fact sentences are rows, one packed chunk per round, fact share of the tokens 30-40%; (c) ISOD one chunk per round with the round's 16 sentences only; per-step norm == NAT's per-chunk norm (J = 1 matching); read_at reads only at the requested points; (b) bigstep targets = NAT norm x chunks / ISO steps per segment (and the segment total of the targets x ... consistent with the stage-0 per-step norm)"""
+    import gen_facts as G,e55_iso as I,hashlib
+    enc0=G.StubTok();bg=G._synth_bg(9000);w=G.cell_world(61,'ic_u64',enc0,bg,decoys=('names',));V=rt.cfg.model.vocab_size;packing=I.LD.packing
+    sg=I.rows_bg(w);assert len(sg)==64
+    for r,(a0,a1,rows,_) in enumerate(sg):
+        assert [t for ids,_ in rows for t in ids]==list(w['chunks'][r]['ids']) and len(packing.pack_rows(rows)[0])==1
+        n_s=sum(x['end']-x['start'] for x in w['chunks'][r]['sents']);assert 0.20<=n_s/1024<=0.45,(r,n_s)   # stub tokenizer sentences are shorter than real ones (the design quotes 31-37% for the real world)
+        sent_rows=[ids for ids,_ in rows if any(list(ids)==list(w['chunks'][r]['ids'][x['start']:x['end']]) for x in w['chunks'][r]['sents'])];assert len(sent_rows)>=16
+    enc=lambda t:[3+int(hashlib.md5(x.encode()).hexdigest(),16)%(V-3) for x in t.replace('\n\n','\n\n ').split()]
+    sd=I.rows_density(w,enc,0);assert len(sd)==64 and all(len(rows)==16 and len(packing.pack_rows(rows)[0])==1 for _,_,rows,_ in sd)
+    # matching on the tiny model, 3 rounds: per-step norm == NAT norm; read_at
+    Li=I.Iso55(rt,save_dir='/tmp/e55_units_states');norms=np.random.default_rng(5).uniform(0.5,1.5,size=64)*0.01;T=I.cum_target(norms);seen=[]
+    # rebuild small token ids inside the tiny vocab (the stub world ids can exceed it)
+    sg3=[(a0,a1,[([3+t%(V-3) for t in ids],ab) for ids,ab in rows],txt) for a0,a1,rows,txt in sg[:3]]
+    o=I.iso_run(Li,rt,sg3,T=T,read=lambda a,m:seen.append(a) or {},log=lambda *x:None,read_at={3})
+    assert seen==[3] and len(o['log'])==3 and all(abs(e['update_norm']-norms[i])<1e-3*norms[i] for i,e in enumerate(o['log'])),(seen,[e['update_norm'] for e in o['log']],norms[:3])
+    o2=I.iso_run(Li,rt,sd[:3],T=T,read=None,log=lambda *x:None);assert len(o2['log'])==3 and all(abs(e['update_norm']-norms[i])<1e-3*norms[i] for i,e in enumerate(o2['log']))
+    # (b)
+    segs0=I.iso_rows(w,enc,0,[16,32,64]) if False else None
+    nr=np.ones(64);isos=[(0,16,[([5]*26,(0,25))]*(16*16),[]),(16,32,[([5]*26,(0,25))]*(16*16),[])];tg=I.bigstep_targets(nr,isos,[16,32]);J1=len(packing.pack_rows(isos[0][2])[0]);assert abs(tg[0]-16/J1)<1e-12 and tg[40]==1.0 and abs(tg[20]-16/J1)<1e-12
+    # (d) FOS: continuous fact-only stream padded to 1024 multiples, targets spread per segment
+    segs2=I.iso_rows(w,enc,0,[8,16]);ids_f,ends,pad=I.fos_stream(segs2,[7,8]);assert len(ids_f)%1024==0 and ends[-1]==len(ids_f)//1024-1 and ends[0]<ends[-1] and pad<2*1023
+    Tf=I.cum_target(np.full(64,0.01));tg_f=I.fos_targets(Tf,segs2,ends);assert len(tg_f)==ends[-1]+1 and abs(tg_f[:ends[0]+1].sum()-(Tf[8]-Tf[0]))<1e-12 and abs(tg_f.sum()-Tf[16])<1e-12
+    ids_t=ids_f[:3*1024]%(V-3)+3;nt=np.asarray([0.004,0.006,0.005]);os_=Li.run_stream('NATM',1,ids_t,nch=3,tag='u',log=lambda *x:None,norm_targets=nt);assert all(abs(e['update_norm']-nt[i])<1e-3*nt[i] for i,e in enumerate(os_['log']))
+    RES['U28']=f"FOS: stream padded to 1024 multiples (pad {pad}), targets sum to the NAT increments, NATM run hits the per-chunk targets; ISOB: 64 rounds, rows concatenated == chunk tokens, 1 packed chunk per round, fact share 30-40%; ISOD: 64 rounds x 16 sentence rows, 1 chunk each; per-step norm == NAT per-chunk norm ({[round(e['update_norm'],5) for e in o['log']]} vs {[round(float(x),5) for x in norms[:3]]}); read_at honoured; bigstep targets = NAT norm x {16}/{J1} per segment"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
