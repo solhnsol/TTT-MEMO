@@ -117,7 +117,7 @@ def gpu_main(a):
                     for j in range(len(T.tail_ids)//1024):st,_=rt.chunk_logp(m,st,rt.chunk(T._tail_seq,j),T._tail_pref[j*1024:(j+1)*1024])
                     out=[np.asarray(s.arg_packed(m,st,s.ids[g:g+s.GP],s.pref1[g:g+s.GP],s.seg[g:g+s.GP],s.loc[g:g+s.GP])) for g in range(0,s.ids.shape[0],s.GP)]
                 am=np.concatenate(out);return np.asarray([am[c,x] for c,x,y in s.where])
-        import frame_pools_hold as H
+        sys.path.insert(0,str(HERE.parents[0]/'exp04_what_ttt_retains'));import frame_pools_hold as H
         rt=Runtime();L=LD.Ladder(rt,a.seed,readout=True);T=L.T;w_=T.w;gw=sys.modules['gen_world'] if 'gen_world' in sys.modules else __import__('gen_world')
         places30,gi,fi,rows30,pairs=ES.candidate_items(L.fam['L3'],w_['triples']);n=len(pairs);nw=len(places30)
         ntok=lambda s:len(T.tok.encode(s,add_special_tokens=False).ids)
