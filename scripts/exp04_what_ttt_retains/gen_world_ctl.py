@@ -120,9 +120,12 @@ def _alloc(seed,N,enc,decoy=True,bank=None):
         else:random.Random(f'E55|{seed}|{what}').shuffle(cls)
         res[what]=(cls[:need],L)
     return res
+FRAMES300_SHA='7178214a6087'      # experiments/E55-frame-bank300.md (design thread draft, 300 frames, <= 2 of 6 shared components); the file frames300.txt is that list, one frame per line
 def frame_bank(kind,seed,N,need):
     """-> (bank list, owner function pair -> list of frame indices or None for shared banks). need = n_app x s frames per person."""
     if kind=='50':assert sha12('\n'.join(FRAMES50))==FRAMES50_SHA;return FRAMES50[:],None
+    if kind=='300':
+        fr=[l for l in (Path(__file__).resolve().parent/'frames300.txt').read_text().split('\n') if l];assert len(fr)==300 and sha12('\n'.join(fr))==FRAMES300_SHA,'frames300.txt differs from E55-frame-bank300.md';return fr,None
     if kind=='12':return random.Random(f'E55|bank12|{seed}').sample(FRAMES50,12),None
     if kind=='disjoint':
         import frame_bank as FB
