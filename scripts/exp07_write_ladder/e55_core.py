@@ -11,7 +11,7 @@ import e55_swap as E
 import s3
 jax,jnp,eqx=s3.jax,s3.jnp,s3.eqx
 CH=1024;WIN=8192;NW=E.NW
-IMPLEMENTED=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT')
+IMPLEMENTED=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT')
 CHUNK_META_ARMS=E.MASK_ARMS+tuple(E.MIX)+('ALT',)
 def compose_state(chains,pl,counter=None):
     """suffix-layer SWA state with the slot blocks taken from the chain that plan `pl` names ('real' | 'decoy' | 'bg'; 'mask' and absent slots keep the real chain's block, the mask is applied through the key mask). Every other leaf (chunk index) is the real chain's. counter (list) collects the number of KV leaves composed (must be 2: K and V)."""
@@ -77,9 +77,9 @@ class Ladder55(s3.Ladder3):
     def window_inputs(self,arm,k,p,recs,sts,counter=None):
         """what the write forward of chunk k gets: (Kc,Vc,keep,st_suffix,plan). recs[name] = (Kh,Vh) numpy [layers,T,nh,d]; sts[name] = suffix chain state."""
         pl=E.plan(arm,k,p);keep=keep_vector(pl)
-        if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','SENTP25','SENTP50','SENTP75'):
+        if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','SENTP25','SENTP50','SENTP75'):
             Kc,Vc=self.ctx_kv(*recs['real'],k);st=sts['real']
-            if arm in ('SENT','KMASK','SENTO','SENTPQ','OSPAN','SENTP25','SENTP50','SENTP75'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW);self.n_masked_pairs=int((~keep).sum()) if keep.ndim==2 else int((~keep).sum())*CH
+            if arm in ('SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','SENTP25','SENTP50','SENTP75'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW);self.n_masked_pairs=int((~keep).sum()) if keep.ndim==2 else int((~keep).sum())*CH
         else:
             src_k={n:recs[n][0] for n in recs};src_v={n:recs[n][1] for n in recs}
             Kw,_=E.compose_window(src_k,k,pl,CH,axis=1);Vw,_=E.compose_window(src_v,k,pl,CH,axis=1);Kc,Vc=jnp.asarray(Kw),jnp.asarray(Vw)
@@ -95,14 +95,14 @@ class Ladder55(s3.Ladder3):
             Kh[l]=K;Vh[l]=V;del K,V
             if len(ids)>=32*CH and (l%4==3 or l==nl-1):print(f'    record layer {l+1}/{nl}: {time.monotonic()-t0:.0f}s',flush=True)
         return Kh,Vh,h
-    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None,read_hook=None,hook_chunks=(),norm_targets=None,chunks_meta=None,diag_fn=None,diag_chunks=()):
+    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None,read_hook=None,hook_chunks=(),norm_targets=None,chunks_meta=None,diag_fn=None,diag_chunks=(),diag_multi=None):
         """-> {'log': per-chunk dicts, 'reads': {chunk: {...state file / hash / canary}}, 'stream_hash', 'clip_bind_frac'}"""
         assert arm in E.ARMS,arm
         if arm not in IMPLEMENTED:raise NotImplementedError(f'arm {arm} is not implemented')
         self.chunks_meta=chunks_meta;self.n_masked_keys=0
         if arm in CHUNK_META_ARMS:assert chunks_meta is not None and len(chunks_meta)>=(nch or len(real_ids)//CH),'SENT / KMASK need the sentence table of the world (chunks_meta)'
         rt=self.rt;n=len(real_ids)//CH;nch=nch or n;assert nch<=n and len(real_ids)%CH==0
-        names=['real']+(['decoy'] if arm in ('SWD','SWDS','SWDO') else [])+(['bg'] if arm=='SWB' else [])
+        names=['real']+(['decoy'] if arm in ('SWD','SWDS','SWDO') or (diag_multi is not None and decoy_ids is not None) else [])+(['bg'] if arm=='SWB' else [])
         ids_={'real':np.asarray(real_ids),'decoy':None if decoy_ids is None else np.asarray(decoy_ids),'bg':None if bg_ids is None else np.asarray(bg_ids)}
         for nm in names:assert ids_[nm] is not None and len(ids_[nm])>=nch*CH,(nm,'stream missing or too short')
         out={'log':[],'reads':{},'arm':arm,'p':p,'tag':tag,'n_chunks':nch,'stream_hash':hashlib.sha256(np.asarray(real_ids[:nch*CH],np.int64).tobytes()).hexdigest()}
@@ -131,6 +131,12 @@ class Ladder55(s3.Ladder3):
                     pref_w=self.prefix_masked(m,jnp.asarray(ids_['real'][k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep))
                     newp,gn,coef,ce=self.write_step(m,st_all,st_w,c,pref_w,jnp.asarray(keep))
                     if arm=='ALT':extra_log={'alt_masked_chunk':k%2==0}
+                    if diag_multi is not None and k in diag_chunks:
+                        # E55 28.3: forward-only evaluation of the chunk under several window conditions (weights before the write of the chunk): {cond: (Kc, Vc, keep, st_suffix)}
+                        conds={}
+                        for cn in diag_multi.conds:   # arm names of the window conditions
+                            Kx,Vx,kx,sx,_pl=self.window_inputs(cn,k,p,recs,sts,[]);conds[cn]=(Kx,Vx,kx,sx)
+                        out.setdefault('diag_multi',{})[k]=diag_multi(k,m,conds,ids_['real'][k*CH:(k+1)*CH],c,out['log'])
                     if diag_fn is not None and k in diag_chunks:out.setdefault('diag',{})[k]=diag_fn(k,m,Kc,Vc,keep,ids_['real'][k*CH:(k+1)*CH])      # E55 27.8: forward-only attention diagnostic with the window inputs of this chunk, weights before its write
                 for nm in names:sts[nm]=self.read_state(old,sts[nm],rt.chunk(seqs[nm],k),prefs[nm][k*CH:(k+1)*CH])   # same weights (start of the chunk) for every chain
                 scale=1.0

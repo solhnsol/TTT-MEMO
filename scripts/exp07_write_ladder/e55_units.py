@@ -467,6 +467,43 @@ def u33():
         assert all((A[i,W_+rows[i]+1:]<1e-12).all() for i in range(len(rows)))        # no attention to future keys of the current chunk
         assert (A[:,:max(0,(8-k))*1024]==0).all()                                       # absent chunks (k < 8) get no attention
     RES['U33']=f"att-mode hidden states == prefix_masked (max diff {hd:.2e}); attention rows are proper distributions (sum 1, no future keys), stats for 4 layer groups x 5 p-values, run with diag_fn == run without (CE bitwise), n_layers {r['n_layers']}"
+def u34():
+    """E55 design 28.3 / 28.7 (CPU, tiny model): (a) PSPAN keys = the place spans, NSPAN keys = the name spans, OSPAN = their union, per-query (background rows unmasked), annotate_answers stores ans_P / ans_X; (b) run_stream NAT with diag_multi (the 8 probe conditions NAT, KMASK, SENTO, SENT, SWD, O-ALL, P-ALL, N-ALL; the fake stream recorded) == the plain NAT run (CE and final weights bitwise); (c) probe: every probed copy m' differs from the stream weights m by exactly the target norm (sum of the last 8 NAT update norms), the baseline read is taken at m itself, NAT-condition direction cosine to NAT == 1, other conditions differ, dPM3 follows the injected scalar reader, chunk CE of the SENT / SWD condition differs from NAT's; (d) report renders with the ratio table"""
+    import gen_facts as G,e55_diag as DG
+    enc=G.StubTok();bg=G._synth_bg(9000);w=G.cell_world(61,'ic_u64',enc,bg,decoys=('names','nofact'));ch=G.realize(w);G.verify(w,enc)
+    assert E.annotate_answers(ch,w['facts'],enc)==(0,0)
+    for k in (9,40):
+        o,_=E.token_masks('OSPAN',k,ch,CH);p,_=E.token_masks('PSPAN',k,ch,CH);n,_=E.token_masks('NSPAN',k,ch,CH)
+        hk=lambda m:set(np.nonzero(~m.all(0))[0].tolist());assert hk(o)==hk(p)|hk(n) and hk(p)&hk(n)==set() and hk(p) and hk(n)
+        exp=set()
+        for c in range(max(0,k-8),k):
+            for x in ch[c]['sents']:
+                for a_,b_ in x['ans_P']:exp|=set(range(c*CH-k*CH+W+a_,c*CH-k*CH+W+b_))
+        assert hk(p)==exp
+        inside=np.zeros(CH,bool)
+        for xq in ch[k]['sents']:inside[xq['start']:xq['end']]=True
+        assert p[~inside].all() and n[~inside].all()
+    tab=[{'sents':[{'fact':0,'start':100,'end':140,'ans':[(105,106),(110,112)],'ans_P':[(110,112)],'ans_X':[(105,106)]},{'fact':1,'start':300,'end':330,'ans':[(305,306),(310,312)],'ans_P':[(310,312)],'ans_X':[(305,306)]},{'fact':2,'start':700,'end':760,'ans':[(705,706),(720,722)],'ans_P':[(720,722)],'ans_X':[(705,706)]}]} for _ in range(NCH)]
+    seen=[]
+    def reader(m):
+        seen.append(m);t=float(sum(jnp.sum(x.astype(jnp.float32)) for x in jax.tree.leaves(m.inner_parameters())));i=np.arange(16)[:,None];c=np.arange(16)[None,:]
+        return np.sin(i+c)+(i*0.37+c*0.11)*t
+    meta={'kind':['fact']*12+['ctrl']*4,'gold_idx':[(3*j)%16 for j in range(16)]}
+    pf=DG.make_probe_fn(L,rt,s3,reader,meta,nsum=2,log=lambda *x:None)
+    a=L.run_stream('NAT',1,REAL,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab)
+    b=L.run_stream('NAT',1,REAL,decoy_ids=DEC,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab,diag_multi=pf,diag_chunks={3,4})
+    assert [e['ce'] for e in a['log']]==[e['ce'] for e in b['log']] and a['final_hash']==b['final_hash']
+    assert len(seen)==2*(1+8)
+    for j,k in enumerate((3,4)):
+        v=b['diag_multi'][k];base=seen[9*j];tgt=sum(e['update_norm'] for e in b['log'][k-2:k]);assert abs(v['target_norm']-tgt)<1e-9*max(1,tgt)
+        for i,cn in enumerate(DG.PROBE_CONDS):
+            mp=seen[9*j+1+i];dn=float(sum(jnp.sum((x.astype(jnp.float32)-y.astype(jnp.float32))**2) for x,y in zip(jax.tree.leaves(mp.inner_parameters()),jax.tree.leaves(base.inner_parameters()))))**0.5
+            assert abs(dn-tgt)<=0.02*tgt,(k,cn,dn,tgt)
+        assert abs(v['NAT']['cos_to_NAT']-1)<1e-4 and all(abs(v[cn]['cos_to_NAT'])<=1+1e-4 for cn in DG.PROBE_CONDS)
+        assert abs(v['SENT']['chunk_ce']-v['NAT']['chunk_ce'])>1e-6 and abs(v['SWD']['chunk_ce']-v['NAT']['chunk_ce'])>1e-6 and v['OALL']['mask_keys']>0 and v['NAT']['mask_keys']==0 and v['PALL']['mask_keys']<v['OALL']['mask_keys']
+        assert len(v['NAT']['dpm3'])==12 and all(np.isfinite(v[cn]['dpm3_mean']) for cn in DG.PROBE_CONDS)
+    t=DG.probe_report({'seed':0,'chunks':{str(k):v for k,v in b['diag_multi'].items()}});assert 'ratios to the full mask' in t and 'KMASK' in t
+    RES['U34']='PSPAN/NSPAN keys = place / name spans, OSPAN = union, background rows unmasked; probe run == plain NAT run bitwise; probed copies differ from the stream weights by exactly the target norm (sum of last NAT norms), baseline read at the stream weights, NAT cos 1; chunk CE of SENT / SWD differs; report renders'
 def u23():
     """model level (CPU tiny model): (a) SENT / KMASK with an EMPTY sentence table == NAT bit for bit (CE and final weights); (b) SENT with sentences changes CE from chunk 1 on; (c) perturbing K,V at SENT-hidden positions does not change the write update (bitwise), perturbing a visible position does; (d) a per-query 2-D mask with identical rows == the 1-D keep (same update), and a 2-D mask hiding a window key only for rows [a,b) leaves the prefix outputs of rows before a bit-identical and changes rows in [a,b)"""
     emp=[{'sents':[]} for _ in range(NCH)];tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
@@ -622,7 +659,7 @@ def u28():
     Tf=I.cum_target(np.full(64,0.01));tg_f=I.fos_targets(Tf,segs2,ends);assert len(tg_f)==ends[-1]+1 and abs(tg_f[:ends[0]+1].sum()-(Tf[8]-Tf[0]))<1e-12 and abs(tg_f.sum()-Tf[16])<1e-12
     ids_t=ids_f[:3*1024]%(V-3)+3;nt=np.asarray([0.004,0.006,0.005]);os_=Li.run_stream('NATM',1,ids_t,nch=3,tag='u',log=lambda *x:None,norm_targets=nt);assert all(abs(e['update_norm']-nt[i])<1e-3*nt[i] for i,e in enumerate(os_['log']))
     RES['U28']=f"FOS: stream padded to 1024 multiples (pad {pad}), targets sum to the NAT increments, NATM run hits the per-chunk targets; ISOB: 64 rounds, rows concatenated == chunk tokens, 1 packed chunk per round, fact share 30-40%; ISOD: 64 rounds x 16 sentence rows, 1 chunk each; per-step norm == NAT per-chunk norm ({[round(e['update_norm'],5) for e in o['log']]} vs {[round(float(x),5) for x in norms[:3]]}); read_at honoured; bigstep targets = NAT norm x {16}/{J1} per segment"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33}
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

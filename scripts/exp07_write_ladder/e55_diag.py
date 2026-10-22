@@ -71,6 +71,53 @@ def diag_report(path_or_dict,out=None):
     t='\n'.join(L)
     if out:open(out,'w').write(t)
     return t
+PROBE_CONDS=('NAT','KMASK','SENTO','SENT','SWD','OALL','PALL','NALL')
+PROBE_ARM={'NAT':'NAT','KMASK':'KMASK','SENTO':'SENTO','SENT':'SENT','SWD':'SWD','OALL':'OSPAN','PALL':'PSPAN','NALL':'NSPAN'}
+def make_probe_fn(L,rt,s3,reader,meta,conds=PROBE_CONDS,nsum=8,log=print):
+    """E55 28.7 one-step binding probe (forward-looking, nothing is committed): at the chunks of diag_multi, starting from the NAT weights m BEFORE the write of the chunk, for every window condition the write gradient step of the chunk is computed (L.write_step with the condition's window inputs; direction d = new - m), rescaled to ONE fixed norm = the sum of the last `nsum` NAT update norms of the run (the 8-chunk cumulative NAT norm), applied to a copy m' = m + s d/|d| and the out-of-window read of the 16 candidates on the unexposed question frames is scored; per fact PM3 = score(gold) - mean of the other 15; reported: PM3(m') - PM3(m) per fact (the weights m itself are the baseline read once per chunk), the direction cosine to the NAT direction, the chunk CE under the condition (free), the unrescaled step norm. reader(m) -> (n_items, 16) scores (Reads.at(.)['out']); meta = item meta (kind, gold_idx). The weights of the stream are never touched."""
+    import jax,jax.numpy as jnp,e55_metrics as MT
+    kind=np.asarray(meta['kind']);gold=np.asarray(meta['gold_idx']);isf=kind=='fact'
+    def pm3(S):return MT.item_stats(np.asarray(S,float)[isf],gold[isf])['pm3']
+    st_all=s3.clone_state(rt.state_all)
+    def tdot(x,y):return float(sum(jnp.sum(a_.astype(jnp.float32)*b_.astype(jnp.float32)) for a_,b_ in zip(jax.tree.leaves(x),jax.tree.leaves(y))))
+    def fn(k,m,cond_in,ids_k,c,nat_log):
+        CH=1024;ids_j=jnp.asarray(ids_k,dtype=jnp.int32);tgt=float(sum(e['update_norm'] for e in nat_log[-nsum:])) if nat_log else None
+        assert tgt and tgt>0,'the probe needs the update norms of earlier NAT chunks'
+        base=pm3(reader(m));res={'target_norm':tgt,'pm3_base':[float(x) for x in base]};dirs={}
+        for cn in conds:
+            Kx,Vx,kx,sx=cond_in[PROBE_ARM[cn]]
+            with rt.mesh:
+                pref=L.prefix_masked(m,ids_j,Kx,Vx,jnp.int32(k*CH),jnp.asarray(kx));newp,gn,coef,ce=L.write_step(m,st_all,sx,c,pref,jnp.asarray(kx))
+            d=jax.tree.map(lambda a_,b_:a_.astype(jnp.float32)-b_.astype(jnp.float32),newp,m.inner_parameters());dn=tdot(d,d)**0.5;dirs[cn]=d
+            sc=tgt/dn if dn>0 else 0.0;mp=L.set_inner(m,jax.tree.map(lambda b_,x:(b_.astype(jnp.float32)+sc*x).astype(b_.dtype),m.inner_parameters(),d))
+            S=reader(mp);p=pm3(S);res[cn]={'dpm3':[float(x) for x in (p-base)],'dpm3_mean':float(np.mean(p-base)),'raw_step_norm':dn,'chunk_ce':float(ce),'grad_norm':float(gn),'cos_to_NAT':None,'mask_keys':int((~kx).sum()) if np.ndim(kx)==1 else int((~kx.all(0)).sum())}
+            log(f'  probe chunk {k} {cn}: dPM3 {res[cn]["dpm3_mean"]:+.4f}, raw step norm {dn:.4g}, chunk CE {float(ce):.3f}')
+        if 'NAT' in dirs:
+            nn=tdot(dirs['NAT'],dirs['NAT'])**0.5
+            for cn in conds:res[cn]['cos_to_NAT']=tdot(dirs[cn],dirs['NAT'])/(tdot(dirs[cn],dirs[cn])**0.5*nn+1e-30)
+        return res
+    fn.conds=tuple(PROBE_ARM[c_] for c_ in conds);fn.cond_names=tuple(conds);return fn
+def probe_report(d,out=None):
+    d=json.load(open(d)) if not isinstance(d,dict) else d;conds=list(PROBE_CONDS)
+    def ci(x):
+        x=np.asarray(x,float);r=np.random.default_rng(5);b=x[r.integers(0,len(x),(2000,len(x)))].mean(1);return float(x.mean()),*np.percentile(b,[2.5,97.5]).tolist()
+    L=[f"# E55 one-step binding probe (design 28.7), seed {d.get('seed')}, NAT weights before the write of each chunk",'','For each window condition the write gradient step of the chunk is computed from the NAT weights, rescaled to ONE fixed norm (the sum of the last 8 NAT update norms, shown) and applied to a COPY (nothing is committed); dPM3 = change of PM3 (gold score minus the mean of the other 15 candidates, nats) on the 16 facts, out-of-window read, unexposed question frames, relative to the unmodified weights; mean [95% fact-bootstrap CI]. cos = cosine of the step direction to the NAT step; chunk CE = CE of the chunk under that window condition (free by-product). O-ALL / P-ALL / N-ALL = name+place / place / name tokens of ALL earlier fact sentences hidden from fact-sentence queries; SWD = window K,V of the fake stream (fake places outside the candidates). One seed, 16 facts; exploratory.','']
+    gains={}
+    for ck,v in sorted(d['chunks'].items(),key=lambda x:int(x[0])):
+        L+=[f"## chunk {ck} (target step norm {v['target_norm']:.4g})",'','| condition | dPM3 | dPM3 - NAT | cos to NAT | raw step norm | chunk CE | hidden keys |','|---|---|---|---|---|---|---|']
+        nat=np.asarray(v['NAT']['dpm3'])
+        for cn in conds:
+            x=v[cn];dp=np.asarray(x['dpm3']);gains.setdefault(cn,{})[ck]=float(np.mean(dp-nat));f=lambda t:f'{t[0]:+.4f} [{t[1]:+.4f}, {t[2]:+.4f}]'
+            L.append(f"| {cn} | {f(ci(dp))} | {f(ci(dp-nat))} | {x['cos_to_NAT']:.3f} | {x['raw_step_norm']:.4g} | {x['chunk_ce']:.3f} | {x['mask_keys']} |")
+        L.append('')
+    L+=['## ratios to the full mask (SENT) of the gain over NAT (dPM3 - NAT), per chunk and mean over chunks','','| condition | '+' | '.join(f'chunk {c}' for c in sorted(gains['NAT'],key=int))+' | mean of ratios |','|---|'+'---|'*(len(gains['NAT'])+1)]
+    for cn in ('KMASK','SENTO','OALL','PALL','NALL','SWD'):
+        rs=[gains[cn][c]/gains['SENT'][c] if abs(gains['SENT'][c])>1e-9 else float('nan') for c in sorted(gains['NAT'],key=int)];L.append(f'| {cn} | '+' | '.join(f'{r:.2f}' for r in rs)+f' | {np.nanmean(rs):.2f} |')
+    rk=[gains['KMASK'][c]/gains['SENT'][c] for c in gains['NAT'] if abs(gains['SENT'][c])>1e-9];m_=float(np.mean(rk)) if rk else float('nan')
+    L+=['',f"analogue of the pre-set rule of the place-CE version (design 28.6: ratio >= 0.3 'P-2R', <= 0.15 'P-LC', otherwise undetermined) applied to KMASK / SENT of this probe: mean ratio {m_:.2f} -> "+('undetermined (no data)' if m_!=m_ else 'P-2R' if m_>=0.3 else 'P-LC' if m_<=0.15 else 'undetermined')+' (the rule for THIS probe is the design thread\'s to fix)']
+    t='\n'.join(L)
+    if out:open(out,'w').write(t)
+    return t
 if __name__=='__main__':
     import sys
     if '--selftest' in sys.argv:

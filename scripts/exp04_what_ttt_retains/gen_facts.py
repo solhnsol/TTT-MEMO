@@ -98,6 +98,24 @@ def _alloc(seed,k,enc,bank,decoy_world=True,nu=0):
         assert len(left)>=rest+(k if decoy_world else 0),(what,'pool too small for control / decoy-world names',len(left))
         res[what]=([a for a,_ in use],[b for _,b in use],left[:rest],left[rest:rest+(k if decoy_world else 0)],L)
     return res
+def derange_places(facts,fake_names,bank,enc,seed):
+    """permutation perm with perm[i] != i such that, for every frame fact i uses, the sentence with fact i's FAKE name and the place of fact perm[i] has exactly the token length of the real sentence of fact i (so the real layout is kept); random search (backtracking) with a fixed seed; asserts when none exists"""
+    k=len(facts);ok=[[False]*k for _ in range(k)]
+    for i,f in enumerate(facts):
+        tg=[len(enc(bank[fi].format(X=f['X'],P=f['P'],o=f['o'],a_o=A(f['o'])))) for fi in f['frames']]
+        for j in range(k):
+            if j!=i:ok[i][j]=all(len(enc(bank[fi].format(X=fake_names[i],P=facts[j]['P'],o=f['o'],a_o=A(f['o']))))==t for fi,t in zip(f['frames'],tg))
+    r=random.Random(f'E55f|{seed}|derange');order=list(range(k));r.shuffle(order);perm=[None]*k;used=set()
+    def go(t):
+        if t==k:return True
+        i=order[t];cand=[j for j in range(k) if ok[i][j] and j not in used];r.shuffle(cand)
+        for j in cand:
+            perm[i]=j;used.add(j)
+            if go(t+1):return True
+            used.discard(j);perm[i]=None
+        return False
+    assert go(0),('no length-preserving derangement of the real places exists', [sum(row) for row in ok])
+    return perm
 def fresh_places(world,enc,n=16):
     """E55 design 17: n never-exposed place names with the SAME token length as the world's places (modal class, leading space), disjoint from every place of the real world, the fake window ('names'), the decoy world and the existence-check unexposed list; deterministic in (seed, world). They never occur in any stream."""
     used={f['P'] for f in world['facts']}|{f['P'] for f in world.get('names',{}).get('facts',[])}|{f['P'] for f in world.get('decoy',{}).get('facts',[])}|set(world.get('unexposed',[]))
@@ -204,6 +222,11 @@ def build_fact_world(seed,k,n,p,n_app=16,bank='50',enc=None,bg=None,decoys=('nam
         fake=[{**f,'X':al['persons'][1][f['id']],'P':al['places'][1][f['id']]} for f in facts]
         u2=make_units(bg[:third],enc,sep);ch,_,_=_stream(fake,k,n,p,n_app,bk,enc,u2,seed,'real',sep);w['names']={'facts':fake,'chunks':ch}
         for a_,b_ in zip(w['chunks'],ch):assert [(x['start'],x['end']) for x in a_['sents']]==[(x['start'],x['end']) for x in b_['sents']] and len(a_['ids'])==len(b_['ids'])==CH,('fake chunk layout differs from the real chunk',a_['k'])
+    if 'namesin' in decoys:
+        # E55 28.6 SWD-IN: the fake window of 'names' (same fake names, same frames / positions / background) but the fake place of fact i is the REAL place of another fact (a derangement of the 16 real places) whose sentences keep exactly the token length of the real sentences in every frame fact i uses, so the layout is the real layout
+        fx=[al['persons'][1][f['id']] for f in facts];perm=derange_places(facts,fx,bk,enc,seed);fake=[{**f,'X':fx[i],'P':facts[perm[i]]['P']} for i,f in enumerate(facts)]
+        u3=make_units(bg[:third],enc,sep);ch,_,_=_stream(fake,k,n,p,n_app,bk,enc,u3,seed,'real',sep);w['namesin']={'facts':fake,'chunks':ch,'perm':perm}
+        for a_,b_ in zip(w['chunks'],ch):assert [(x['start'],x['end']) for x in a_['sents']]==[(x['start'],x['end']) for x in b_['sents']] and len(a_['ids'])==len(b_['ids'])==CH,('namesin chunk layout differs from the real chunk',a_['k'])
     if dw:
         dseed=seed+100000;dper=_make_facts(al['persons'][3],al['places'][3],dseed,k,'decoy',bank,bk,owner,n,n_app)
         for f in dper:f['group']=f['id']%p
@@ -220,7 +243,7 @@ def build_fact_world(seed,k,n,p,n_app=16,bank='50',enc=None,bg=None,decoys=('nam
 def realize(world,kind='real'):
     """-> list of chunks {'k','ids' (exactly 1024),'sents'} (the chunks are stored in the world; kept as a function for the pair-world API)"""
     if kind is True:kind='world'
-    return {'real':lambda:world['chunks'],'names':lambda:world['names']['chunks'],'world':lambda:world['decoy']['chunks'],'nofact':lambda:world['nofact']['chunks']}[kind]()
+    return {'real':lambda:world['chunks'],'names':lambda:world['names']['chunks'],'world':lambda:world['decoy']['chunks'],'namesin':lambda:world['namesin']['chunks'],'nofact':lambda:world['nofact']['chunks']}[kind]()
 def stream_ids(chunks):return [t for c in chunks for t in c['ids']]
 def stream_sha(chunks):return _h(*[_h(*c['ids']) for c in chunks])[:16]
 def build_items(world):
@@ -277,11 +300,16 @@ def verify(world,enc):
         dn={x['X'] for x in world['decoy']['facts']};dp={x['P'] for x in world['decoy']['facts']};assert not names&dn and not pl&dp;res['decoy_disjoint']=True
         D_=realize(world,'world');assert len(D_)==len(A_) and all(len(c['ids'])==CH for c in D_);res['sha_stream_decoy']=stream_sha(D_)
     # names / places (with and without a leading space) must not occur as token subsequences in the decoy and background-only streams
-    strs=[(kd,stream_ids(realize(world,kd))) for kd in ('names','world','nofact') if {'names':'names','world':'decoy','nofact':'nofact'}[kd] in world]
+    strs=[(kd,stream_ids(realize(world,kd))) for kd in ('names','namesin','world','nofact') if {'names':'names','namesin':'namesin','world':'decoy','nofact':'nofact'}[kd] in world]
     if 'names' in world:
         fn={x['X'] for x in world['names']['facts']};fp={x['P'] for x in world['names']['facts']};assert len(fn)==len(fp)==k and not fn&names and not fp&pl and not fp&set(world['unexposed']) and not fn&{x['X'] for x in world['ctrl']};res['names_decoy_disjoint']=True
         for a_,b_ in zip(A_,realize(world,'names')):assert len(a_['ids'])==len(b_['ids'])==CH and [(x['start'],x['end']) for x in a_['sents']]==[(x['start'],x['end']) for x in b_['sents']] and a_['ids']!=b_['ids']
         res['sha_stream_names']=stream_sha(realize(world,'names'))
+    if 'namesin' in world:
+        ni=world['namesin'];rp=[f['P'] for f in world['facts']];fp=[x['P'] for x in ni['facts']];assert sorted(fp)==sorted(rp) and all(a!=b for a,b in zip(fp,rp)) and sorted(ni['perm'])==list(range(k)) and all(i!=j for i,j in enumerate(ni['perm'])),'namesin places are not a derangement of the real places'
+        assert [x['X'] for x in ni['facts']]==[x['X'] for x in world['names']['facts']] if 'names' in world else True
+        for a_,b_ in zip(A_,realize(world,'namesin')):assert len(a_['ids'])==len(b_['ids'])==CH and [(x['start'],x['end']) for x in a_['sents']]==[(x['start'],x['end']) for x in b_['sents']] and a_['ids']!=b_['ids']
+        res['sha_stream_namesin']=stream_sha(realize(world,'namesin'))
     if 'nofact' in world:
         for a_,b_ in zip(A_,realize(world,'nofact')):
             keep=np.ones(CH,bool)
@@ -291,13 +319,13 @@ def verify(world,enc):
     for nm,ids in strs:
         ids=np.asarray(ids);hits=0
         for f in world['facts']+world['ctrl']:
-            for w_ in [f['X']]+([f['P']] if 'P' in f else [])+list(world.get('unexposed',[]) if f['id']==0 else []):
+            for w_ in [f['X']]+([f['P']] if 'P' in f and nm!='namesin' else [])+list(world.get('unexposed',[]) if f['id']==0 else []):
                 for t in (enc(w_),enc(' '+w_)):
                     t=np.asarray(t);pos=np.where(ids[:len(ids)-len(t)+1]==t[0])[0]
                     hits+=sum(1 for q in pos if np.array_equal(ids[q:q+len(t)],t))
         if nm=='names':hits+=0
         assert hits==0,(nm,'stream contains a name / place of the real world',hits)
-        res[{'names':'names_decoy','world':'decoy','nofact':'nofact'}[nm]+'_fact_free']=True
+        res[{'names':'names_decoy','namesin':'namesin_names_free','world':'decoy','nofact':'nofact'}[nm]+'_fact_free']=True
     items=build_items(world);assert len(items)==k+NCTRL
     for it in items:
         assert len(it['cands'])==NCAND==len(set(it['cands'])) and it['cands'][it['gold_idx']]==' '+world['facts'][it['place_id']]['P']
