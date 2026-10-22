@@ -18,16 +18,19 @@ def plan(arm,k,p):
         else:src='decoy' if j%p!=0 else 'real'
         out[j]=src
     return out
-def compose_window(src,k,pl,CH,seqlen=None):
-    """src: {'real': arr, 'decoy': arr, 'bg': arr} each (..., T, ...) with the token axis FIRST after the layer axis? Here arrays are (T, ...) = token axis first (the caller moves the axes). -> (window (8*CH, ...), keep (8*CH,) bool). Window is left-padded with zeros when k < 8, like ladder.ctx_kv."""
+def compose_window(src,k,pl,CH,seqlen=None,axis=0):
+    """src: {'real': arr, 'decoy': arr, 'bg': arr}, same shapes; the token axis is `axis` (0: (T, ...); 1: (layers, T, ...) as the prefix-layer recordings of s3.Ladder3.record). -> (window with 8*CH tokens on `axis`, keep (8*CH,) bool). The window is left-padded with zeros when k < 8, like ladder.ctx_kv (keep False there)."""
     ref=src['real'];parts=[];keep=[]
+    def sl(a,c):
+        ix=[slice(None)]*a.ndim;ix[axis]=slice(c*CH,(c+1)*CH);return a[tuple(ix)]
     for j in range(NW,0,-1):
         c=k-j
-        if c<0:parts.append(np.zeros((CH,)+ref.shape[1:],ref.dtype));keep.append(np.zeros(CH,bool));continue
+        if c<0:
+            shp=list(ref.shape);shp[axis]=CH;parts.append(np.zeros(shp,ref.dtype));keep.append(np.zeros(CH,bool));continue
         s=pl[j]
-        if s=='mask':parts.append(ref[c*CH:(c+1)*CH]);keep.append(np.zeros(CH,bool));continue
-        a=src[s];assert a.shape==ref.shape,('recording shape differs',s);parts.append(a[c*CH:(c+1)*CH]);keep.append(np.ones(CH,bool))
-    return np.concatenate(parts,0),np.concatenate(keep)
+        if s=='mask':parts.append(sl(ref,c));keep.append(np.zeros(CH,bool));continue
+        a=src[s];assert a.shape==ref.shape,('recording shape differs',s);parts.append(sl(a,c));keep.append(np.ones(CH,bool))
+    return np.concatenate(parts,axis),np.concatenate(keep)
 def write_chunk(real_ids,k,CH):
     """the chunk that is written: always the real tokens, in every arm"""
     return real_ids[k*CH:(k+1)*CH]
