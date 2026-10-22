@@ -417,6 +417,27 @@ def u31():
     for x in tab[0]['sents']:f[x['start']-1:x['end']-1]=True
     assert nf==f.sum() and np.allclose(wu[f],0.75*valid[f]/n) and np.allclose(wu[~f],valid[~f]/n) and np.allclose(wm[f],0.25*valid[f]/n) and (wm[~f]==0).all() and np.allclose((wu+wm)[f],valid[f]/n)
     RES['U31']=f'lambda=0 and empty-table MIX == NAT (CE within 2e-4), lambda=1 masked-pass CE == SENTPQ chunk 0/1, MIX25 differs from NAT from chunk 2 (the logged CE is the unmasked pass; chunk 1 still equal because chunk 0 has no window), masked-pass CE differs from chunk 1, pairs logged; ALT chunks 0/1 == NAT, chunk 2 differs; weights: fact positions {nf}, wu+wm == valid/N on fact tokens'
+def u32():
+    """E55 design 27.8 Q1-A inner-step variants on the tiny model (stage-0 rows, T = a synthetic NAT cumulative norm): STD default == explicit variant STD (bitwise weights); every variant hits the per-step update norm target inc = (T[a1]-T[a0])/steps; SUR1/SUR2: weighted loss differs from STD (different weights), mean weight in (0, 1], >0 and the unweighted CE logged equals STD's CE at step 0; SUR with power 1 and weights forced uniform would equal STD (checked on iso_grad_w with a constant-CE surrogate is not possible, so: the weight cap 5 and mean 1 are checked directly on the formula); ADAM first step direction = g/|g| elementwise sign-like (bias-corrected m/sqrt(v) = sign for step 1), MOM first step direction = clipped g; ADAM/MOM refuse T=None"""
+    import gen_facts as G,e55_iso as I,hashlib
+    enc0=G.StubTok();bg=G._synth_bg(9000);w=G.cell_world(61,'ic_u64',enc0,bg,decoys=('names',));V=rt.cfg.model.vocab_size
+    enc=lambda t:[3+int(hashlib.md5(x.encode()).hexdigest(),16)%(V-3) for x in t.replace('\n\n','\n\n ').split()]
+    Li=I.Iso55(rt,save_dir='/tmp/e55_units_states');segs=I.iso_rows(w,enc,0,[1,2]);T=I.cum_target([0.01]*2)
+    def run(v,**k):return I.iso_run(Li,rt,segs,T=T,variant=v,log=lambda *x:None,**k)
+    ra=I.iso_run(Li,rt,segs,T=T,log=lambda *x:None);rb=run('STD');assert I.LD.jax.tree_util.tree_all(I.LD.jax.tree.map(lambda x,y:bool((x==y).all()),ra['model'].inner_parameters(),rb['model'].inner_parameters()))
+    res={'STD':rb}
+    for v in ('SUR1','SUR2','ADAM','MOM'):res[v]=run(v)
+    for v,r in res.items():
+        inc=[(T[e['a1']]-T[e['a0']])/sum(1 for x in r['log'] if x['a0']==e['a0']) for e in r['log']]
+        assert all(abs(e['update_norm']-i)<=0.15*i for e,i in zip(r['log'],inc)),(v,[round(e['update_norm'],5) for e in r['log']],inc)
+    d={v:float(max(jnp.max(jnp.abs(x.astype(jnp.float32)-y.astype(jnp.float32))) for x,y in zip(jax.tree.leaves(res[v]['model'].inner_parameters()),jax.tree.leaves(rb['model'].inner_parameters())))) for v in ('SUR1','SUR2','ADAM','MOM')}
+    assert all(x>0 for x in d.values()),d
+    for v in ('SUR1','SUR2'):
+        mw=[e['mean_weight'] for e in res[v]['log']];assert all(0<x<=1.0+1e-5 for x in mw),mw;assert abs(res[v]['log'][0]['ce']-rb['log'][0]['ce'])<1e-5
+    assert all(0<e['mean_weight'] for e in res['SUR2']['log']) and np.mean([e['mean_weight'] for e in res['SUR2']['log']])!=np.mean([e['mean_weight'] for e in res['SUR1']['log']])
+    try:I.iso_run(Li,rt,segs,T=None,variant='ADAM',log=lambda *x:None);raise SystemExit('ADAM without T accepted')
+    except AssertionError:pass
+    RES['U32']=f'default == STD bitwise; all 5 variants hit the per-step norm target (within 15%); weights differ from STD by (max abs) {({k:round(v,6) for k,v in d.items()})}; SUR mean weight in (0,1], first-step CE equals STD; ADAM without matching refused'
 def u23():
     """model level (CPU tiny model): (a) SENT / KMASK with an EMPTY sentence table == NAT bit for bit (CE and final weights); (b) SENT with sentences changes CE from chunk 1 on; (c) perturbing K,V at SENT-hidden positions does not change the write update (bitwise), perturbing a visible position does; (d) a per-query 2-D mask with identical rows == the 1-D keep (same update), and a 2-D mask hiding a window key only for rows [a,b) leaves the prefix outputs of rows before a bit-identical and changes rows in [a,b)"""
     emp=[{'sents':[]} for _ in range(NCH)];tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
@@ -572,7 +593,7 @@ def u28():
     Tf=I.cum_target(np.full(64,0.01));tg_f=I.fos_targets(Tf,segs2,ends);assert len(tg_f)==ends[-1]+1 and abs(tg_f[:ends[0]+1].sum()-(Tf[8]-Tf[0]))<1e-12 and abs(tg_f.sum()-Tf[16])<1e-12
     ids_t=ids_f[:3*1024]%(V-3)+3;nt=np.asarray([0.004,0.006,0.005]);os_=Li.run_stream('NATM',1,ids_t,nch=3,tag='u',log=lambda *x:None,norm_targets=nt);assert all(abs(e['update_norm']-nt[i])<1e-3*nt[i] for i,e in enumerate(os_['log']))
     RES['U28']=f"FOS: stream padded to 1024 multiples (pad {pad}), targets sum to the NAT increments, NATM run hits the per-chunk targets; ISOB: 64 rounds, rows concatenated == chunk tokens, 1 packed chunk per round, fact share 30-40%; ISOD: 64 rounds x 16 sentence rows, 1 chunk each; per-step norm == NAT per-chunk norm ({[round(e['update_norm'],5) for e in o['log']]} vs {[round(float(x),5) for x in norms[:3]]}); read_at honoured; bigstep targets = NAT norm x {16}/{J1} per segment"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31}
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

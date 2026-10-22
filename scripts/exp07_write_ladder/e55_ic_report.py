@@ -96,6 +96,13 @@ def selftest():
             (d4/f'E55_q2_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'ce':2.0,'coef':0.9,'update_norm':0.01,'n_masked_keys':kk,'n_masked_pairs':kk*60} for _ in range(128)],'dclm_w0':3.0,'dclm_end':3.05+kk/50000,'dclm_n':100}))
     ERR.clear();t=q2_report(d4,[61,62],arms=('NAT','OSPAN','SENTP25','SENTP50','SENTP75','SENTPQ','MIX50','ALT'),plot=str(d4/'q2.png'));assert 'method candidate' in t and 'SENTP50' in t and 'n/a' not in t.split('curve points')[0].split('| arm |')[1].replace('| n/a |','') or True
     print(t)
+    d5=Path(tempfile.mkdtemp())
+    for sd in (61,62,63):
+        for i,ar in enumerate(('ISO-STD','ISO-SUR1','ISO-SUR2','ISO-ADAM','ISO-MOM')):
+            r_=rec(1.0+0.1*i);(d5/f'E55_q1a_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (16,32,64,128)},'W0':{'out':r_['W0']['out']}}))
+            (d5/f'E55_q1a_{ar}_s{sd}.saved.json').write_text(json.dumps({'summary':{'clip_frac':0.2},'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.02,'_tail_nll':3.01}}))
+    ERR.clear();t=q1a_report(d5,[61,62,63]);assert 'SUCCESS' in t or 'no |' in t and 'ISO-ADAM' in t and 'n/a' not in t.split('paired difference')[0],t
+    print(t.split('success rule')[1][:700])
     print('e55_ic_report SELFTEST OK')
 def rep_report(d,seeds,tag='icr',apps=(16,32,64),out=None,load=None):
     """E55 design 21.2 (shared16rep: 16 shared frames, 4 laps, repeats of (fact, frame) allowed at gap 16): arms NAT and SENT, seeds 61-63; per seed and pooled over seeds (facts of all seeds, fact bootstrap): u of NAT, SENT and the paired difference SENT - NAT, out-of-window and in-window. Exploratory; per-seed signs are listed because three seeds cannot carry seed-level significance."""
@@ -206,6 +213,56 @@ def decomp_report(d,seeds,tag='dc',nat_tag='v3a',iso_tag='iso',apps=(64,128),out
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
     return t
+def q1a_report(d,seeds,tag='q1a',arms=('ISO-STD','ISO-SUR1','ISO-SUR2','ISO-ADAM','ISO-MOM'),apps=(16,32,64,128),thr=0.15,out=None,load=None):
+    """E55 design 27.8 Q1-A (early rise by the inner step on isolated rows): u (W0 subtracted, out-of-window) per arm at a = 16, 32, 64, 128 per seed and pooled (fact bootstrap), minimum exposure count with u >= 0.15 (per seed from the seed means, pooled), paired difference to ISO-STD, canary rise (pg11 / pg1342 NLL at a=128 minus W0, limit +0.10) and clip share of the steps. Pre-set success of an arm: u(a=32) >= 0.15 in at least 2 of 3 seeds AND pooled u(128) >= ISO-STD - 0.05 AND clip share < 0.9 (and canary rise <= +0.10). Exploratory."""
+    load=load or (lambda f:json.load(open(f)));G={};S={}
+    for sd in seeds:
+        for ar in arms:
+            f=Path(d)/f'E55_{tag}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,ar]=load(f)
+            f=Path(d)/f'E55_{tag}_{ar}_s{sd}.saved.json'
+            if f.exists():S[sd,ar]=json.load(open(f))
+    ERR.clear();L=[f'# E55 Q1-A report (design 27.8), seeds {list(seeds)}','','u = (W0 rank - rank)/15, out-of-window, 16 candidates, unexposed question frames, 95% fact-bootstrap CI; exploratory.','','| seed | arm | '+' | '.join(f'a={a}' for a in apps)+' | min a with u >= %.2f |'%thr,'|---|---|'+'---|'*(len(apps)+1)]
+    def sm(ar,sd):
+        try:return {a:float(np.mean(fact_g(G[sd,ar],a,'out'))) for a in apps}
+        except Exception as e:ERR.append(f'{ar}/{sd}: {e!r}');return None
+    def mina(v):
+        ok=[a for a in apps if v is not None and v[a]>=thr];return str(min(ok)) if ok else '>%d'%max(apps)
+    def pooled(ar,a,use=None):
+        use=[s_ for s_ in (use or seeds) if (s_,ar) in G]
+        try:return np.concatenate([fact_g(G[s_,ar],a,'out') for s_ in use])
+        except Exception as e:ERR.append(f'{ar}: {e!r}');return None
+    for sd in list(seeds)+['pooled']:
+        for ar in arms:
+            if sd=='pooled':
+                ps={a:pooled(ar,a) for a in apps}
+                if any(v is None for v in ps.values()):continue
+                L.append(f'| pooled | {ar} | '+' | '.join(fmt(boot(ps[a])) for a in apps)+f' | {mina({a:float(np.mean(ps[a])) for a in apps})} |')
+            elif (sd,ar) in G:
+                v=sm(ar,sd)
+                if v:L.append(f'| {sd} | {ar} | '+' | '.join(f'{v[a]:+.3f}' for a in apps)+f' | {mina(v)} |')
+    L+=['','paired difference to ISO-STD (pooled over seeds, same facts):','','| arm | '+' | '.join(f'a={a}' for a in apps)+' |','|---|'+'---|'*len(apps)]
+    for ar in arms:
+        if ar=='ISO-STD':continue
+        row=[]
+        for a in apps:
+            use=[s_ for s_ in seeds if (s_,ar) in G and (s_,'ISO-STD') in G]
+            try:row.append(fmt(boot(np.concatenate([fact_g(G[s_,ar],a,'out')-fact_g(G[s_,'ISO-STD'],a,'out') for s_ in use]))))
+            except Exception as e:ERR.append(f'diff {ar}: {e!r}');row.append('n/a')
+        L.append(f'| {ar} | '+' | '.join(row)+' |')
+    L+=['','success rule (pre-set) per arm:','','| arm | seeds with u(32) >= %.2f | pooled u(128) | STD u(128) - 0.05 | clip share (mean over seeds) | canary rise (max over seeds) | verdict |'%thr,'|---|---|---|---|---|---|---|']
+    std128=pooled('ISO-STD',apps[-1]);s128=float(np.mean(std128)) if std128 is not None else float('nan')
+    for ar in arms:
+        sd32=[s_ for s_ in seeds if (s_,ar) in G and (sm(ar,s_) or {}).get(32,-9)>=thr];p128=pooled(ar,apps[-1]);p=float(np.mean(p128)) if p128 is not None else float('nan')
+        cl=[S[s_,ar]['summary'].get('clip_frac',float('nan')) for s_ in seeds if (s_,ar) in S];cr=[]
+        for s_ in seeds:
+            if (s_,ar) in S and S[s_,ar].get('canary_end') and S[s_,ar].get('canary_w0'):cr.append(max(S[s_,ar]['canary_end'][k]-S[s_,ar]['canary_w0'][k] for k in ('_gen_nll','_tail_nll')))
+        ok=len(sd32)>=2 and p>=s128-0.05 and (not cl or float(np.mean(cl))<0.9) and (not cr or max(cr)<=0.10)
+        L.append(f"| {ar} | {len(sd32)} of {len([s_ for s_ in seeds if (s_,ar) in G])} {sd32} | {p:+.3f} | {s128-0.05:+.3f} | "+(f'{np.mean(cl):.2f}' if cl else 'n/a')+' | '+(f'{max(cr):+.3f}' if cr else 'n/a')+f" | {'baseline' if ar=='ISO-STD' else ('SUCCESS' if ok else 'no')} |")
+    if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
 MIXL={'MIX25':0.25,'MIX50':0.5,'MIX75':0.75}
 def q2_report(d,seeds,tag='q2',nat_tag='v3a',arms=('NAT','OSPAN','SENTP25','SENTP50','SENTP75','SENTPQ','MIX25','MIX50','MIX75','ALT'),a=128,out=None,plot=None,load=None):
     """E55 design 27.2 (Q2 scope ladder): per arm, pooled over seeds, at a=128: masked share (hidden keys % of the 8192-token window, hidden (query,key) pairs % of the 1024 x 8192 window block; mean over chunks 9-128 from the per-chunk logs), out-of-window g with CI, recovery ratio R = g/g(SENTPQ) (>=0.7 sufficient, <=0.3 not, else partial), damage reads: in-window g (real window visible; reference = NAT in-window of job 181 at the same appearance), DCLM first-chunk NLL rise (written - W0; pre-set rule 'no damage' = rise <= native +0.043 + 0.03 AND in-window g >= NAT in-window - 0.10), mean chunk CE (all tokens of the chunk, NOT background only: the write path logs one scalar per chunk), clip rate (share of chunks with clip coefficient < 1). Method candidate = the arm with the least masking (keys %) that reaches R >= 0.7 (reported with and without the no-damage requirement). Exploratory (3 seeds, 16 facts)."""
@@ -281,6 +338,8 @@ if __name__=='__main__':
         _s.argv.remove('--ft');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--tag');ap.add_argument('--seed',type=int);ap.add_argument('--lrs',default=None);ap.add_argument('--arm-lrs',default=None);ap.add_argument('--epochs',type=int,default=4);ap.add_argument('--out');a=ap.parse_args();L_={}
         for x in (a.arm_lrs.split(',') if a.arm_lrs else []):L_.setdefault(x.split(':')[0],[]).append(float(x.split(':')[1]))
         print(ft_report(a.dir,a.tag,a.seed,L_ if a.arm_lrs else [float(x) for x in a.lrs.split(',')],a.epochs,out=a.out));_s.exit(0)
+    if '--q1a' in _s.argv:
+        _s.argv.remove('--q1a');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q1a');a=ap.parse_args();print(q1a_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     if '--q2' in _s.argv:
         _s.argv.remove('--q2');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--plot');ap.add_argument('--arms',default='NAT,OSPAN,SENTP25,SENTP50,SENTP75,SENTPQ');a=ap.parse_args();print(q2_report(a.dir,[int(x) for x in a.seeds.split(',')],arms=tuple(a.arms.split(',')),out=a.out,plot=a.plot));_s.exit(0)
     if '--decomp' in _s.argv:
