@@ -95,7 +95,7 @@ class Ladder55(s3.Ladder3):
             Kh[l]=K;Vh[l]=V;del K,V
             if len(ids)>=32*CH and (l%4==3 or l==nl-1):print(f'    record layer {l+1}/{nl}: {time.monotonic()-t0:.0f}s',flush=True)
         return Kh,Vh,h
-    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None,read_hook=None,hook_chunks=(),norm_targets=None,chunks_meta=None):
+    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None,read_hook=None,hook_chunks=(),norm_targets=None,chunks_meta=None,diag_fn=None,diag_chunks=()):
         """-> {'log': per-chunk dicts, 'reads': {chunk: {...state file / hash / canary}}, 'stream_hash', 'clip_bind_frac'}"""
         assert arm in E.ARMS,arm
         if arm not in IMPLEMENTED:raise NotImplementedError(f'arm {arm} is not implemented')
@@ -131,6 +131,7 @@ class Ladder55(s3.Ladder3):
                     pref_w=self.prefix_masked(m,jnp.asarray(ids_['real'][k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep))
                     newp,gn,coef,ce=self.write_step(m,st_all,st_w,c,pref_w,jnp.asarray(keep))
                     if arm=='ALT':extra_log={'alt_masked_chunk':k%2==0}
+                    if diag_fn is not None and k in diag_chunks:out.setdefault('diag',{})[k]=diag_fn(k,m,Kc,Vc,keep,ids_['real'][k*CH:(k+1)*CH])      # E55 27.8: forward-only attention diagnostic with the window inputs of this chunk, weights before its write
                 for nm in names:sts[nm]=self.read_state(old,sts[nm],rt.chunk(seqs[nm],k),prefs[nm][k*CH:(k+1)*CH])   # same weights (start of the chunk) for every chain
                 scale=1.0
                 if arm=='NATM':          # size-matched NAT: the NAT update of chunk k is rescaled to the update norm norm_targets[k] (the per-chunk norm of arm SWD of the same seed); direction unchanged

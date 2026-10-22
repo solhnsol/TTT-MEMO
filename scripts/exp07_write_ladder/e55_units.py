@@ -438,6 +438,35 @@ def u32():
     try:I.iso_run(Li,rt,segs,T=None,variant='ADAM',log=lambda *x:None);raise SystemExit('ADAM without T accepted')
     except AssertionError:pass
     RES['U32']=f'default == STD bitwise; all 5 variants hit the per-step norm target (within 15%); weights differ from STD by (max abs) {({k:round(v,6) for k,v in d.items()})}; SUR mean weight in (0,1], first-step CE equals STD; ADAM without matching refused'
+def u33():
+    """E55 design 27.8 attention diagnostic on the tiny model (CPU): the eager 'att' forward through the prefix layers returns the same hidden states as prefix_masked (the production 'ctx' path; tolerance 1e-4), the captured per-layer probabilities are proper distributions (rows sum to 1, zero on invalid / future keys), attn_stats runs on them for all layer groups, and a run_stream NAT with diag_fn changes nothing about the run (CE per chunk and final weights equal to the plain NAT run)"""
+    import e55_diag as DG
+    ids=REAL;tab=[{'sents':[{'fact':0,'start':100,'end':140,'ans':[(105,107)]},{'fact':1,'start':300,'end':330,'ans':[(305,308)]},{'fact':2,'start':700,'end':760,'ans':[(710,715)]}]} for _ in range(NCH)]
+    seen=[];orig=DG.attn_stats
+    def spy(A,rows,facts,chunks,k,CH_=1024,nw=8,ps=DG.PS):seen.append((np.asarray(A),np.asarray(rows),k));return orig(A,rows,facts,chunks,k,CH_,nw,ps)
+    DG.attn_stats=spy
+    try:
+        fn=DG.make_diag_fn(L,rt,s3,tab,log=lambda *x:None);a=L.run_stream('NAT',2,ids,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab)
+        cap={}
+        def fn2(k,m,Kc,Vc,keep,ids_k):
+            r=fn(k,m,Kc,Vc,keep,ids_k)
+            with rt.mesh:cap[k]=(fn.last_h,L.prefix_masked(m,jnp.asarray(ids_k,dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep)))
+            return r
+        b=L.run_stream('NAT',2,ids,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab,diag_fn=fn2,diag_chunks={3,4})
+        hd=max(float(jnp.max(jnp.abs(x.astype(jnp.float32)-y.astype(jnp.float32)))) for x,y in cap.values());assert hd<1e-3,hd
+    finally:DG.attn_stats=orig
+    assert set(b['diag'])=={3,4},set(b['diag']);assert [e['ce'] for e in b['log']]==[e['ce'] for e in a['log']] and b['final_hash']==a['final_hash']
+    r=b['diag'][4];assert r['n_layers']>0
+    for g in ('all','g1','g2','g3'):
+        x=r[g]
+        if x is None:continue
+        assert x['n_rows']==40+30+60 and set(x['p'])=={'1','2','5','10','20'} and 0<=x['attention_mass']['same']<=1 and abs(x['p']['20']['same']+x['p']['20']['background']+(x['p']['20']['any']-x['p']['20']['same'])-1.0)<1e-6
+    W_=8192
+    for A,rows,k in seen:
+        assert np.allclose(A.sum(1),1.0,atol=1e-3),(k,A.sum(1)[:3])
+        assert all((A[i,W_+rows[i]+1:]<1e-12).all() for i in range(len(rows)))        # no attention to future keys of the current chunk
+        assert (A[:,:max(0,(8-k))*1024]==0).all()                                       # absent chunks (k < 8) get no attention
+    RES['U33']=f"att-mode hidden states == prefix_masked (max diff {hd:.2e}); attention rows are proper distributions (sum 1, no future keys), stats for 4 layer groups x 5 p-values, run with diag_fn == run without (CE bitwise), n_layers {r['n_layers']}"
 def u23():
     """model level (CPU tiny model): (a) SENT / KMASK with an EMPTY sentence table == NAT bit for bit (CE and final weights); (b) SENT with sentences changes CE from chunk 1 on; (c) perturbing K,V at SENT-hidden positions does not change the write update (bitwise), perturbing a visible position does; (d) a per-query 2-D mask with identical rows == the 1-D keep (same update), and a 2-D mask hiding a window key only for rows [a,b) leaves the prefix outputs of rows before a bit-identical and changes rows in [a,b)"""
     emp=[{'sents':[]} for _ in range(NCH)];tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
@@ -593,7 +622,7 @@ def u28():
     Tf=I.cum_target(np.full(64,0.01));tg_f=I.fos_targets(Tf,segs2,ends);assert len(tg_f)==ends[-1]+1 and abs(tg_f[:ends[0]+1].sum()-(Tf[8]-Tf[0]))<1e-12 and abs(tg_f.sum()-Tf[16])<1e-12
     ids_t=ids_f[:3*1024]%(V-3)+3;nt=np.asarray([0.004,0.006,0.005]);os_=Li.run_stream('NATM',1,ids_t,nch=3,tag='u',log=lambda *x:None,norm_targets=nt);assert all(abs(e['update_norm']-nt[i])<1e-3*nt[i] for i,e in enumerate(os_['log']))
     RES['U28']=f"FOS: stream padded to 1024 multiples (pad {pad}), targets sum to the NAT increments, NATM run hits the per-chunk targets; ISOB: 64 rounds, rows concatenated == chunk tokens, 1 packed chunk per round, fact share 30-40%; ISOD: 64 rounds x 16 sentence rows, 1 chunk each; per-step norm == NAT per-chunk norm ({[round(e['update_norm'],5) for e in o['log']]} vs {[round(float(x),5) for x in norms[:3]]}); read_at honoured; bigstep targets = NAT norm x {16}/{J1} per segment"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32}
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

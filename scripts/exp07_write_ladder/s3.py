@@ -36,6 +36,19 @@ def _full3(self,hidden_states,seq,state):
         mask=(qi>=kj)&(qi-kj<WIN)&(kj>=0)&(keep if keep.ndim==2 else keep[None,:])      # E55 design 19: keep may be a per-query [n, WIN+n] mask (arm KMASK); the 1-D path is unchanged
         o=jax.nn.dot_product_attention(xq,K,V,mask=mask,implementation='xla');o=self._merge_heads(o)
         return (self.get_attention_output(o),state)
+    if mode=='att':
+        # E55 27.8 forward-only attention diagnostic (eager, never inside jit): the 'ctx' attention, plus the head-averaged attention probabilities of the query rows S3['att_rows'] appended (as float32 numpy [n_rows, WIN+n]) to S3['att_out']; the output of the layer is the unchanged 'ctx' output
+        Kc,Vc=state;q0=S3['q0'];keep=S3['keep'];n=hidden_states.shape[0]
+        xq,xk,xv=self.get_attention_input(hidden_states,position_ids=q0+jnp.arange(n,dtype=jnp.int32))
+        K=jnp.concatenate([Kc.astype(xk.dtype),xk],axis=0);V=jnp.concatenate([Vc.astype(xv.dtype),xv],axis=0)
+        qi=(q0+jnp.arange(n,dtype=jnp.int32))[:,None];kj=(q0-WIN+jnp.arange(WIN+n,dtype=jnp.int32))[None,:]
+        mask=(qi>=kj)&(qi-kj<WIN)&(kj>=0)&(keep if keep.ndim==2 else keep[None,:])
+        rows=S3['att_rows'];q=xq[rows].astype(jnp.float32);Kx=K.astype(jnp.float32)
+        if Kx.shape[1]!=q.shape[1]:Kx=jnp.repeat(Kx,q.shape[1]//Kx.shape[1],axis=1)
+        sc=jnp.einsum('qhd,khd->hqk',q,Kx)*(q.shape[-1]**-0.5);sc=jnp.where(mask[rows][None],sc,-1e30);p=jax.nn.softmax(sc,axis=-1).mean(0)
+        import numpy as _np;S3['att_out'].append(_np.asarray(p,_np.float32))
+        o=jax.nn.dot_product_attention(xq,K,V,mask=mask,implementation='xla');o=self._merge_heads(o)
+        return (self.get_attention_output(o),state)
     raise ValueError(mode)
 def _mask3(self,chunk_id):
     m=_prev_mask(self,chunk_id)
