@@ -101,8 +101,8 @@ def selftest():
         for i,ar in enumerate(('ISO-STD','ISO-SUR1','ISO-SUR2','ISO-ADAM','ISO-MOM')):
             r_=rec(1.0+0.1*i);(d5/f'E55_q1a_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (16,32,64,128)},'W0':{'out':r_['W0']['out']}}))
             (d5/f'E55_q1a_{ar}_s{sd}.saved.json').write_text(json.dumps({'summary':{'clip_frac':0.2},'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.02,'_tail_nll':3.01}}))
-    ERR.clear();t=q1a_report(d5,[61,62,63]);assert 'SUCCESS' in t or 'no |' in t and 'ISO-ADAM' in t and 'n/a' not in t.split('paired difference')[0],t
-    print(t.split('success rule')[1][:700])
+    ERR.clear();t=q1a_report(d5,[61,62,63]);assert 'Verdict criteria' in t and 'DAMAGE rel' in t and ('SUCCESS' in t or 'no |' in t) and 'ISO-ADAM' in t and 'n/a' not in t.split('paired difference')[0],t
+    print(t.split('Verdict criteria')[1][:1800])
     d6=Path(tempfile.mkdtemp())
     for sd in (61,62):
         for nm,(tg,ar) in {'OSPAN':('ans','OSPAN'),'PSPAN':('ans','PSPAN'),'NSPAN':('ans','NSPAN'),'SENTPQ':('dc','SENTPQ'),'SENT':('dc','SENT'),'NAT':('v3a','NAT'),'SWD':('v3a','SWD'),'SWD-IN':('swdin','SWD')}.items():
@@ -267,15 +267,26 @@ def q1a_report(d,seeds,tag='q1a',arms=('ISO-STD','ISO-SUR1','ISO-SUR2','ISO-ADAM
             try:row.append(fmt(boot(np.concatenate([fact_g(G[s_,ar],a,'out')-fact_g(G[s_,'ISO-STD'],a,'out') for s_ in use]))))
             except Exception as e:ERR.append(f'diff {ar}: {e!r}');row.append('n/a')
         L.append(f'| {ar} | '+' | '.join(row)+' |')
-    L+=['','success rule (pre-set) per arm:','','| arm | seeds with u(32) >= %.2f | pooled u(128) | STD u(128) - 0.05 | clip share (mean over seeds) | canary rise (max over seeds) | verdict |'%thr,'|---|---|---|---|---|---|---|']
+    L+=['','## Verdict criteria (stated here; design 27.8.1 as read in 29.2). Three checks, kept SEPARATE:','',
+     '1. SPEED: u(a=32) >= %.2f in ALL seeds (3 of 3) AND pooled u(a=128) >= STD u(a=128) - 0.05.'%thr,
+     '2. DAMAGE (canary NLL rise, reference = the frozen start weights W0, worse of the generic and tail canary texts, max over seeds, at a=128): (abs) rise <= 0.10; (rel) rise minus the ISO-STD rise <= +0.05. The absolute limit is shown but does not decide: the isolated-row design (no background, few large steps) exceeds it with ISO-STD itself.',
+     '3. CLIP: mean clip share of the update norm < 0.9 (separate sanity check).',
+     'Overall verdict: SUCCESS = speed passes AND relative damage passes AND clip passes; the absolute damage column is informative (flagged "abs over").','',
+     '| arm | seeds with u(32) >= %.2f | pooled u(128) | STD u(128) - 0.05 | SPEED | canary rise (max over seeds, vs W0) | rise - STD rise | DAMAGE abs <= 0.10 | DAMAGE rel <= +0.05 | clip share (mean) | CLIP < 0.9 | verdict |'%thr,'|---|---|---|---|---|---|---|---|---|---|---|---|']
     std128=pooled('ISO-STD',apps[-1]);s128=float(np.mean(std128)) if std128 is not None else float('nan')
-    for ar in arms:
-        sd32=[s_ for s_ in seeds if (s_,ar) in G and (sm(ar,s_) or {}).get(32,-9)>=thr];p128=pooled(ar,apps[-1]);p=float(np.mean(p128)) if p128 is not None else float('nan')
-        cl=[S[s_,ar]['summary'].get('clip_frac',float('nan')) for s_ in seeds if (s_,ar) in S];cr=[]
+    def crise(ar):
+        cr=[]
         for s_ in seeds:
             if (s_,ar) in S and S[s_,ar].get('canary_end') and S[s_,ar].get('canary_w0'):cr.append(max(S[s_,ar]['canary_end'][k]-S[s_,ar]['canary_w0'][k] for k in ('_gen_nll','_tail_nll')))
-        ok=len(sd32)>=2 and p>=s128-0.05 and (not cl or float(np.mean(cl))<0.9) and (not cr or max(cr)<=0.10)
-        L.append(f"| {ar} | {len(sd32)} of {len([s_ for s_ in seeds if (s_,ar) in G])} {sd32} | {p:+.3f} | {s128-0.05:+.3f} | "+(f'{np.mean(cl):.2f}' if cl else 'n/a')+' | '+(f'{max(cr):+.3f}' if cr else 'n/a')+f" | {'baseline' if ar=='ISO-STD' else ('SUCCESS' if ok else 'no')} |")
+        return max(cr) if cr else float('nan')
+    stdr=crise('ISO-STD')
+    for ar in arms:
+        ns=[s_ for s_ in seeds if (s_,ar) in G];sd32=[s_ for s_ in ns if (sm(ar,s_) or {}).get(32,-9)>=thr];p128=pooled(ar,apps[-1]);p=float(np.mean(p128)) if p128 is not None else float('nan')
+        cl=[S[s_,ar]['summary'].get('clip_frac',float('nan')) for s_ in seeds if (s_,ar) in S];r=crise(ar)
+        sp=len(ns)>0 and len(sd32)==len(ns) and p>=s128-0.05;da=(r<=0.10) if r==r else None;dr=(r-stdr<=0.05) if r==r and stdr==stdr else None;ck=(float(np.mean(cl))<0.9) if cl else None
+        yn=lambda v:'n/a' if v is None else ('pass' if v else 'FAIL')
+        ok=sp and dr is True and ck is not False
+        L.append(f"| {ar} | {len(sd32)} of {len(ns)} {sd32} | {p:+.3f} | {s128-0.05:+.3f} | {'pass' if sp else 'FAIL'} | "+(f'{r:+.3f}' if r==r else 'n/a')+f" | "+(f'{r-stdr:+.3f}' if r==r and stdr==stdr else 'n/a')+f" | {'pass' if da else 'abs over' if da is False else 'n/a'} | {yn(dr)} | "+(f'{np.mean(cl):.2f}' if cl else 'n/a')+f" | {yn(ck)} | {'baseline' if ar=='ISO-STD' else ('SUCCESS' if ok else 'no')} |")
     if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
