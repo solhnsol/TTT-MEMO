@@ -64,8 +64,41 @@ def selftest():
         t=report(d,61,load=ld);assert 'KMASK-NAT' in t and 'shared64 - low frame sharing' in t and 'low frame sharing (0.45x)' in t and 'NAT' in t
         x=fact_g({'g':np.array([15.0]*16)},16,'out') if False else None
     finally:MT.rec_items,MT._sel=orig
+    MT.rec_items=lambda rec,a,ctx:{'G_rank':rec['g']};MT._sel=lambda rec,a,ctx:np.ones(16,bool)
+    try:
+        d2=Path(tempfile.mkdtemp());dt={(sd,ar):{'g':base+(1.0 if ar=='SENT' else 0)} for sd in (61,62,63) for ar in ('NAT','SENT')}
+        for (sd,ar) in dt:(d2/f'E55_icr_{ar}_s{sd}.read.json').write_text('{}')
+        t=rep_report(d2,[61,62,63],load=lambda f:dt[(int(Path(f).name.split('_s')[1].split('.')[0]),Path(f).name.split('_')[2])]);assert 'pooled' in t and 'SENT - NAT' in t and 'n/a' not in t,t
+    finally:MT.rec_items,MT._sel=orig
     print('e55_ic_report SELFTEST OK')
+def rep_report(d,seeds,tag='icr',apps=(16,32,64),out=None,load=None):
+    """E55 design 21.2 (shared16rep: 16 shared frames, 4 laps, repeats of (fact, frame) allowed at gap 16): arms NAT and SENT, seeds 61-63; per seed and pooled over seeds (facts of all seeds, fact bootstrap): u of NAT, SENT and the paired difference SENT - NAT, out-of-window and in-window. Exploratory; per-seed signs are listed because three seeds cannot carry seed-level significance."""
+    load=load or (lambda f:json.load(open(f)));G={}
+    for sd in seeds:
+        for ar in ('NAT','SENT'):
+            f=Path(d)/f'E55_{tag}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,ar]=load(f)
+    L=[f'# E55 design 21.2 report: 16 shared frames x 4 laps (repeats allowed), arms NAT / SENT, seeds {list(seeds)} (exploratory)','','u = (W0 rank - rank)/15 over facts, 95% fact-bootstrap CI; the 0.15 u line is a reference only; three seeds cannot carry a seed-level significance claim.','']
+    for ctx in ('out','in'):
+        L+=[f'## {"out-of-window" if ctx=="out" else "in-window"} read','','| seed | quantity | '+' | '.join(f'a={a}' for a in apps)+' |','|---|---|'+'---|'*len(apps)]
+        pooled={}
+        for sd in list(seeds)+['pooled']:
+            for nm,fn in (('NAT',lambda a,sd:fact_g(G[sd,'NAT'],a,ctx)),('SENT',lambda a,sd:fact_g(G[sd,'SENT'],a,ctx)),('SENT - NAT',lambda a,sd:fact_g(G[sd,'SENT'],a,ctx)-fact_g(G[sd,'NAT'],a,ctx))):
+                row=[]
+                for a in apps:
+                    try:
+                        x=np.concatenate([fn(a,s_) for s_ in seeds if (s_,'NAT') in G and (s_,'SENT') in G]) if sd=='pooled' else fn(a,sd);row.append(fmt(boot(x)))
+                    except Exception:row.append('n/a')
+                L.append(f'| {sd} | {nm} | '+' | '.join(row)+' |')
+        L.append('')
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
 if __name__=='__main__':
+    import sys as _s
+    if '--rep' in _s.argv:
+        _s.argv.remove('--rep');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='icr');a=ap.parse_args();print(rep_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--dir');ap.add_argument('--seed',type=int,default=61);ap.add_argument('--out');a=ap.parse_args()
     if a.selftest:selftest();sys.exit(0)
     print(report(a.dir,a.seed,out=a.out))
+

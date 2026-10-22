@@ -143,6 +143,8 @@ def latin_frames(seed,tag,k,nf):
 def _make_facts(names,places,seed,k,tag,bank_kind,bank,owner,n,n_app):
     if bank_kind=='shared64':
         assert n==1 and n_app==len(bank)==64,'shared64: one sentence per fact and chunk, one appearance per frame (n_app = 64)';lat=latin_frames(seed,tag,k,64);r=random.Random(f'E55f|{seed}|occ|{tag}');return [{'id':f,'group':None,'X':names[f],'P':places[f],'o':r.choice(OCC),'frames':lat[f]} for f in range(k)]
+    if bank_kind=='shared16rep':
+        assert n==1 and len(bank)==16 and n_app==64,'shared16rep: 16 shared frames, one sentence per fact and chunk, 64 appearances = 4 laps';lat=latin_frames(seed,tag,k,16);r=random.Random(f'E55f|{seed}|occ|{tag}');return [{'id':f,'group':None,'X':names[f],'P':places[f],'o':r.choice(OCC),'frames':lat[f]*4} for f in range(k)]
     r=random.Random(f'E55f|{seed}|occ|{tag}');return [{'id':f,'group':None,'X':names[f],'P':places[f],'o':r.choice(OCC),'frames':G0.person_frames(bank_kind,bank,owner,f'{seed}|{tag}',f,f,n_app*n)} for f in range(k)]
 def _stream(facts,k,n,p,n_app,bank,enc,units,seed,tag,sep):
     """-> chunks [{'k','group','app','ids' (exactly 1024),'sents':[{fact,frame,app,start,end}]}], units used"""
@@ -265,6 +267,10 @@ def verify(world,enc):
     if p>=9:assert mn>=WIN+1,('appearance distance',mn)
     res['frame_repeats_per_fact']=max(len(f['frames'])-len(set(f['frames'])) for f in world['facts'])
     if world['bank_kind'] in ('50','disjoint','300','shared64'):assert res['frame_repeats_per_fact']==0
+    if world['bank_kind']=='shared16rep':     # repeats of (fact, frame) are the point of this mode (gap 16 chunks, outside the window); instead: 16 different frames per chunk, 4 uses of each of the 16 frames per fact
+        fr=[[x['frame'] for x in c['sents']] for c in A_];assert all(len(set(r_))==16 for r_ in fr),'chunk frames not distinct'
+        assert all(sorted(f['frames'])==sorted(list(range(16))*4) and all(f['frames'][i]==f['frames'][i%16] for i in range(64)) for f in world['facts']),'lap structure'
+        cn=[sum(1 for c2 in A_[kk-8:kk] for y in c2['sents'] if y['frame']==x['frame']) for kk in range(8,len(A_)) for x in A_[kk]['sents']];res['same_frame_in_window_mean']=sum(cn)/len(cn)
     res['question_ngram_overlap']=question_overlap(world['bank']);assert res['question_ngram_overlap']==0
     names={x['X'] for x in world['facts']}|{x['X'] for x in world['ctrl']};pl={x['P'] for x in world['facts']};assert len(names)==k+NCTRL and len(pl)==k
     if 'decoy' in world:
@@ -319,7 +325,8 @@ CELLS={'base':dict(k=32,n=1,p=2,bank='50'),'p1':dict(k=16,n=1,p=1,bank='50'),'p4
        'v3_16_1':dict(k=16,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),'v3_8_1':dict(k=8,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),'v3_8_4':dict(k=8,n=4,p=1,bank='300',n_app=32,read_apps=(4,8,16,32)),
        'v3_4_8':dict(k=4,n=8,p=1,bank='300',n_app=16,read_apps=(2,4,8,16)),'v3_4_1':dict(k=4,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),
        # design 19 (R2 + R3): 64 exposures per fact, k = 16, p = 1; frames unique per fact (64 of the 300) or the same 64 frames for every fact (Latin assignment)
-       'ic_u64':dict(k=16,n=1,p=1,bank='300',n_app=64,read_apps=(16,32,64)),'ic_s64':dict(k=16,n=1,p=1,bank='shared64',n_app=64,read_apps=(16,32,64))}
+       'ic_u64':dict(k=16,n=1,p=1,bank='300',n_app=64,read_apps=(16,32,64)),'ic_s64':dict(k=16,n=1,p=1,bank='shared64',n_app=64,read_apps=(16,32,64)),
+       'ic_r64':dict(k=16,n=1,p=1,bank='shared16rep',n_app=64,read_apps=(16,32,64))}
 def cell_world(seed,name,enc,bg,**kw):
     """build_fact_world for a named cell (a cell may carry its own n_app / read_apps; the older cells use n_app = 16)"""
     return build_fact_world(seed,enc=enc,bg=bg,**{'n_app':16,**CELLS[name],**kw})

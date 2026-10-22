@@ -128,6 +128,8 @@ def frame_bank(kind,seed,N,need):
         fr=[l for l in (Path(__file__).resolve().parent/'frames300.txt').read_text().split('\n') if l];assert len(fr)==300 and sha12('\n'.join(fr))==FRAMES300_SHA,'frames300.txt differs from E55-frame-bank300.md';return fr,None
     if kind=='shared64':          # E55 design 19: the first 64 frames of the 300-bank, shared by every fact (the assignment is a Latin rectangle, see gen_facts.latin_frames)
         return frame_bank('300',seed,N,need)[0][:64],None
+    if kind=='shared16rep':        # E55 design 21.2: the first 16 frames, shared by every fact, each fact cycles through them 4 times (64 exposures)
+        return frame_bank('300',seed,N,need)[0][:16],None
     if kind=='12':return random.Random(f'E55|bank12|{seed}').sample(FRAMES50,12),None
     if kind=='disjoint':
         import frame_bank as FB

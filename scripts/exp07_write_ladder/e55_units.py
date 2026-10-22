@@ -370,7 +370,23 @@ def u24():
     tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
     r=RUN.unit_checks(rt,L,s3,REAL,DEC,NCH,1e-3,2e-3,meta=tab);assert r['PASS'] and r['checks']['U6'] and not r['errors'],(r.get('U6'),r['checks'],r['errors'])
     RES['U24']=f"unit_checks incl. U6 on the tiny model: PASS; {json.dumps(r['U6'],default=float)}"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24}
+def u25():
+    """E55 design 21.2 frames=shared16rep (CPU, stub tokenizer): 16 different frames per chunk, every fact uses each of the 16 frames 4 times in the same lap order (period 16 chunks), the order differs between facts, window same-frame mean 8, gap between equal (fact, frame) = 16 chunks (outside the 8-chunk window), masks of SENT still equal the independent hidden list"""
+    import gen_facts as G
+    enc=G.StubTok();bg=G._synth_bg(9000);w=G.cell_world(61,'ic_r64',enc,bg,decoys=('names','nofact'));v,A_=G.verify(w,enc)
+    assert abs(v['same_frame_in_window_mean']-8.0)<1e-9 and len({tuple(f['frames'][:16]) for f in w['facts']})==16
+    for f in range(16):
+        pos={}
+        for c in A_:
+            for x in c['sents']:
+                if x['fact']==f:pos.setdefault(x['frame'],[]).append(c['k'])
+        assert len(pos)==16 and all(len(p)==4 and all(b-a==16 for a,b in zip(p,p[1:])) for p in pos.values())
+    ks,ns=E.token_masks('SENT',40,A_,CH);hid=set()
+    for c in range(32,40):
+        for x in A_[c]['sents']:hid|={40*CH-W+(c-32)*CH+t for t in range(x['start'],x['end'])}
+    assert {40*CH-W+j for j in np.nonzero(~ks)[0]}==hid
+    RES['U25']=f"shared16rep: 16 distinct frames per chunk, 4 laps of the same 16-frame order per fact (orders differ between facts), repeats of (fact, frame) exactly 16 chunks apart, same-frame sentences in the window {v['same_frame_in_window_mean']:.2f}, SENT hidden list ok"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
