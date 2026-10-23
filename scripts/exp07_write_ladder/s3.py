@@ -45,7 +45,9 @@ def _full3(self,hidden_states,seq,state):
         mask=(qi>=kj)&(qi-kj<WIN)&(kj>=0)&(keep if keep.ndim==2 else keep[None,:])
         rows=S3['att_rows'];q=xq[rows].astype(jnp.float32);Kx=K.astype(jnp.float32)
         if Kx.shape[1]!=q.shape[1]:Kx=jnp.repeat(Kx,q.shape[1]//Kx.shape[1],axis=1)
-        sc=jnp.einsum('qhd,khd->hqk',q,Kx)*(q.shape[-1]**-0.5);sc=jnp.where(mask[rows][None],sc,-1e30);p=jax.nn.softmax(sc,axis=-1).mean(0)
+        sc=jnp.einsum('qhd,khd->hqk',q,Kx)*(q.shape[-1]**-0.5);sc=jnp.where(mask[rows][None],sc,-1e30);ph=jax.nn.softmax(sc,axis=-1);p=ph.mean(0)
+        if S3.get('att_topk'):       # E55 31 attention dump: per head the top-m WINDOW keys (current-chunk keys and absent chunks excluded): int16 key index and float16 probability, [H, n_rows, m]
+            import numpy as _np2;kk=jnp.arange(WIN+n);vk=(kk>=S3['att_lo'])&(kk<WIN);v_,i_=jax.lax.top_k(jnp.where(vk[None,None,:],ph,-1.0),S3['att_topk']);S3['att_heads'].append((_np2.asarray(i_,_np2.int16),_np2.asarray(v_,_np2.float16)))
         import numpy as _np;S3['att_out'].append(_np.asarray(p,_np.float32))
         o=jax.nn.dot_product_attention(xq,K,V,mask=mask,implementation='xla');o=self._merge_heads(o)
         return (self.get_attention_output(o),state)
