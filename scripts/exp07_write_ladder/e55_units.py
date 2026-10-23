@@ -913,7 +913,50 @@ def u46():
     rs,cs=run('SENTPQ');assert cs==cn and rs['log'][0]['n_masked_keys']==0 and all(e['n_masked_keys']>0 for e in rs['log'][1:]),[e['n_masked_keys'] for e in rs['log']]
     tg=[e['update_norm'] for e in rs['log']];ra,_=run('SENTPQADAMH',tg);ratio=float(np.mean([a['update_norm']/b for a,b in zip(ra['log'],tg)]));assert 0.45<=ratio<=0.55,ratio
     RES['U46']=f"p = 4 world (16 facts, 12 chunks): hook calls {cn} (chunk, exposure count); SENTPQ masked keys per chunk {[e['n_masked_keys'] for e in rs['log']][:5]}...; Adam-0.5N / SENTPQ mean update norm ratio {ratio:.3f}"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40,'U41':u41,'U42':u42,'U43':u43,'U44':u44,'U45':u45,'U46':u46}
+def u47():
+    """E55 32.10 sentence dump on the tiny model (p = 1 world, 10 chunks, dump at chunk 9 = full 8-chunk window): (a) A[g,h,q,w] equals the aggregation of the full head-mean attention rows of the same pass (query sentence token mean, window sentence key sum, layer-group mean) within float16 tolerance, row sums <= 1; (b) the unmasked window is used for both arms; (c) q_ce token-weighted mean equals the write step CE of the log (1e-2); (d) labels file: fact sentences of the window found with fact ids, and the selection module and the grid run on these arrays (selection code does not open labels); (e) the SENTPQADAMH arm dumps with the masked suffix path without error"""
+    import gen_facts as G,e55_sentdump as SD,e55_sentdump_labels as LB,e55_sentsel as SEL
+    enc=G.StubTok();w=G.build_fact_world(61,enc=enc,bg=G._synth_bg(9000),k=16,n=1,p=1,bank='300',n_app=10,decoys=('names',));nch=w['n_chunks'];assert nch==10
+    V=512;ids=np.asarray(G.stream_ids(G.realize(w)),np.int64)%V;ids[ids<3]+=3      # V = TinyRuntime default vocabulary
+    ends=np.zeros(nch*CH,bool)
+    for c in range(nch):
+        for x in w['chunks'][c]['sents']:ends[c*CH+x['end']-1]=True
+        ends[c*CH+np.arange(49,CH,50)]=True;ends[c*CH+CH-1]=True
+    rt2=H.TinyRuntime(layers=5,suffix=2);L2=C.Ladder55(rt2,save_dir='/tmp/e55_units_states');L2.rec_cache={};k=9;res={}      # 3 prefix layers: one per layer group
+    with rt2.mesh:
+        def run(ar,ntg=None):
+            dfn=SD.make_sentdump_fn(L2,rt2,s3,ends,ids,log=lambda *x:None);r=L2.run_stream(ar,1,ids,nch=nch,tag='u47'+ar,log=lambda *x:None,diag_fn=dfn,diag_chunks={k},chunks_meta=w['chunks'],norm_targets=ntg);d=r['diag'][k];lg=r['log'];r.pop('model',None);return d,lg
+        dn,ln=run('NAT');nat_n=[e['update_norm'] for e in ln]
+        ds,_=run('SENTPQADAMH',nat_n)
+    A=dn['A'].astype(np.float32);nQ,nW=A.shape[2],A.shape[3];assert A.shape[0]==3 and nQ==len(dn['q_len']) and nW==len(dn['w_len']) and float(A.sum(-1).max())<=1.0+1e-2,(A.shape,float(A.sum(-1).max()))
+    # (a) reference: the head-mean attention rows of the same pass (att_out), aggregated by hand
+    q,wsid,wst,wlen=SD.layout(ends,k);
+    with rt2.mesh:Kh,Vh,_=L2.record(ids[:nch*CH])
+    Kc,Vc=L2.ctx_kv(Kh,Vh,k);ids_k=jnp.asarray(ids[k*CH:(k+1)*CH],dtype=jnp.int32)
+    s3.S3.clear();s3.S3['mode']='att';s3.S3['q0']=jnp.int32(k*CH);s3.S3['keep']=jnp.ones(W+CH,bool);s3.S3['att_rows']=jnp.arange(CH,dtype=jnp.int32);s3.S3['att_out']=[];s3.S3['att_lo']=0;s3.S3['att_heads']=[]
+    try:
+        with rt2.mesh:
+            h=rt2.base.language_model.wte_call(ids_k);blocks=rt2.base.language_model.model.h.prefix_blocks;seq=L2.Batch(input_ids=ids_k,target_tokens=ids_k,loss_masks=jnp.ones_like(ids_k,dtype=bool))
+            for l in range(Kc.shape[0]):
+                blk=jax.tree.map(lambda a_:a_[l],blocks);h,_=blk(h,(Kc[l],Vc[l]),seq,is_prefix=True)
+        per=[np.asarray(x) for x in s3.S3['att_out']]
+    finally:s3.S3.clear()
+    ref=[]
+    for P in per:
+        M=np.zeros((W,nW),np.float32);ok=wsid>=0;M[np.nonzero(ok)[0],wsid[ok]]=1.0;Q=np.zeros((nQ,CH),np.float32)
+        for i,(a_,b_) in enumerate(q):Q[i,a_:b_]=1.0/(b_-a_)
+        ref.append(Q@(P[:,:W]@M))
+    g=SD.groups(len(per));refg=np.stack([np.mean(ref[a_:b_],axis=0) for a_,b_ in g.values()])
+    err=float(np.max(np.abs(A.mean(1)-refg)));assert err<2e-3,err
+    # (c) CE
+    wts=np.asarray(dn['q_len'],np.float64);cew=float(np.nansum(dn['q_ce']*wts)/wts.sum());assert abs(cew-ln[k]['ce'])<=1e-2*max(1.0,abs(ln[k]['ce'])),(cew,ln[k]['ce'])
+    # (d) labels + selection + grid
+    lb=LB.labels(w['chunks'],ends,k);nf=int((lb['w_fact']>=0).sum());assert nf>=8 and len(lb['w_fact'])==nW and len(lb['q_fact'])==nQ and (lb['w_fact'][lb['w_fact']>=0].max()<16)
+    import e55_sentgrid as GR
+    chunks={'NAT':{k:{**dn}},'SENTPQADAMH':{k:{**ds}}};lab={k:lb};rows=GR.run(chunks,lab,GR.configs()[:20]);t=GR.report(rows,chunks);assert 'Verdict' in t
+    assert float(ds['A'].astype(np.float32).sum(-1).max())<=1.0+1e-2 and np.isfinite(ds['q_ce']).all()
+    RES['U47']=f"sentence dump at chunk 9 of a p=1 world: A {A.shape} (groups, heads, {nQ} query sentences, {nW} window sentences), max row sum {float(A.sum(-1).max()):.3f}, deviation from the by-hand aggregation of the full attention rows {err:.1e}; q_ce weighted mean {cew:.3f} vs write CE {ln[k]['ce']:.3f}; {nf} window fact sentences labelled; grid and selection run on the dump"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40,'U41':u41,'U42':u42,'U43':u43,'U44':u44,'U45':u45,'U46':u46,'U47':u47}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
