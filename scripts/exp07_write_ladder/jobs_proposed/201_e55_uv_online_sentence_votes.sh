@@ -34,18 +34,19 @@ if [ -z "$SKIP_VERIFY" ]; then
     G=$(sha256sum $D/$F | cut -c1-12)
     [ "$G" = "$HH" ] || { echo "VERSION MISMATCH $F: have $G, expected $HH (exit 5)"; exit 5; }
   done <<'MANIFEST'
-4b047d412a7b e55_run.py
-c1db5049740e e55_core.py
+7989944f230d e55_run.py
+859ad9f01249 e55_core.py
 9827e34dcde6 e55_gpu.py
-e60430681325 e55_swap.py
+3ee7e3fa1960 e55_swap.py
 a6d506949071 e55_read.py
 4a811650bcd8 e55_analyze.py
 30769e241d5e e55_metrics.py
-7a402b38ea4b e55_ic_report.py
+d3537bb81a11 e55_ic_report.py
 c4c8a0d4e386 e55_iso.py
 725d18d16b65 e55_diag.py
 597294ca312b e55_votegrid.py
-558d7974f051 s3.py
+475f84bc4ffb e55_uv.py
+ad73e05f9cb9 s3.py
 f14491a9ddf7 ../exp04_what_ttt_retains/gen_facts.py
 1cf0caa82553 ../exp04_what_ttt_retains/gen_world_ctl.py
 eeaaa9135907 ../exp04_what_ttt_retains/frame_bank.py
