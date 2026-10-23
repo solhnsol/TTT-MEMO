@@ -5,6 +5,10 @@ The fact table (chunks_meta) is used ONLY for the per-chunk log (recall / precis
 import numpy as np
 RS_SEED=55061;MIN_TOK=4
 # Difference to the lab's offline diagnostic (e55_sentsel_vote_script.py): there the query units were the 16 question spans of the chunk (qfact rows, label-dependent); here the query units are ALL sentences of the write chunk (label-free). Candidates, score (sum of top-8 hits), p and k are the same.
+def tokenizer(tf):
+    """the tokenizers.Tokenizer of the tokenizer file (the run's `enc` is only an encode function and has no id_to_token)"""
+    from tokenizers import Tokenizer
+    return Tokenizer.from_file(str(tf))
 def sentence_ends(enc,ids):
     """bool [N]: token i ends a sentence. Rule (label-free): the decoded token, minus trailing quote/bracket characters, ends with . ? ! and the NEXT token starts with a space or a newline (so 3.5 and e.g.x do not split); a token containing a newline ends a sentence; the last token of the stream ends one."""
     ids=np.asarray(ids);toks=[enc.id_to_token(int(i)) or '' for i in ids];n=len(ids);e=np.zeros(n,bool)
