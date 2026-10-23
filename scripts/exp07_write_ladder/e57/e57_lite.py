@@ -1,5 +1,5 @@
 """E57-lite freeze (CPU only, no model, no GPU, NO download, no new clustering; job 223; E57 section 16.1 / 16.10 requests 1-2). Fixes, BEFORE any result of this job:
- 1) the event list: the 12 fixed regex events of job 220 / 221 without Nipah virus and IDFC First Bank fraud (10 events) + the next --n-extra (default 6) clusters of the job-219 list (e57_biglist.json: members >= 50, core >= .5, largest component >= .5 already; here: not recurring-type / product-type suspects (keyword share >= 0.3), not overlapping with an event already taken (>= 20 % of the members shared or >= 2 of the 3 top title tokens equal), in the order of members) -> about 16 events. The ethics filter is applied per target only (rules of job 222: b / c / d in any window; address, health, victim words, private-individual proxy of S in >= 20 % of the windows; family words reject only together with the private-individual proxy).
+ 1) the event list: the 12 fixed regex events of job 220 / 221 without Nipah virus and IDFC First Bank fraud (10 events) + the next --n-extra (default 10) clusters of the job-219 list (e57_biglist.json: members >= 50, core >= .5, largest component >= .5 already; here: not recurring-type / product-type suspects (keyword share >= 0.3), not overlapping with an event already taken (>= 20 % of the members shared or >= 2 of the 3 top title tokens equal), in the order of members) -> about 16 events. The ethics filter is applied per target only (rules of job 222: b / c / d in any window; address, health, victim words, private-individual proxy of S in >= 20 % of the windows; family words reject only together with the private-individual proxy).
  2) the frozen bank of the LEAD variant (first sentences up to 350 tokens, c >= 3 independent articles): per target the question for S, the candidate strings and the S' for the cross null.
    - question (fixed frame per answer type, S inserted): 'Question: In the news about this event, which <name | number or amount | date> is mentioned together with <S>?\\nAnswer:'. The frame without S is checked for 5-gram overlap with the lead sentences of the event (target counted as overlapping if any; reported, the frame is NOT changed here).
    - candidates: strings of the same type with a lead exposure c' >= 1 in the same event (c' = independent articles whose lead contains the string), excluding the answer, names containing / contained in S or in the answer, and strings that appear together with S in a lead sentence of >= 2 independent articles (a competing true pair; with one article the candidate stays and carries cooc_S = 1). Fill order: strict (|c' - c| <= 1), then middle (c' >= 2 and |c' - c| <= 2), then relaxed (any), by |c' - c| then a seeded hash, at most 16 per target; each candidate carries its tier. G = number of candidates; main = G >= 8 (otherwise supplementary only). Counts of the full tiers are stored (n_strict / n_middle / n_relaxed) and whether each tier alone has >= 8.
@@ -166,6 +166,77 @@ def attributes(names,res,topn=5):
         for c,lst in cls.items():
             lst.sort(key=lambda x:(-x[0],x[2]));out[nm][c]=[dict(surface=sf,key=k,articles=cnt,share=cnt/max(1,n)) for cnt,sf,k in lst[:topn]]
     return out
+SUP_STOP={'the','and','for','from','with','said','news','city','state','court','police','government','minister','president','bank','new','group','company','national','international','university','united'}
+WIN=64;CHUNK=8192;CKPT=(0.25,0.5,0.75);BANDS=(('<10',0,9),('10-19',10,19),('20-39',20,39),('40-79',40,79),('80+',80,10**9))
+def core_tokens(S):return {w for w in re.findall(r"[a-z]{3,}",S.lower()) if w not in SUP_STOP}
+def words_of(t):return set(re.findall(r"[a-z]+",t.lower()))
+def place_stats(names,res,bank,attr,rows,seed):
+    """supervisor check (E57 section 18.9) a / b / c / d. PLACE answer A of an event = the top-1 'place' string of attributes() (share s = share of the event's independent articles whose lead holds it), runner-up = top-2. c_SA: for every lead article that holds A, the S of the frozen targets of the event (subject_key) whose core token (word >= 3 letters, not in SUP_STOP) lies in a sentence holding A or in a sentence whose token range is within +-64 tokens of it (lead sentences only); c_SA = share of A-articles with >= 1 such S; strata of the number of such S per A-article 0 / 1-3 / 4+. Near-duplicate share = (articles before - after the Jaccard 0.5 removal) / before."""
+    ev={};allA=[];cand=[]
+    for ei,(nm,r) in enumerate(zip(names,res)):
+        if not r['ok']:continue
+        pl=attr.get(nm,{}).get('place',[]);o=dict(event=ei,name=nm,articles=len(r['arts']),n_before=rows[ei]['n_before'],n_dedup=rows[ei]['n_dedup'],dup_share=1-rows[ei]['n_dedup']/max(1,rows[ei]['n_before']))
+        if not pl:o.update(A=None);ev[nm]=o;continue
+        V=N.variant(r,'lead');A=pl[0];A2=pl[1] if len(pl)>1 else None
+        rxA=re.compile(r'\b'+re.escape(A['surface'])+r'\b');rx2=re.compile(r'\b'+re.escape(A2['surface'])+r'\b') if A2 else None
+        Sk={b['subject_key']:(core_tokens(b['subject_key']),b['subject_surface']) for b in bank if b['event']==ei};Sk={k:v for k,v in Sk.items() if v[0]}
+        nA=0;hit=0;hit_in=0;nS=[];conf=0
+        for ai in range(len(r['arts'])):
+            kept=V['kept'][ai];sents=r['sents'][ai][:kept];asi=[si for si,t in enumerate(sents) if rxA.search(t)]
+            if not asi:continue
+            nA+=1;ww=[words_of(t) for t in sents];cum=r['arts'][ai]['cum'];near=set();inn=set();first=None
+            for si in asi:
+                lo=cum[si]-WIN;hi=cum[si+1]+WIN
+                for sj in range(kept):
+                    if cum[sj+1]>lo and cum[sj]<hi:
+                        for k,(ct,sf) in Sk.items():
+                            if ct&ww[sj]:
+                                near.add(k)
+                                if first is None:first=(k,si)
+                for k,(ct,sf) in Sk.items():
+                    if ct&ww[si]:inn.add(k)
+            c2=bool(rx2 and any(rx2.search(t) for t in sents));conf+=c2;hit+=bool(near);hit_in+=bool(inn);nS.append(len(near))
+            cand.append((ei,nm,ai,first[0] if first else None,Sk[first[0]][1] if first else '-',A['surface'],asi[0],c2))
+        o.update(A=A['surface'],s=A['share'],A2=A2['surface'] if A2 else None,s2=A2['share'] if A2 else None,gap=A['share']-(A2['share'] if A2 else 0),A_articles=nA,c_SA=hit/max(1,nA),c_SA_in_sentence=hit_in/max(1,nA),
+            strata={k:sum(1 for x in nS if (x==0 if k=='0' else 1<=x<=3 if k=='1-3' else x>=4)) for k in('0','1-3','4+')},both_places=conf/max(1,nA),n_S=len(Sk));ev[nm]=o;allA.append((nA,hit,hit_in,nS,conf))
+    nA=sum(x[0] for x in allA);tot=dict(A_articles=nA,c_SA=sum(x[1] for x in allA)/max(1,nA),c_SA_in_sentence=sum(x[2] for x in allA)/max(1,nA),both_places=sum(x[4] for x in allA)/max(1,nA),
+        strata={k:sum(1 for x in allA for y in x[3] if (y==0 if k=='0' else 1<=y<=3 if k=='1-3' else y>=4)) for k in('0','1-3','4+')},
+        dup_share=1-sum(o['n_dedup'] for o in ev.values())/max(1,sum(o['n_before'] for o in ev.values())),events_with_place=len(allA),events=len(ev))
+    random.Random(seed+99).shuffle(cand);return ev,tot,cand[:20]
+def stream_stats(bank,res,pub_date,names,K):
+    """supervisor check (e) / (f) for the first K events: items, c distribution, candidates, one-read chunks; combined stream (all lead articles of the K events ordered by publication date, rid, event) with the first-mention position of every target and the checkpoint tables 25 / 50 / 75 %"""
+    b_=[b for b in bank if b['event']<K];ok=[ei for ei in range(min(K,len(names))) if res[ei]['ok']];st_=[]
+    for ei in ok:
+        r=res[ei];V=N.variant(r,'lead');tok={r['rids'][ai]:V['tok'][ai] for ai in range(len(r['arts']))}
+        for ai,rid in enumerate(r['rids']):st_.append((pub_date[rid],rid,ei,tok[rid]))
+    st_.sort();pos={(e,rid):i for i,(d,rid,e,t) in enumerate(st_)};tokens=sum(x[3] for x in st_);N_=len(st_)
+    o=dict(K=K,events=len(ok),items=len(b_),main=sum(b['main'] for b in b_),strata={s[0]:sum(b['stratum']==s[0] for b in b_) for s in STRATA},cands_total=sum(b['G'] for b in b_),G_median=sorted(b['G'] for b in b_)[len(b_)//2] if b_ else None,
+        stream_articles=N_,stream_tokens=tokens,chunks_all=-(-tokens//CHUNK),chunk=CHUNK)
+    fm=[];ck={q:dict(unseen=0,seen_bands={x[0]:0 for x in BANDS}) for q in CKPT}
+    for b in b_:
+        ps=sorted(pos[(b['event'],oc['rid'])] for oc in b['occurrences']);fm.append(dict(id=b['id'],event=b['event'],first_pos=ps[0],first_date=str(st_[ps[0]][0]),positions=ps))
+        for q in CKPT:
+            cut=int(-(-q*N_//1))
+            n_seen=sum(1 for x in ps if x<cut)
+            if n_seen==0:ck[q]['unseen']+=1
+            else:
+                for nm_,lo,hi in BANDS:
+                    if lo<=n_seen<=hi:ck[q]['seen_bands'][nm_]+=1
+    o['checkpoints']={str(q):v for q,v in ck.items()};o['first_pos_quartiles']=[sorted(x['first_pos'] for x in fm)[int(len(fm)*q)] for q in(0.25,0.5,0.75)] if fm else None
+    return o,[dict(pos=i,date=str(d),rid=rid,event=e,tokens=t) for i,(d,rid,e,t) in enumerate(st_)],fm
+def supervisor(names,res,bank,attr,rows,pub_date,seed,X,fd):
+    ev,tot,cand=place_stats(names,res,bank,attr,rows,seed);Ks={};stream=None;fms={}
+    for K in(16,20):
+        o,st_,fm=stream_stats(bank,res,pub_date,names,K);Ks[K]=o
+        if K==20:stream=st_;fms=fm
+    smp=[];ex=[]
+    for ei,nm,ai,Sk,Ssf,A,si,c2 in cand:
+        r=res[ei];smp.append(dict(event=nm,rid=r['rids'][ai],S_phrase=Ssf,answer=A,sent_idx=si,conflict_2nd_place_in_lead=bool(c2)))
+        ex.append(dict(smp[-1],evidence_sentence=r['sents'][ai][si]))
+    (fd/'lite_place.json').write_text(json.dumps(dict(rules='place answer = top-1 place string of attributes(); c_SA window +-%d tokens; see place_stats() in e57_lite.py'%WIN,events=ev,total=tot,sample20=smp),indent=1,default=str))
+    (fd/'lite_place_sample.json').write_text(json.dumps(dict(note='publisher sentences: stays on the server',sample20=ex),indent=1,default=str))
+    (fd/'lite_stream_columns.json').write_text(json.dumps(dict(note='combined lead stream of the first 20 events ordered by (date, rid, event); first_pos / positions per target index into stream; no article text',stream=stream,first_mention=fms,K=Ks),indent=1,default=str))
+    return dict(place=ev,total=tot,sample=smp,K=Ks)
 def run(a):
     out=pathlib.Path(a.out);fd=out/'e57_lite';fd.mkdir(exist_ok=True);rep=fd/'e57_lite_report.md'
     if rep.exists() and not a.rerun:print('report exists (exit 8; RERUN=1 to redo):',rep);sys.exit(8)
@@ -178,13 +249,13 @@ def run(a):
             targets_before_ethics=row.get('targets_f2_before'),rejected_by_ethics=row.get('rejected_targets'),bank_targets=len(b),articles=[dict(rid=x,date=d) for d,x in arts]))
     bt,exs=binding_tables(names,res,pub_date,a.seed);mem,samp=membership(X,names,res,D,out)
     (fd/'lite_binding_examples.json').write_text(json.dumps(dict(note='article sentences (publisher text): stays on the server',examples=exs,sample50_for_reading=samp),indent=1,default=str))
-    attr=attributes(names,res);(fd/'lite_attributes.json').write_text(json.dumps(attr,indent=1))
+    attr=attributes(names,res);sup=supervisor(names,res,bank,attr,rows,pub_date,a.seed,X,fd);(fd/'lite_attributes.json').write_text(json.dumps(attr,indent=1))
     caps,sel=cap_tables(names,res,D,pub_date);(fd/'lite_caps.json').write_text(json.dumps(dict(rule='main = articles with the most lead targets first, ties by publication date then id; date = first N by publication date',caps=caps,selection=sel),indent=1))
     ej=json.dumps(dict(seed=FREEZE_SEED,rules=dict(g_min=G_MIN,ncand=NCAND,nsp=NSP,frame=FRAME,dropped=list(N3.DROP),n_extra=a.n_extra),events=events),indent=1,default=str)
     bj=json.dumps(bank,indent=1,default=str);(fd/'lite_events.json').write_text(ej);(fd/'lite_bank.json').write_text(bj)
     man=dict(files={'lite_caps.json':hashlib.sha256((fd/'lite_caps.json').read_bytes()).hexdigest(),'lite_events.json':hashlib.sha256(ej.encode()).hexdigest(),'lite_bank.json':hashlib.sha256(bj.encode()).hexdigest()},n_events=len(events),n_events_with_bank=sum(bool(e['bank_targets']) for e in events),n_targets=len(bank),seed=FREEZE_SEED)
-    (fd/'lite_manifest.json').write_text(json.dumps(man,indent=1));txt=report(events,bank,X,a,time.time()-t0,caps,bt,mem,exs,samp,attr);rep.write_text(txt);print(txt[:9000])
-def report(events,bank,X,a,sec,caps=None,bt=None,mem=None,exs=None,samp=None,attr=None):
+    (fd/'lite_manifest.json').write_text(json.dumps(man,indent=1));txt=report(events,bank,X,a,time.time()-t0,caps,bt,mem,exs,samp,attr,sup);rep.write_text(txt);print(txt[:9000])
+def report(events,bank,X,a,sec,caps=None,bt=None,mem=None,exs=None,samp=None,attr=None,sup=None):
     f=EV.fmt;L=['# E57-lite freeze (CPU, regex proxy)','',f"{len(events)} events ({sum(e['source']=='regex' for e in events)} fixed regex events + {sum(e['source']!='regex' for e in events)} clusters of the job-219 list), {len(bank)} frozen targets (lead variant, c >= 3, after the target-level ethics filter). Candidates / questions / cross null as defined in the docstring of e57_lite.py; the pool uses LEAD exposures (job 220 / 221 used whole-article exposures for the pool tables, so the numbers differ). Run {sec:.0f} s.",'',
        '## events','','| # | event | source | matched titles | independent articles | first | last | targets f>=2 before ethics | rejected | frozen targets | main (G >= 8) |','|---|---|---|---|---|---|---|---|---|---|---|']
     for e in events:
@@ -239,13 +310,28 @@ def report(events,bank,X,a,sec,caps=None,bt=None,mem=None,exs=None,samp=None,att
                 if lst:L.append(f"| {c} | "+'; '.join(f"{x['surface']} ({x['share']:.2f})" for x in lst)+f" | {lst[0]['share']:.2f} | {lst[0]['share']-(lst[1]['share'] if len(lst)>1 else 0):.2f} |")
                 else:L.append(f'| {c} | none | | |')
             L.append('')
+    if sup:
+        P=sup['place'];T=sup['total']
+        L+=['','## supervisor check (E57 section 18.9)','',"Rules fixed before any result: PLACE answer = top-1 place string of the lead (proxy of attributes()), s = its share of the event's independent articles, runner-up = top-2; c_SA window +-%d tokens around every lead sentence holding the place; S = subjects of the frozen targets of the event, matched by core tokens (words >= 3 letters, small stop list); family-word and ethics filters as in the freeze; no PERSON attribute, no K >= 30, no extended candidate set."%WIN,'',
+           '### (a) PLACE answer per event, (b) c_SA, (c) near-duplicates','','| event | articles | near-dup share (before -> after) | PLACE answer A | s | 2nd place | s2 | gap | A-articles | c_SA | c_SA (A sentence only) | strata of S near A: 0 / 1-3 / 4+ | A-articles with 2nd place too |','|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+        for nm,o in P.items():
+            if o.get('A') is None:L.append(f"| {nm} | {o['articles']} | {o['dup_share']:.2f} ({o['n_before']} -> {o['n_dedup']}) | none | | | | | | | | | |");continue
+            L.append(f"| {nm} | {o['articles']} | {o['dup_share']:.2f} ({o['n_before']} -> {o['n_dedup']}) | {o['A']} | {o['s']:.2f} | {o['A2'] or '-'} | {(o['s2'] or 0):.2f} | {o['gap']:.2f} | {o['A_articles']} | {o['c_SA']:.2f} | {o['c_SA_in_sentence']:.2f} | {o['strata']['0']} / {o['strata']['1-3']} / {o['strata']['4+']} | {o['both_places']:.2f} |")
+        L+=['',f"- overall: {T['events_with_place']} of {T['events']} analysed events have a place; A-articles {T['A_articles']}; c_SA {T['c_SA']:.2f} (A sentence only {T['c_SA_in_sentence']:.2f}); strata 0 / 1-3 / 4+ = {T['strata']['0']} / {T['strata']['1-3']} / {T['strata']['4+']} articles; near-duplicate share {T['dup_share']:.2f}; A-articles with the 2nd place in the lead too {T['both_places']:.2f}."]
+        L+=['','### (d) 20 seeded PLACE extractions to check by hand','','The evidence sentences are publisher text and stay in lite_place_sample.json on the server; here article id and sentence index.','','| # | event | S phrase near A | answer A | article id | sentence | 2nd place also in lead (conflict) |','|---|---|---|---|---|---|---|']
+        L+=[f"| {i+1} | {x['event']} | {x['S_phrase']} | {x['answer']} | {x['rid']} | {x['sent_idx']} | {'yes' if x['conflict_2nd_place_in_lead'] else 'no'} |" for i,x in enumerate(sup['sample'])] or ['| none | | | | | |']
+        L+=['','### (e) items and one-read chunks for K = 16 and K = 20 events (first K of the list)','','| K | events | items (targets c >= 3) | main (G >= 8) | c 3-4 / 5-9 / 10-19 / 20+ | candidates total | median G | stream articles | stream lead tokens | one-pass chunks of %d |'%CHUNK,'|---|---|---|---|---|---|---|---|---|---|']
+        for K,o in sup['K'].items():L.append(f"| {K} | {o['events']} | {o['items']} | {o['main']} | "+' / '.join(str(o['strata'][s]) for s in st)+f" | {o['cands_total']} | {o['G_median']} | {o['stream_articles']} | {o['stream_tokens']} | {o['chunks_all']} |")
+        L+=['','### (f) stream columns for the event-label permutation null and the \'before first article\' stratum','','lite_stream_columns.json: every lead article of the first 20 events in (date, id, event) order with date, event label and token count (the label permutation shuffles event labels among articles, dates stay); per target the positions of its articles in this stream and the date of the first one. Checkpoints = 25 / 50 / 75 % of the stream articles: targets with NO article yet (before the first article) and, for the others, the count of articles so far in bands.','','| K | checkpoint | before first article | seen with < 10 | 10-19 | 20-39 | 40-79 | 80+ |','|---|---|---|---|---|---|---|---|']
+        for K,o in sup['K'].items():
+            for q,v in o['checkpoints'].items():L.append(f"| {K} | {float(q):.0%} | {v['unseen']} | "+' | '.join(str(v['seen_bands'][x[0]]) for x in BANDS)+' |')
     L+=['','Titles of the added clusters are shown only to identify them; no article text is written.']
     return '\n'.join(L)+'\n'
 def _selftest():
     def after(td):
         a=argparse.Namespace(out=str(td),dup_jac=0.5,min_articles=5,min_domains=5,min_c=3,workers=1,seed=5,rerun=True,n_extra=4,drop=())
         N3.DROP=();run(a);fd=td/'e57_lite';B=json.load(open(fd/'lite_bank.json'));E=json.load(open(fd/'lite_events.json'));M=json.load(open(fd/'lite_manifest.json'))
-        assert B and M['n_targets']==len(B) and (fd/'e57_lite_report.md').exists() and (fd/'lite_caps.json').exists() and 'article cap per event' in (fd/'e57_lite_report.md').read_text() and 'lite_caps.json' in M['files'] and (fd/'lite_binding_examples.json').exists() and 'binding sentences in the lead' in (fd/'e57_lite_report.md').read_text() and 'one event only' in (fd/'e57_lite_report.md').read_text() and 'attribute candidates' in (fd/'e57_lite_report.md').read_text() and (fd/'lite_attributes.json').exists()
+        assert B and M['n_targets']==len(B) and (fd/'e57_lite_report.md').exists() and (fd/'lite_caps.json').exists() and 'article cap per event' in (fd/'e57_lite_report.md').read_text() and 'lite_caps.json' in M['files'] and (fd/'lite_binding_examples.json').exists() and 'binding sentences in the lead' in (fd/'e57_lite_report.md').read_text() and 'one event only' in (fd/'e57_lite_report.md').read_text() and 'attribute candidates' in (fd/'e57_lite_report.md').read_text() and (fd/'lite_attributes.json').exists() and (fd/'lite_place.json').exists() and (fd/'lite_stream_columns.json').exists() and 'supervisor check' in (fd/'e57_lite_report.md').read_text()
         for b in B:
             assert b['question'].startswith('Question:') and b['subject_surface'] in b['question'] and all(c['key']!=b['answer_key'] for c in b['candidates']) and b['stratum'] in('3-4','5-9','10-19','20+')
             assert all(u['S']!=b['subject_key'] for u in b['cross_null']) and b['G']==len(b['candidates']) and b['main']==(b['G']>=G_MIN)
@@ -254,7 +340,7 @@ def _selftest():
     N3._selftest(after)
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--out',default='e57_news');ap.add_argument('--raw',default='news_raw');ap.add_argument('--dup-jac',type=float,default=0.5);ap.add_argument('--min-articles',type=int,default=5);ap.add_argument('--min-domains',type=int,default=5);ap.add_argument('--min-c',type=int,default=3)
-    ap.add_argument('--workers',type=int,default=8);ap.add_argument('--seed',type=int,default=57);ap.add_argument('--n-extra',type=int,default=6);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap.add_argument('--workers',type=int,default=8);ap.add_argument('--seed',type=int,default=57);ap.add_argument('--n-extra',type=int,default=10);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:_selftest();return
     run(a)
 if __name__=='__main__':main()
