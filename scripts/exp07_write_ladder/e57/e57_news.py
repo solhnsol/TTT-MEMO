@@ -147,8 +147,12 @@ def analyze(cl):
         targets.append(dict(ty=ty,key=ak,S=sk,c=c,f=f,occ={int(k):v for k,v in occ.items()},surface=surf[(ty,ak)]))
     pools={}
     for t in targets:pools[(t['ty'],t['key'])]=[(k,len(v)) for k,v in fact_art.items() if k[0]==t['ty'] and k[1]!=t['key']]
-    return dict(ok=True,n_dedup=len(keep),n_before=len(texts),arts=[dict(host=x['host'],tl=x['tl'],cum=x['cum'],n_sents=len(x['sents'])) for x in arts],targets=targets,
+    r=dict(ok=True,n_dedup=len(keep),n_before=len(texts),arts=[dict(host=x['host'],tl=x['tl'],cum=x['cum'],n_sents=len(x['sents'])) for x in arts],targets=targets,
         pool_counts={f'{k[0]}|{k[1]}':[c for _,c in v] for k,v in pools.items()},title=cl['title'])
+    if A.get('detail'):         # E57 freeze: sentences, the indices of the kept articles inside cl['texts'], candidate strings
+        r['keep']=list(keep);r['sents']=[x['sents'] for x in arts];r['facts']=[[[(f[0],f[1],f[2]) for f in fs] for fs in x['facts']] for x in arts]
+        r['pool_detail']={f'{k[0]}|{k[1]}':[(k2[0],k2[1],surf.get(k2,k2[1]),cn) for k2,cn in v] for k,v in pools.items()}
+    return r
 def variant(res,mode,lead_tok=350,cap=1500):
     """geometry of a variant: per article the kept sentences (prefix) and token length; targets restricted to occurrences inside"""
     lim=lead_tok if mode=='lead' else cap;V=dict(tok={},kept={})

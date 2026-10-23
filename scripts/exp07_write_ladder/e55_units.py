@@ -825,7 +825,27 @@ def u41():
         g=live();assert g[0]>b[0] and g[1]>0,(arm,'expected a leak without clear_caches (the reason for the fix)',g,b)
         jax.clear_caches();h=live();assert h==b,(arm,h,b)
     RES['U41']='arm leaves live RoPE tables without jax.clear_caches() (tiny model: +38 arrays) and none after it, for an Adam arm and a UV arm (real attention pass); baseline restored exactly'
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40,'U41':u41}
+def u42():
+    """E57 1a periodic K,V sharing and resume (CPU, tiny model with ONE prefix layer = receptive field 8 chunks): a stream of 5 rounds of 4 chunks (cyclic repetition of one round) run (a) plainly, (b) with periodic={round_chunks: 4, rec_chunks: 12} (only the first 3 rounds recorded; later windows / prefix outputs / query positions taken from the last recorded round), (c) in two pieces with start_chunk / sts0 / weights0. Per-chunk CE and update norms of (b) equal (a) to 1e-3 relative, the final weights agree, (c) equals (b), rec_chunks < 2 rounds is refused."""
+    rt2=H.TinyRuntime(layers=3,suffix=2);L2=C.Ladder55(rt2,save_dir='/tmp/e55_units_states')
+    rc=4;R=5;nch=rc*R;rnd=np.random.default_rng(7).integers(3,rt2.cfg.model.vocab_size,size=rc*CH);ids=np.tile(rnd,R);per={'round_chunks':rc,'rec_chunks':3*rc}
+    a=L2.run_stream('NAT',1,ids,nch=nch,tag='u42a',log=lambda *x:None)
+    msgs=[]
+    b=L2.run_stream('NAT',1,ids,nch=nch,tag='u42b',log=lambda s,*x:msgs.append(s),periodic=per)
+    assert any('recorded natural K,V of real' in s for s in msgs)
+    for k in range(nch):
+        ea,eb=a['log'][k],b['log'][k];assert abs(ea['ce']-eb['ce'])<=1e-3*max(1.0,abs(ea['ce'])) and abs(ea['update_norm']-eb['update_norm'])<=1e-3*ea['update_norm'],(k,ea['ce'],eb['ce'],ea['update_norm'],eb['update_norm'])
+    wd=maxdiff(a['model'].inner_parameters(),b['model'].inner_parameters())
+    c1=L2.run_stream('NAT',1,ids[:14*CH],nch=14,tag='u42c',log=lambda *x:None,periodic=per)
+    c2=L2.run_stream('NAT',1,ids,nch=nch,tag='u42d',log=lambda *x:None,periodic=per,start_chunk=14,weights0=c1['model'],sts0=c1['sts_final'])
+    assert len(c2['log'])==nch-14
+    for j,k in enumerate(range(14,nch)):
+        eb,ec=b['log'][k],c2['log'][j];assert ec['k']==k and abs(eb['ce']-ec['ce'])<=1e-3*max(1.0,abs(eb['ce'])) and abs(eb['update_norm']-ec['update_norm'])<=1e-3*eb['update_norm'],(k,eb['ce'],ec['ce'])
+    wd2=maxdiff(b['model'].inner_parameters(),c2['model'].inner_parameters());assert wd2<=1e-3 and wd<=1e-3,(wd,wd2)
+    try:L2.run_stream('NAT',1,ids,nch=nch,tag='u42e',log=lambda *x:None,periodic={'round_chunks':rc,'rec_chunks':rc});raise RuntimeError('rec_chunks < 2 rounds must be refused')
+    except AssertionError:pass
+    RES['U42']=f"periodic K,V sharing (3 of 5 rounds recorded, rounds 4-5 taken from round 3) equals the plain run: per-chunk CE / update norm within 1e-3 over {nch} chunks, final weights max diff {wd:.2e}; resume (14 chunks, then start_chunk=14 with weights0 + sts0) equals the one-piece periodic run (weights diff {wd2:.1e}, same 1e-3 tolerance as the plain-vs-periodic comparison: CPU reductions are not bitwise reproducible); rec_chunks < 2 rounds refused"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40,'U41':u41,'U42':u42}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
