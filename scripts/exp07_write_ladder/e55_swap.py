@@ -5,14 +5,14 @@ Slots that do not exist (k - j < 0) are left as the zero padding of ladder.ctx_k
 GPU integration (NOT in this file, NOT done): the plan must be applied to (a) the prefix layers' context K,V of Ladder3.prefix_masked (ctx_kv slices of three recordings) and (b) the carried suffix-layer KV state used by write_step / read_state (needs a decoy / bg chain of read_state and a window composed from the three chains); (b) needs the state layout of the ttt SWA state, which is not in this repository checkout (e2e submodule)."""
 import numpy as np
 NW=8
-ARMS=['NAT','SWD','SWB','MSK','SWDS','SWDO','NATM','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT','NATADAM','SENTPQADAM','SENTPQADAMH']
+ARMS=['NAT','SWD','SWB','MSK','SWDS','SWDO','NATM','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT','NATADAM','SENTPQADAM','SENTPQADAMH']
 ADAM={'NATADAM':('NAT',1.0),'SENTPQADAM':('SENTPQ',1.0),'SENTPQADAMH':('SENTPQ',0.5)}   # E55 29.3 Q1-B: window arm, factor on the per-chunk update norm of NAT (the Adam direction of the write gradient, size = factor x NAT chunk norm)
 MIX={'MIX25':0.25,'MIX50':0.50,'MIX75':0.75}   # E55 27.5 two-loss mix: lambda = weight of the loss of the fact-sentence tokens under the masked (SENTPQ) forward; ALT = masked loss on even chunk indices (1st, 3rd, ... chunk), unmasked on odd indices, one forward each
 def plan(arm,k,p):
     assert arm in ARMS and p>=1 and k>=0;out={}
     for j in range(1,NW+1):
         if k-j<0:continue
-        if arm in ('NAT','NATM','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT'):src='real'      # SENT / KMASK: real window K,V; only the attention mask changes (token_masks)
+        if arm in ('NAT','NATM','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT'):src='real'      # SENT / KMASK: real window K,V; only the attention mask changes (token_masks)
         elif arm=='SWD':src='decoy'
         elif arm=='SWB':src='bg'
         elif arm=='MSK':src='mask'
@@ -33,18 +33,18 @@ def compose_window(src,k,pl,CH,seqlen=None,axis=0):
         if s=='mask':parts.append(sl(ref,c));keep.append(np.zeros(CH,bool));continue
         a=src[s];assert a.shape==ref.shape,('recording shape differs',s);parts.append(sl(a,c));keep.append(np.ones(CH,bool))
     return np.concatenate(parts,axis),np.concatenate(keep)
-MASK_ARMS=('SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75')
+MASK_ARMS=('SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75')
 SENTP={'SENTP25':0.25,'SENTP50':0.50,'SENTP75':0.75};MASK_SEED=55027
 SPANR={'OSPANR25':0.25,'OSPANR50':0.50,'OSPANR75':0.75}   # E55 30.3 recall dose-response: a token-wise random 25 / 50 / 75 % of the name+place answer tokens of every earlier fact sentence (same fixed uniform draws as SENTPnn, nested, same for every query)
-SPAN={'OSPAN':'ans','PSPAN':'ans_P','NSPAN':'ans_X','OSPANR25':'ans','OSPANR50':'ans','OSPANR75':'ans'}   # E55 28.3: O-ALL = name + place tokens, P-ALL = place tokens only, N-ALL = name tokens only (all earlier fact sentences, per-query convention)
-def annotate_answers(chunks,facts,enc):
-    """E55 27.2 O-span: adds x['ans'] = [(start,end),...] (token offsets inside the chunk) to every sentence of the table: the first occurrence of the place tokens and of the name tokens of the sentence's fact inside the sentence span (enc(text) -> ids, tried with and without the leading space). Returns the number of sentences without a hit (place, name); callers assert 0."""
-    miss=[0,0]
+SPAN={'OSPAN':'ans','PSPAN':'ans_P','NSPAN':'ans_X','OCCSPAN':'ans_O','ALLSPAN':'ans_A','OSPANR25':'ans','OSPANR50':'ans','OSPANR75':'ans'}   # E55 28.3: O-ALL = name + place tokens, P-ALL = place tokens only, N-ALL = name tokens only (all earlier fact sentences, per-query convention)
+def annotate_answers(chunks,facts,enc,with_occ=False):
+    """E55 27.2 O-span: adds x['ans'] = [(start,end),...] (token offsets inside the chunk) to every sentence of the table: the first occurrence of the place tokens and of the name tokens of the sentence's fact inside the sentence span (enc(text) -> ids, tries the text with and without a leading space); x['ans_P'] / x['ans_X'] = place / name spans alone. E55 31 (Hans: 'is it only name and place? not the occupation?'): x['ans_O'] = the occupation tokens (facts[f]['o'], found as the whole word after 'the ' in every frame), x['ans_A'] = name + place + occupation. -> (miss_place, miss_name), or (miss_place, miss_name, miss_occupation) with with_occ=True; the callers assert zeros."""
+    miss=[0,0,0]
     for c in chunks:
         ids=list(c['ids'])
         for x in c['sents']:
-            seg=ids[x['start']:x['end']];spans=[];hits=[]
-            for j,key in enumerate(('P','X')):
+            seg=ids[x['start']:x['end']];spans=[];hits=[];occ=[]
+            for j,key in enumerate(('P','X','o')):
                 hit=None
                 for v in (' '+facts[x['fact']][key],facts[x['fact']][key]):
                     pl=list(enc(v));L=len(pl)
@@ -52,9 +52,10 @@ def annotate_answers(chunks,facts,enc):
                         if seg[i:i+L]==pl:hit=(x['start']+i,x['start']+i+L);break
                     if hit:break
                 if hit is None:miss[j]+=1
-                else:spans.append(hit);hits.append((j,hit))
-            x['ans']=sorted(spans);x['ans_P']=[sp for j_,sp in hits if j_==0];x['ans_X']=[sp for j_,sp in hits if j_==1]
-    return tuple(miss)
+                elif j<2:spans.append(hit);hits.append((j,hit))
+                else:occ.append(hit)
+            x['ans']=sorted(spans);x['ans_P']=[sp for j_,sp in hits if j_==0];x['ans_X']=[sp for j_,sp in hits if j_==1];x['ans_O']=occ;x['ans_A']=sorted(spans+occ)
+    return tuple(miss) if with_occ else tuple(miss[:2])
 def token_masks(arm,k,chunks,CH,nw=NW):
     """E55 design 19.2: attention-only masks of the sentence-level arms. chunks[c]['sents'] = [{'fact','start','end'}] (token positions inside chunk c). Key index j <-> absolute position k*CH-nw*CH+j (the window, nw*CH keys, then the current chunk, CH keys), as keep_vector.
     SENT : 1-D keep, every token of every fact sentence of the nw chunks BEFORE chunk k is hidden from every query; background and the sentences of the chunk being written stay visible.

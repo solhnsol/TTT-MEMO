@@ -11,7 +11,7 @@ import e55_swap as E
 import s3
 jax,jnp,eqx=s3.jax,s3.jnp,s3.eqx
 CH=1024;WIN=8192;NW=E.NW
-IMPLEMENTED=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT','NATADAM','SENTPQADAM','SENTPQADAMH')
+IMPLEMENTED=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT','NATADAM','SENTPQADAM','SENTPQADAMH')
 CHUNK_META_ARMS=E.MASK_ARMS+tuple(E.MIX)+tuple(E.ADAM)+('ALT',)
 def compose_state(chains,pl,counter=None):
     """suffix-layer SWA state with the slot blocks taken from the chain that plan `pl` names ('real' | 'decoy' | 'bg'; 'mask' and absent slots keep the real chain's block, the mask is applied through the key mask). Every other leaf (chunk index) is the real chain's. counter (list) collects the number of KV leaves composed (must be 2: K and V)."""
@@ -87,9 +87,9 @@ class Ladder55(s3.Ladder3):
     def window_inputs(self,arm,k,p,recs,sts,counter=None):
         """what the write forward of chunk k gets: (Kc,Vc,keep,st_suffix,plan). recs[name] = (Kh,Vh) numpy [layers,T,nh,d]; sts[name] = suffix chain state."""
         pl=E.plan(arm,k,p);keep=keep_vector(pl)
-        if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75'):
+        if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75'):
             Kc,Vc=self.ctx_kv(*recs['real'],k);st=sts['real']
-            if arm in ('SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','SENTP25','SENTP50','SENTP75'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW);self.n_masked_pairs=int((~keep).sum()) if keep.ndim==2 else int((~keep).sum())*CH
+            if arm in ('SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW);self.n_masked_pairs=int((~keep).sum()) if keep.ndim==2 else int((~keep).sum())*CH
         else:
             src_k={n:recs[n][0] for n in recs};src_v={n:recs[n][1] for n in recs}
             Kw,_=E.compose_window(src_k,k,pl,CH,axis=1);Vw,_=E.compose_window(src_v,k,pl,CH,axis=1);Kc,Vc=jnp.asarray(Kw),jnp.asarray(Vw)
@@ -146,6 +146,7 @@ class Ladder55(s3.Ladder3):
                         d_,mu_,nu_,gn,coef=self.adam_dir(g_,adam['mu'],adam['nu'],adam['t']);adam={'mu':mu_,'nu':nu_,'t':adam['t']+1.0}
                         dn=float(jnp.sqrt(sum(jnp.sum(x*x) for x in jax.tree.leaves(d_))));adam_scale=E.ADAM[arm][1]*float(norm_targets[k])/dn if dn>0 else 1.0
                         newp=jax.tree.map(lambda p_,x:(p_.astype(f32)-adam_scale*x).astype(p_.dtype),m.inner_parameters(),d_)      # fp32 direction, size = factor x NAT update norm of this chunk
+                        g_=d_=mu_=nu_=None      # E55 29.5: drop the fp32 temporaries (gradient, direction) at once: they were still alive during the in-run reads (job 195: 63.5 GB in use at a read, RESOURCE_EXHAUSTED on a 20 GiB allocation)
                     else:newp,gn,coef,ce=self.write_step(m,st_all,st_w,c,pref_w,jnp.asarray(keep))
                     if arm=='ALT':extra_log={'alt_masked_chunk':k%2==0}
                     if diag_multi is not None and k in diag_chunks:
@@ -166,6 +167,8 @@ class Ladder55(s3.Ladder3):
                 un=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=un
                 ent={'scale':scale,'k':k,'gnorm':float(gn),'coef':float(coef),'update_norm':un,'ce':float(ce),'sec':time.monotonic()-t0,'n_swapped_slots':sum(1 for v in pl.values() if v not in ('real',)),'n_masked_slots':sum(1 for v in pl.values() if v=='mask'),'n_masked_keys':int(self.n_masked_keys),'n_masked_pairs':int(getattr(self,'n_masked_pairs',0)) if arm in CHUNK_META_ARMS else 0,**extra_log}
                 out['log'].append(ent)
+                reading=(read_hook is not None and k in hook_chunks) or k in read_chunks
+                if adam is not None and reading:adam={'mu':jax.device_get(adam['mu']),'nu':jax.device_get(adam['nu']),'t':adam['t']}      # E55 29.5: the Adam moments (2 fp32 copies of the inner parameters) go to the host for the duration of the reads and come back after them
                 if read_hook is not None and k in hook_chunks:
                     t1=time.monotonic();out.setdefault('inline',{})[k]=read_hook(k,m);ent['sec_inline_read']=time.monotonic()-t1      # frozen-weight reads: m is only passed to pure scoring functions
                 if k in read_chunks:
@@ -173,6 +176,7 @@ class Ladder55(s3.Ladder3):
                     if self.canary and (canary_chunks is None or k in canary_chunks):r['canary']=self.canary(m)
                     out['reads'][k]=r;log(f'  {arm} chunk {k+1}/{nch}: state saved, hash {r["_hash"]}')
                 elif k%8==0:log(f'  {arm} chunk {k+1}/{nch} {ent["sec"]:.1f}s ce {ent["ce"]:.3f}')
+                if adam is not None and reading:adam={'mu':jax.tree.map(lambda x:jnp.asarray(x,jnp.float32),adam['mu']),'nu':jax.tree.map(lambda x:jnp.asarray(x,jnp.float32),adam['nu']),'t':adam['t']}
             out['final_hash']=s3.reuse._hash_pytree(m.inner_parameters())[0];out['model']=m
         cs=[e['coef'] for e in out['log']];out['clip_bind_frac']=sum(c_<1 for c_ in cs)/len(cs);out['cum_update_norm']=cum
         return out
