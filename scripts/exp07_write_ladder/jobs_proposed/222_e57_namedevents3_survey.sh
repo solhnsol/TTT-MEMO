@@ -45,6 +45,7 @@ for F in titles.pkl e57_bigclusters/clusters_big.pkl e57_bigclusters/e57_biglist
 $PY $D/e57/e57_common.py --selftest
 $PY $D/e57/e57_namedevents.py --selftest | tail -1
 $PY $D/e57/e57_namedevents2.py --selftest | tail -1
+$PY $D/e57/e57_namedevents3.py --selftest | tail -1
 [ -z "$CPU_ONLY" ] || { echo "CPU_ONLY: checks done, full run skipped"; exit 0; }
 $PY $D/e57/e57_namedevents3.py --out "$OUT" --raw "$RAW" --workers $WORKERS ${RERUN:+--rerun}
 tail -120 "$REP"
