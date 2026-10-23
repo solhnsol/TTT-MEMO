@@ -6,13 +6,14 @@ GPU integration (NOT in this file, NOT done): the plan must be applied to (a) th
 import numpy as np
 NW=8
 ARMS=['NAT','SWD','SWB','MSK','SWDS','SWDO','NATM','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT','NATADAM','SENTPQADAM','SENTPQADAMH']
-ADAM={'NATADAM':('NAT',1.0),'SENTPQADAM':('SENTPQ',1.0),'SENTPQADAMH':('SENTPQ',0.5)}   # E55 29.3 Q1-B: window arm, factor on the per-chunk update norm of NAT (the Adam direction of the write gradient, size = factor x NAT chunk norm)
+ADAM={'NATADAM':('NAT',1.0,False),'SENTPQADAM':('SENTPQ',1.0,False),'SENTPQADAMH':('SENTPQ',0.5,False),'SENTP25ADAMH':('SENTP25',0.5,False),'SENTP50ADAMH':('SENTP50',0.5,False),'SENTP75ADAMH':('SENTP75',0.5,False),'SENTPQADAM75':('SENTPQ',0.75,False),'SENTPQVFIX10':('SENTPQ',1.0,True),'SENTPQVFIX05':('SENTPQ',0.5,True)}   # E55 29.3 / 34: (window arm, factor on the per-chunk update norm of the reference SGD arm, vfix). vfix = the second moment is estimated from the first VFIX_T chunks and then frozen (diagonal preconditioner + momentum, no further v update)
+VFIX_T=8
 MIX={'MIX25':0.25,'MIX50':0.50,'MIX75':0.75}   # E55 27.5 two-loss mix: lambda = weight of the loss of the fact-sentence tokens under the masked (SENTPQ) forward; ALT = masked loss on even chunk indices (1st, 3rd, ... chunk), unmasked on odd indices, one forward each
 def plan(arm,k,p):
     assert arm in ARMS and p>=1 and k>=0;out={}
     for j in range(1,NW+1):
         if k-j<0:continue
-        if arm in ('NAT','NATM','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT'):src='real'      # SENT / KMASK: real window K,V; only the attention mask changes (token_masks)
+        if arm in ('NAT','NATM','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT') or arm in ADAM:src='real'      # SENT / KMASK: real window K,V; only the attention mask changes (token_masks)
         elif arm=='SWD':src='decoy'
         elif arm=='SWB':src='bg'
         elif arm=='MSK':src='mask'
@@ -33,6 +34,7 @@ def compose_window(src,k,pl,CH,seqlen=None,axis=0):
         if s=='mask':parts.append(sl(ref,c));keep.append(np.zeros(CH,bool));continue
         a=src[s];assert a.shape==ref.shape,('recording shape differs',s);parts.append(sl(a,c));keep.append(np.ones(CH,bool))
     return np.concatenate(parts,axis),np.concatenate(keep)
+ARMS+=[k for k in ADAM if k not in ARMS]
 MASK_ARMS=('SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75')
 SENTP={'SENTP25':0.25,'SENTP50':0.50,'SENTP75':0.75};MASK_SEED=55027
 SPANR={'OSPANR25':0.25,'OSPANR50':0.50,'OSPANR75':0.75}   # E55 30.3 recall dose-response: a token-wise random 25 / 50 / 75 % of the name+place answer tokens of every earlier fact sentence (same fixed uniform draws as SENTPnn, nested, same for every query)

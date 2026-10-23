@@ -124,6 +124,12 @@ def selftest():
             r_=rec(1.0+0.1*len(nm)%1);(d8/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (64,128)},'W0':{'out':r_['W0']['out']}}))
             (d8/f'E55_{tg}_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'n_masked_keys':400} for _ in range(128)],'stream_sha':'abc','canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.02,'_tail_nll':3.0}}))
     ERR.clear();t=all_report(d8,[61,62,63]);assert 'gain share' in t and 'equal' in t and 'cells shown as n/a failed' not in t and 'n/a' not in t.split('paired')[0],t
+    d9=Path(tempfile.mkdtemp())
+    for sd in (61,62,63):
+        for tg,ar in [('q34',x) for x in ('SENTP25ADAMH','SENTP50ADAMH','SENTP75ADAMH','SENTPQADAM75','SENTPQVFIX10','SENTPQVFIX05')]+[('q1b',x) for x in ('SENTPQ','SENTPQADAM','SENTPQADAMH')]:
+            r_=rec(1.0+0.1*len(ar)%1);(d9/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (16,32,64,128)},'W0':{'out':r_['W0']['out']}}))
+            (d9/f'E55_{tg}_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'n_masked_keys':600,'update_norm':0.01} for _ in range(128)],'dclm_w0':3.0,'dclm_end':3.04,'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.03,'_tail_nll':3.0},'canary_by_app':{'32':{'_gen_nll':3.01,'_tail_nll':3.0},'64':{'_gen_nll':3.02,'_tail_nll':3.0},'128':{'_gen_nll':3.03,'_tail_nll':3.0}}}))
+    ERR.clear();t=q34_report(d9,[61,62,63]);assert 'PRE-SET success rule' in t and ' no |' in t.split("(3')")[1] and 'norm check' in t and 'cells shown as n/a failed' not in t,t
     print('e55_ic_report SELFTEST OK')
 def q1b_report(d,seeds,tag='q1b',nat_tag='v3a',arms=('SENTPQ','SENTPQADAM','NATADAM','SENTPQADAMH'),apps=(16,32,64,128),out=None,load=None):
     """E55 design 29.3 Q1-B (Adam-direction write on the masked / unmasked online stream, window kept, per-query SENTPQ convention): out-of-window g (u, W0 subtracted) at a = 16, 32, 64, 128 per arm (pooled over seeds, fact bootstrap), in-window g at 128, canary NLL rise at a = 32, 64, 128 (reference W0, and NAT of job 181 at a = 128), clip share and norm ratio, and the PRE-SET verdict rules (stated in the report body): SPEED, GAIN KEPT, DAMAGE relative and absolute, kept separate; plus the recorded item NAT-ADAM / SENTPQ-ADAM."""
@@ -256,6 +262,70 @@ def all_report(d,seeds,tag='all',ref_tag='dc',nat_tag='v3a',arm='ALLSPAN',apps=(
     L+=['','per seed (out-of-window seed mean g at a=%d): '%apps[-1]+'; '.join(f'seed {s_}: '+', '.join(f"{nm} {float(np.mean(fact_g(G[s_,nm],apps[-1],'out'))):+.3f}" for nm in (arm,'SENTPQ','NAT') if (s_,nm) in G) for s_ in seeds)]
     hs=[(s_,S[s_,arm].get('stream_sha'),S[s_,'SENTPQ'].get('stream_sha')) for s_ in seeds if (s_,arm) in S and (s_,'SENTPQ') in S]
     L+=['','stream hash (same world as the SENTPQ file of job 190): '+('; '.join(f'seed {s_}: '+('equal' if a_==b_ and a_ else f'DIFFERENT ({a_} vs {b_}) - comparison void') for s_,a_,b_ in hs) if hs else 'n/a (files missing)')]
+    if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
+def q34_report(d,seeds,tag='q34',ref_tag='q1b',apps=(16,32,64,128),out=None,load=None):
+    """E55 34 bundle. (2') partial token masks on SENTPQ-ADAM-0.5N: SENTP25 / 50 / 75 ADAMH (a random 25 / 50 / 75 % of the tokens of every earlier fact sentence hidden, per query) against SENTPQ-ADAM-0.5N (job 195/196, tag q1b); recovery R = g / g(0.5N) at a = 64 and 128, hidden keys % of the window, damage: in-window g at 128, DCLM first-chunk NLL rise (a=128 minus W0), canary rise at a = 32, 64, 128 (vs W0). (3') Adam damage reduction on SENTPQ: A1 ADAM-0.75N, A2 ADAM-vfix-1.0N, A3 ADAM-vfix-0.5N against SENTPQ-STD, SENTPQ-ADAM, SENTPQ-ADAM-0.5N (tag q1b); the PRE-SET success rule is written into the report. The reference files of tag q1b are read from the same directory."""
+    load=load or (lambda f:json.load(open(f)));P2=[('SENTP25ADAMH','SENT-p25 / Adam-0.5N',25),('SENTP50ADAMH','SENT-p50 / Adam-0.5N',50),('SENTP75ADAMH','SENT-p75 / Adam-0.5N',75)];P3=[('SENTPQADAM75','A1 ADAM-0.75N'),('SENTPQVFIX10','A2 ADAM-vfix-1.0N'),('SENTPQVFIX05','A3 ADAM-vfix-0.5N')]
+    refs={'SENTPQ':'SENTPQ-STD','SENTPQADAM':'SENTPQ-ADAM (1.0N)','SENTPQADAMH':'SENTPQ-ADAM-0.5N'};G={};S={}
+    for sd in seeds:
+        for ar in [x[0] for x in P2]+[x[0] for x in P3]:
+            f=Path(d)/f'E55_{tag}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,ar]=load(f)
+            f=Path(d)/f'E55_{tag}_{ar}_s{sd}.saved.json'
+            if f.exists():S[sd,ar]=json.load(open(f))
+        for ar in refs:
+            f=Path(d)/f'E55_{ref_tag}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,ar]=load(f)
+            f=Path(d)/f'E55_{ref_tag}_{ar}_s{sd}.saved.json'
+            if f.exists():S[sd,ar]=json.load(open(f))
+    ERR.clear();W=8192
+    def pooled(ar,a,ctx='out'):
+        use=[s_ for s_ in seeds if (s_,ar) in G]
+        try:
+            if not use:return None
+            cx=[ctx if ctx!='in' else in_ctx(G[s_,ar]) for s_ in use]
+            return None if None in cx else np.concatenate([fact_g(G[s_,ar],a,c_) for s_,c_ in zip(use,cx)])
+        except Exception as e:ERR.append(f'{ar}@{a}: {e!r}');return None
+    def mean(v):return float(np.mean(v)) if v is not None else float('nan')
+    def share(ar):
+        v=[e.get('n_masked_keys',0)/W for s_ in seeds if (s_,ar) in S for e in S[s_,ar].get('log',[])[8:]];return 100*float(np.mean(v)) if v else None
+    def crise(ar,a):
+        r=[]
+        for s_ in seeds:
+            x=S.get((s_,ar),{});c=(x.get('canary_by_app') or {}).get(str(a)) or (x.get('canary_end') if a==128 else None);w=x.get('canary_w0')
+            if c and w:r.append(max(c[k]-w[k] for k in ('_gen_nll','_tail_nll')))
+        return max(r) if r else None
+    def dclm(ar):
+        r=[S[s_,ar]['dclm_end']-S[s_,ar]['dclm_w0'] for s_ in seeds if (s_,ar) in S and S[s_,ar].get('dclm_end') is not None and S[s_,ar].get('dclm_w0') is not None];return float(np.mean(r)) if r else None
+    f_=lambda v,fm='{:+.3f}':'n/a' if v is None or v!=v else fm.format(v)
+    ref=mean(pooled('SENTPQADAMH',128));ref64=mean(pooled('SENTPQADAMH',64));std_c=crise('SENTPQ',128)
+    L=[f'# E55 34 bundle report, seeds {list(seeds)} (tag {tag}, references from tag {ref_tag})','','g = out-of-window rank gain u (W0 subtracted, unexposed question frames), 95% fact-bootstrap CI. All Adam arms: the Adam direction of the clipped write gradient, per-chunk step size = factor x the update norm of SENTPQ-STD of the same seed (design 29.4); vfix = the second moment is updated for the first 8 chunks only and then frozen (diagonal preconditioner + momentum).','',
+       "## (2') how much of the sentence has to be hidden (Adam-0.5N write)",'','R = g / g(SENTPQ-ADAM-0.5N). Reading rule (pre-set): R < 0.3 at p25 and p50 = threshold type (partial masking insufficient); R rising roughly with the hidden share = dose-response. Damage columns next to the gain.','',
+       '| arm | hidden keys % of window | '+' | '.join(f'g a={a}' for a in apps)+' | R a=64 | R a=128 | in-window g a=128 | DCLM rise a=128 | canary rise a=32 / 64 / 128 (vs W0) |','|---|---|'+'---|'*(len(apps)+5)]
+    rows2=[(ar,nm) for ar,nm,_ in P2]+[('SENTPQADAMH','SENTPQ-ADAM-0.5N (hide 100%, reference)'),('SENTPQ','SENTPQ-STD (reference)')]
+    for ar,nm in rows2:
+        ps={a:pooled(ar,a) for a in apps};pi=pooled(ar,128,'in')
+        if all(v is None for v in ps.values()):L.append(f'| {nm} | n/a |'+' n/a |'*(len(apps)+5));continue
+        r64=mean(ps.get(64))/ref64 if ref64==ref64 and ref64!=0 and ps.get(64) is not None else float('nan');r128=mean(ps.get(128))/ref if ref==ref and ref!=0 and ps.get(128) is not None else float('nan')
+        L.append(f'| {nm} | '+f_(share(ar),'{:.1f}')+' | '+' | '.join(fmt(boot(ps[a])) if ps[a] is not None else 'n/a' for a in apps)+f' | {f_(r64,"{:.2f}")} | {f_(r128,"{:.2f}")} | '+(fmt(boot(pi)) if pi is not None else 'n/a')+f' | {f_(dclm(ar))} | '+' / '.join(f_(crise(ar,a)) for a in (32,64,128))+' |')
+    L+=['',"## (3') reducing the Adam damage on SENTPQ (norm / preconditioner variants)",'',
+        f'PRE-SET success rule: g(a=128) >= 0.326 (the 0.5N value of job 195; this run\'s file value: {f_(ref)}) AND g(a=64) >= 0.20 AND canary rise at a=128 <= SENTPQ-STD + 0.05 (STD rise {f_(std_c)} + 0.05 = {f_(std_c+0.05) if std_c is not None else "n/a"}). Ties: the lower canary rise wins. The three conditions are shown separately.','',
+        '| arm | '+' | '.join(f'g a={a}' for a in apps)+' | g(128) >= 0.326 | g(64) >= 0.20 | canary a=128 <= STD + 0.05 | canary rise a=32 / 64 / 128 (vs W0) | in-window g a=128 | DCLM rise a=128 | success |','|---|'+'---|'*(len(apps)+7)]
+    rows3=[(ar,nm) for ar,nm in P3]+[('SENTPQADAMH','SENTPQ-ADAM-0.5N (reference)'),('SENTPQADAM','SENTPQ-ADAM 1.0N (reference)'),('SENTPQ','SENTPQ-STD (reference)')]
+    yn=lambda v:'n/a' if v is None else ('pass' if v else 'FAIL')
+    for ar,nm in rows3:
+        ps={a:pooled(ar,a) for a in apps};pi=pooled(ar,128,'in');c128=crise(ar,128)
+        if all(v is None for v in ps.values()):L.append(f'| {nm} | n/a |'+' n/a |'*(len(apps)+7));continue
+        g128=mean(ps.get(128)) if ps.get(128) is not None else None;g64=mean(ps.get(64)) if ps.get(64) is not None else None
+        a1=None if g128 is None or g128!=g128 else g128>=0.326;a2=None if g64 is None or g64!=g64 else g64>=0.20;a3=None if c128 is None or std_c is None else c128<=std_c+0.05;ok=None if None in (a1,a2,a3) else (a1 and a2 and a3)
+        L.append(f'| {nm} | '+' | '.join(fmt(boot(ps[a])) if ps[a] is not None else 'n/a' for a in apps)+f' | {yn(a1)} | {yn(a2)} | {yn(a3)} | '+' / '.join(f_(crise(ar,a)) for a in (32,64,128))+' | '+(fmt(boot(pi)) if pi is not None else 'n/a')+f' | {f_(dclm(ar))} | '+('reference' if ar in refs else ('SUCCESS' if ok else 'no' if ok is not None else 'n/a'))+' |')
+    L+=['','norm check (mean update norm of the arm / mean update norm of SENTPQ-STD, same seed; target = the factor of the arm):','']
+    for ar,fac in (('SENTP25ADAMH',.5),('SENTP50ADAMH',.5),('SENTP75ADAMH',.5),('SENTPQADAM75',.75),('SENTPQVFIX10',1.0),('SENTPQVFIX05',.5)):
+        r=[np.mean([e['update_norm'] for e in S[s_,ar]['log']])/np.mean([e['update_norm'] for e in S[s_,'SENTPQ']['log']]) for s_ in seeds if (s_,ar) in S and (s_,'SENTPQ') in S and S[s_,ar].get('log') and S[s_,'SENTPQ'].get('log')]
+        L.append(f'- {ar}: '+(f'{np.mean(r):.2f} (target {fac})' if r else 'n/a'))
     if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
@@ -567,6 +637,8 @@ if __name__=='__main__':
         _s.argv.remove('--q1b');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q1b');a=ap.parse_args();print(q1b_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     if '--all' in _s.argv:
         _s.argv.remove('--all');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='all');a=ap.parse_args();print(all_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
+    if '--q34' in _s.argv:
+        _s.argv.remove('--q34');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q34');ap.add_argument('--ref-tag',default='q1b');a=ap.parse_args();print(q34_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,a.ref_tag,out=a.out));_s.exit(0)
     if '--ans' in _s.argv:
         _s.argv.remove('--ans');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');a=ap.parse_args();print(ans_report(a.dir,[int(x) for x in a.seeds.split(',')],out=a.out));_s.exit(0)
     if '--q2' in _s.argv:
