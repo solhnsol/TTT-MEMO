@@ -329,6 +329,9 @@ def decomp(a):
         if need and miss_:
             assert a.norm_ref_tag or 'SENTPQ' in arms,'SENTPQ-based Adam arms need SENTPQ of the same tag and seed (their norm target): add SENTPQ to the arms or give --norm-ref-tag'
             print(f'  NOTE: norm-target files E55_{rt_}_SENTPQ_s<seed>.saved.json missing here for seeds {miss_} (needed on the GPU run{"" if a.norm_ref_tag else ": SENTPQ runs first in this call"})',flush=True)
+    if a.check_only and any(x in E.UVARMS for x in arms) and not getattr(a,'stub',False):       # E55 32.8: the UV sentence boundaries on the REAL tokenizer and a real world stream (job 201 failed on this path once: enc is a function)
+        import e55_uv as UVm;enc_,w_,tf_=build(a,seeds[0],arms=['NAT']);ids_,_=streams(w_,enc_)['A'];ends_=UVm.sentence_ends(UVm.tokenizer(tf_),ids_);ns_=[len(UVm.chunk_sents(ends_,c_)) for c_ in range(w_['n_chunks'])];sid_,st_,ln_=UVm.window_sents(ends_,20);nc_=int((ln_>=UVm.MIN_TOK).sum())
+        assert min(ns_)>=2 and len(st_)>0 and nc_>0,('implausible sentence split',min(ns_),len(st_),nc_);print(f'  UV sentence check OK on the real tokenizer: {w_["n_chunks"]} chunks, sentences per chunk min/median/max {min(ns_)}/{sorted(ns_)[len(ns_)//2]}/{max(ns_)}; window of chunk 20: {len(st_)} sentences, {nc_} with >= {UVm.MIN_TOK} tokens',flush=True)
     if a.check_only:print(f'decomp check-only OK: arms {arms} seeds {seeds} all in {DECOMP_ARMS}; every masked arm has a branch: {[x for x in arms if x in E.MASK_ARMS]}');return
     LD,s3,C=lab();rt=LD.Runtime();can=None if a.no_canary else Canary55(LD,rt);import e55_gpu as RG,e55_iso as I;rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     for sd in seeds:
@@ -362,7 +365,7 @@ def decomp(a):
                 if ar in E.SPAN:miss=E.annotate_answers(w['chunks'],w['facts'],enc,with_occ=True);assert miss==(0,0,0),('answer span not found in sentences (place, name, occupation):',miss);extra={'answer_span_miss':list(miss)}          # E55 design 25.3 (A): the online stream with the window, earlier fact sentences hidden from attention (as job 183 SENT), no norm matching
                 uvo=None
                 if ar in E.UVARMS:       # E55 32.8: online label-free sentence votes (the sentence boundaries come from the token stream; the fact table only feeds the log)
-                    import e55_uv as UVm;ends=UVm.sentence_ends(enc,ids);rst=None
+                    import e55_uv as UVm;ends=UVm.sentence_ends(UVm.tokenizer(tf),ids);rst=None
                     if ar in E.RS:
                         fu=OUT/f'E55_{a.tag}_{E.RS[ar]}_s{sd}.saved.json';assert fu.exists(),('the matched UV arm of this seed and tag must run first (hidden-token counts per chunk)',fu);rst=[e['n_masked_keys'] for e in json.load(open(fu))['log']][:128];extra['rs_matched_to']=E.RS[ar]
                     uvo=UVm.UV(ar,ends,w['chunks'],L=L,rt=rt,s3=s3,topm=a.uv_topm,group=a.uv_group,score=a.uv_score,rs_targets=rst,log=lg);extra['uv']={'topm':a.uv_topm,'group':a.uv_group,'score':a.uv_score,'sentence_ends':int(ends.sum()),'tokens':int(len(ends))}
