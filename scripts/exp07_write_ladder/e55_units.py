@@ -949,12 +949,21 @@ def u47():
         ref.append(Q@(P[:,:W]@M))
     g=SD.groups(len(per));refg=np.stack([np.mean(ref[a_:b_],axis=0) for a_,b_ in g.values()])
     err=float(np.max(np.abs(A.mean(1)-refg)));assert err<2e-3,err
+    # (a2) per-layer / token statistics: AL group means equal A, head-mean of T_sum equals the head-mean window mass of the reference rows, T_max <= T_sum, T_wsid in range
+    AL=dn['AL'].astype(np.float32);assert AL.shape[:2]==(len(per),A.shape[1]) and AL.shape[2:]==A.shape[2:]
+    assert float(np.max(np.abs(np.stack([AL[a_:b_].mean(0) for a_,b_ in g.values()])-A)))<2e-3
+    Tm,Ts,Tw=[dn[x].astype(np.float32) for x in ('T_max','T_sum','T_wsid')];assert Tm.shape==(len(per),A.shape[1],CH)==Ts.shape and bool((Tm<=Ts+1e-3).all()) and int(Tw.max())<nW and int(Tw.min())>=-1
+    assert float(np.max(np.abs(Ts.mean(1)-np.stack([P[:,:W].sum(-1) for P in per]))))<2e-3
+    # (a3) attention x value, V norms, key index, sink / previous-chunk mass
+    AVv=dn['AV'].astype(np.float32);VNv=dn['VN'].astype(np.float32);Tk=dn['T_key'].astype(np.int64);assert AVv.shape==AL.shape and VNv.shape[0]==len(per) and VNv.shape[2]==W and Tk.shape==Tm.shape and int(Tk.max())<W and int(Tk.min())>=0
+    vref=np.linalg.norm(np.asarray(Vh[0][k*CH-W:k*CH] if False else Vc[0][:W],np.float32),axis=-1);assert float(np.max(np.abs(VNv[0].T-vref)))<2e-2*float(vref.max()),'V norms differ'
+    assert bool((dn['T_sink'].astype(np.float32)<=Ts+1e-3).all() and (dn['T_rec'].astype(np.float32)<=Ts+1e-3).all())
     # (c) CE
     wts=np.asarray(dn['q_len'],np.float64);cew=float(np.nansum(dn['q_ce']*wts)/wts.sum());assert abs(cew-ln[k]['ce'])<=1e-2*max(1.0,abs(ln[k]['ce'])),(cew,ln[k]['ce'])
     # (d) labels + selection + grid
     lb=LB.labels(w['chunks'],ends,k);nf=int((lb['w_fact']>=0).sum());assert nf>=8 and len(lb['w_fact'])==nW and len(lb['q_fact'])==nQ and (lb['w_fact'][lb['w_fact']>=0].max()<16)
     import e55_sentgrid as GR
-    chunks={'NAT':{k:{**dn}},'SENTPQADAMH':{k:{**ds}}};lab={k:lb};rows=GR.run(chunks,lab,GR.configs()[:20]);t=GR.report(rows,chunks);assert 'Verdict' in t
+    chunks={'NAT':{k:{**dn}},'SENTPQADAMH':{k:{**ds}}};lab={k:lb};rows=GR.run(chunks,lab,GR.configs()[:20]+[c_ for c_ in GR.configs() if c_.get('v6') or c_.get('v7')][::9]);t=GR.report(rows,chunks);assert 'Verdict' in t
     assert float(ds['A'].astype(np.float32).sum(-1).max())<=1.0+1e-2 and np.isfinite(ds['q_ce']).all()
     RES['U47']=f"sentence dump at chunk 9 of a p=1 world: A {A.shape} (groups, heads, {nQ} query sentences, {nW} window sentences), max row sum {float(A.sum(-1).max()):.3f}, deviation from the by-hand aggregation of the full attention rows {err:.1e}; q_ce weighted mean {cew:.3f} vs write CE {ln[k]['ce']:.3f}; {nf} window fact sentences labelled; grid and selection run on the dump"
 TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40,'U41':u41,'U42':u42,'U43':u43,'U44':u44,'U45':u45,'U46':u46,'U47':u47}
