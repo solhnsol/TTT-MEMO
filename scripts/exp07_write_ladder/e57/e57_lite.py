@@ -12,6 +12,7 @@ import e57_common as C
 import e57_news as N
 import e57_events as EV
 import e57_namedevents3 as N3
+import e57_namedevents2 as N2
 CAPN=(10,15,20);FREEZE_SEED=57231;G_MIN=8;NCAND=16;NSP=4;STRATA=(('3-4',3,4),('5-9',5,9),('10-19',10,19),('20+',20,10**9))
 NOUN={'NAME':'name','NUM':'number or amount','DATE':'date'}
 FRAME='Question: In the news about this event, which {noun} is mentioned together with {S}?\nAnswer:'
@@ -91,6 +92,47 @@ def cap_tables(names,res,D,pub_date):
             out[f'{N_}|{rule}']=dict(per=per,targets=len(allb),strata={s[0]:sum(x['stratum']==s[0] for x in allb) for s in STRATA},main=sum(x['main'] for x in allb),sp4=sum(len(x['cross_null'])==NSP for x in allb),tokens=tok_tot,
                 tok_med=sorted(p['tokens'] for p in per)[len(per)//2] if per else 0,tok_max=max((p['tokens'] for p in per),default=0),over8k=sum(p['tokens']>8192 for p in per),events=len(per))
     return out,sel
+def art_counts(r):
+    """lead variant: per article the number of distinct binding sentences (a sentence of the lead that holds S and A of a frozen target) and the number of distinct targets; per (article, target) the number of binding sentences; example sentences"""
+    V=N.variant(r,'lead');n=len(r['arts']);ss_=[set() for _ in range(n)];tg=[0]*n;rep=[];ex=[]
+    for t in V['targets']:
+        for ai,occ in t['occ'].items():
+            ss=[si for si in occ if si<V['kept'][ai]]
+            if ss:tg[ai]+=1;ss_[ai]|=set(ss);rep.append(len(ss));ex.append(dict(S=t['S'],ty=t['ty'],A=t['key'],rid=r['rids'][ai],n_sent=len(ss),sentence=r['sents'][ai][ss[0]]))
+    return dict(n=n,sent=[len(x) for x in ss_],targ=tg,rep=rep,examples=ex)
+def dist(v):
+    n=len(v);d={k:sum(1 for x in v if x==k)/n for k in(0,1,2,3)} if n else {};d['4+']=sum(1 for x in v if x>=4)/n if n else None
+    return dict(n=n,dist=d,mean=sum(v)/n if n else None,median=sorted(v)[n//2] if n else None)
+def binding_tables(names,res,pub_date,seed):
+    """-> dict label -> per event stats + total; labels: 'all', 'N10', 'N20' (main rule selection, articles with the most lead targets first); plus 10 seeded examples"""
+    out={};exs=[]
+    for lab_,N_ in(('all',None),('N10',10),('N20',20)):
+        per=[];A_s=[];A_t=[];A_r=[]
+        for ei,(nm,r) in enumerate(zip(names,res)):
+            if not r['ok']:continue
+            r2=r if N_ is None else subset_view(r,cap_select(r,pub_date,N_)[0]);c=art_counts(r2)
+            if lab_=='all':exs+=[dict(e,event=nm) for e in c['examples']]
+            rep=c['rep'];per.append(dict(event=nm,articles=c['n'],sent=dist(c['sent']),targ=dist(c['targ']),zero=sum(1 for x in c['targ'] if x==0)/max(1,c['n']),rep_pairs=len(rep),rep_ge2=sum(1 for x in rep if x>=2)/max(1,len(rep))))
+            A_s+=c['sent'];A_t+=c['targ'];A_r+=rep
+        out[lab_]=dict(per=per,total=dict(articles=len(A_s),sent=dist(A_s),targ=dist(A_t),zero=sum(1 for x in A_t if x==0)/max(1,len(A_t)),rep_pairs=len(A_r),rep_ge2=sum(1 for x in A_r if x>=2)/max(1,len(A_r))))
+    random.Random(seed).shuffle(exs);return out,exs[:10]
+def membership(X,names,res,D,out):
+    """(1) articles and events: partition check of the clusters, overlap of the title matches per event pair, other-event mentions in the lead; 50 seeded articles for reading"""
+    import itertools
+    cl=pickle.load(open(out/'e57_bigclusters'/'clusters_big.pkl','rb'))['clusters'];cnt=collections.Counter(i for c in cl for i in c['members'])
+    part=dict(clusters=len(cl),articles_in_clusters=len(cnt),in_more_than_one=sum(1 for v in cnt.values() if v>1))
+    m={k:set(v) for k,v in X['matched'].items()};pairs=[]
+    for a_,b_ in itertools.combinations(m,2):
+        o=len(m[a_]&m[b_])
+        if o:pairs.append(dict(a=a_,b=b_,overlap=o,sizes=[len(m[a_]),len(m[b_])],share_of_smaller=o/min(len(m[a_]),len(m[b_]))))
+    rx={k:[re.compile(x,re.I) for x in v] for k,v in N2.EVENTS.items() if k in names}
+    mixed={};sample=[]
+    for nm,r in zip(names,res):
+        if not r['ok']:continue
+        lt=EV.lead_texts(r);oth=[sum(1 for k,g in rx.items() if k!=nm and all(x.search(t) for x in g)) for t in lt]
+        mixed[nm]=dict(articles=len(lt),with_other_event=sum(1 for x in oth if x>0),share=sum(1 for x in oth if x>0)/max(1,len(lt)))
+        for ai in range(len(lt)):sample.append(dict(event=nm,rid=r['rids'][ai],title=D['title'][D['_ridx'][r['rids'][ai]]],lead=lt[ai][:700]))
+    random.Random(FREEZE_SEED+7).shuffle(sample);return dict(partition=part,pairs=sorted(pairs,key=lambda x:-x['overlap']),mixed=mixed),sample[:50]
 def run(a):
     out=pathlib.Path(a.out);fd=out/'e57_lite';fd.mkdir(exist_ok=True);rep=fd/'e57_lite_report.md'
     if rep.exists() and not a.rerun:print('report exists (exit 8; RERUN=1 to redo):',rep);sys.exit(8)
@@ -101,12 +143,14 @@ def run(a):
         arts=[] if not r['ok'] else sorted(((pub_date[x],x) for x in r['rids']))
         events.append(dict(event=ei,name=nm,source=row['source'],matched_titles=row['titles'],independent_articles=row['n_dedup'] if r['ok'] else 0,ok=r['ok'],first=row['first'],last=row['last'],
             targets_before_ethics=row.get('targets_f2_before'),rejected_by_ethics=row.get('rejected_targets'),bank_targets=len(b),articles=[dict(rid=x,date=d) for d,x in arts]))
+    bt,exs=binding_tables(names,res,pub_date,a.seed);mem,samp=membership(X,names,res,D,out)
+    (fd/'lite_binding_examples.json').write_text(json.dumps(dict(note='article sentences (publisher text): stays on the server',examples=exs,sample50_for_reading=samp),indent=1,default=str))
     caps,sel=cap_tables(names,res,D,pub_date);(fd/'lite_caps.json').write_text(json.dumps(dict(rule='main = articles with the most lead targets first, ties by publication date then id; date = first N by publication date',caps=caps,selection=sel),indent=1))
     ej=json.dumps(dict(seed=FREEZE_SEED,rules=dict(g_min=G_MIN,ncand=NCAND,nsp=NSP,frame=FRAME,dropped=list(N3.DROP),n_extra=a.n_extra),events=events),indent=1,default=str)
     bj=json.dumps(bank,indent=1,default=str);(fd/'lite_events.json').write_text(ej);(fd/'lite_bank.json').write_text(bj)
     man=dict(files={'lite_caps.json':hashlib.sha256((fd/'lite_caps.json').read_bytes()).hexdigest(),'lite_events.json':hashlib.sha256(ej.encode()).hexdigest(),'lite_bank.json':hashlib.sha256(bj.encode()).hexdigest()},n_events=len(events),n_events_with_bank=sum(bool(e['bank_targets']) for e in events),n_targets=len(bank),seed=FREEZE_SEED)
-    (fd/'lite_manifest.json').write_text(json.dumps(man,indent=1));txt=report(events,bank,X,a,time.time()-t0,caps);rep.write_text(txt);print(txt[:9000])
-def report(events,bank,X,a,sec,caps=None):
+    (fd/'lite_manifest.json').write_text(json.dumps(man,indent=1));txt=report(events,bank,X,a,time.time()-t0,caps,bt,mem,exs,samp);rep.write_text(txt);print(txt[:9000])
+def report(events,bank,X,a,sec,caps=None,bt=None,mem=None,exs=None,samp=None):
     f=EV.fmt;L=['# E57-lite freeze (CPU, regex proxy)','',f"{len(events)} events ({sum(e['source']=='regex' for e in events)} fixed regex events + {sum(e['source']!='regex' for e in events)} clusters of the job-219 list), {len(bank)} frozen targets (lead variant, c >= 3, after the target-level ethics filter). Candidates / questions / cross null as defined in the docstring of e57_lite.py; the pool uses LEAD exposures (job 220 / 221 used whole-article exposures for the pool tables, so the numbers differ). Run {sec:.0f} s.",'',
        '## events','','| # | event | source | matched titles | independent articles | first | last | targets f>=2 before ethics | rejected | frozen targets | main (G >= 8) |','|---|---|---|---|---|---|---|---|---|---|---|']
     for e in events:
@@ -137,13 +181,28 @@ def report(events,bank,X,a,sec,caps=None):
         for N_ in CAPN:
             L+=['',f'### N = {N_}, rule main: per event','','| event | articles | tokens | targets | main | with 4 S\' |','|---|---|---|---|---|---|']
             L+=[f"| {p['name']} | {p['articles']} | {p['tokens']} | {p['targets']} | {p['main']} | {p['sp4']} |" for p in caps[f'{N_}|main']['per']]
+    if mem:
+        P=mem['partition'];L+=['','## do articles belong to one event only? (1)','',f"- clusters of the title stage (job 215, no size limit): {P['clusters']} clusters, {P['articles_in_clusters']} articles in clusters, **{P['in_more_than_one']} in more than one cluster** (a partition, one cluster per article, when 0). The added clusters are such clusters; the 10 regex events are NOT clusters: they are title matches, so one article can match two events.",'','### overlap of the title matches per event pair (pairs with overlap > 0)','','| event A | event B | titles in both | size A / size B | share of the smaller |','|---|---|---|---|---|']
+        L+=[f"| {x['a']} | {x['b']} | {x['overlap']} | {x['sizes'][0]} / {x['sizes'][1]} | {f(x['share_of_smaller'])} |" for x in mem['pairs']] or ['| none | | | | |']
+        L+=['','### lead mentions another regex event (proxy for mixed stories: the lead text matches ALL regex groups of another event of the fixed regex events)','','| event | articles | with another event in the lead | share |','|---|---|---|---|']
+        L+=[f"| {k} | {v['articles']} | {v['with_other_event']} | {f(v['share'])} |" for k,v in mem['mixed'].items()]
+        L+=['',"- 50 seeded articles for READING (title + the first 700 characters of the lead) are in lite_binding_examples.json on the server (publisher text, not in this report); the manual judgement 'does the lead mix different events' is NOT made by this job. Their titles:"]+[f"  - {x['event']}: {x['title'][:100]}" for x in samp]
+    if bt:
+        L+=['','## binding sentences in the lead of an article (2)','','Binding sentence = a sentence of the lead (about 350 tokens) that holds S and A of a frozen target (c >= 3). Per article: distinct binding sentences, and distinct targets present. Shares of articles with 0 / 1 / 2 / 3 / 4+.','']
+        for lab_,title in(('all','all independent articles of the events'),('N10','N = 10 per event (main rule: articles with the most lead targets first)'),('N20','N = 20 per event (main rule)')):
+            T=bt[lab_];L+=[f'### {title}','','| event | articles | binding sentences: 0 / 1 / 2 / 3 / 4+ | mean | median | distinct targets: 0 / 1 / 2 / 3 / 4+ | mean | median | articles without target | (article, target) pairs | pairs with >= 2 sentences |','|---|---|---|---|---|---|---|---|---|---|---|']
+            dd=lambda x:' / '.join(f(x['dist'][k]) for k in(0,1,2,3,'4+'))
+            for p_ in T['per']+[dict(event='ALL EVENTS',**T['total'])]:
+                L.append(f"| {p_['event']} | {p_['articles']} | {dd(p_['sent'])} | {f(p_['sent']['mean'])} | {p_['sent']['median']} | {dd(p_['targ'])} | {f(p_['targ']['mean'])} | {p_['targ']['median']} | {f(p_['zero'])} | {p_['rep_pairs']} | {f(p_['rep_ge2'])} |")
+            L.append('')
+        L+=['Pairs with >= 2 sentences = the same target repeated inside one article lead (possible within-article shadowing). Ten seeded examples (S, A, event; the sentences are in lite_binding_examples.json on the server):','']+[f"- {e['event']} | S = {e['S']} | A = {e['A']} ({e['ty']}) | {e['n_sent']} binding sentence(s) in the article" for e in exs]
     L+=['','Titles of the added clusters are shown only to identify them; no article text is written.']
     return '\n'.join(L)+'\n'
 def _selftest():
     def after(td):
         a=argparse.Namespace(out=str(td),dup_jac=0.5,min_articles=5,min_domains=5,min_c=3,workers=1,seed=5,rerun=True,n_extra=4,drop=())
         N3.DROP=();run(a);fd=td/'e57_lite';B=json.load(open(fd/'lite_bank.json'));E=json.load(open(fd/'lite_events.json'));M=json.load(open(fd/'lite_manifest.json'))
-        assert B and M['n_targets']==len(B) and (fd/'e57_lite_report.md').exists() and (fd/'lite_caps.json').exists() and 'article cap per event' in (fd/'e57_lite_report.md').read_text() and 'lite_caps.json' in M['files']
+        assert B and M['n_targets']==len(B) and (fd/'e57_lite_report.md').exists() and (fd/'lite_caps.json').exists() and 'article cap per event' in (fd/'e57_lite_report.md').read_text() and 'lite_caps.json' in M['files'] and (fd/'lite_binding_examples.json').exists() and 'binding sentences in the lead' in (fd/'e57_lite_report.md').read_text() and 'one event only' in (fd/'e57_lite_report.md').read_text()
         for b in B:
             assert b['question'].startswith('Question:') and b['subject_surface'] in b['question'] and all(c['key']!=b['answer_key'] for c in b['candidates']) and b['stratum'] in('3-4','5-9','10-19','20+')
             assert all(u['S']!=b['subject_key'] for u in b['cross_null']) and b['G']==len(b['candidates']) and b['main']==(b['G']>=G_MIN)
