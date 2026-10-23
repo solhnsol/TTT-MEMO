@@ -114,7 +114,7 @@ class Ladder55(s3.Ladder3):
             Kh[l]=K;Vh[l]=V;del K,V
             if len(ids)>=32*CH and (l%4==3 or l==nl-1):print(f'    record layer {l+1}/{nl}: {time.monotonic()-t0:.0f}s',flush=True)
         return Kh,Vh,h
-    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None,read_hook=None,hook_chunks=(),norm_targets=None,chunks_meta=None,diag_fn=None,diag_chunks=(),diag_multi=None):
+    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None,read_hook=None,hook_chunks=(),norm_targets=None,chunks_meta=None,diag_fn=None,diag_chunks=(),diag_multi=None,uv=None):
         """-> {'log': per-chunk dicts, 'reads': {chunk: {...state file / hash / canary}}, 'stream_hash', 'clip_bind_frac'}"""
         assert arm in E.ARMS,arm
         if arm not in IMPLEMENTED:raise NotImplementedError(f'arm {arm} is not implemented')
@@ -147,6 +147,9 @@ class Ladder55(s3.Ladder3):
                 else:
                     arm_k=('SENTPQ' if k%2==0 else 'NAT') if arm=='ALT' else (E.ADAM[arm][0] if arm in E.ADAM else arm)       # ALT: masked loss on the 1st, 3rd, ... chunk (k even), unmasked on the others, one forward each
                     Kc,Vc,keep,st_w,pl=self.window_inputs(arm_k,k,p,recs,sts,cnt)
+                    if arm in E.UVARMS:
+                        assert uv is not None and arm_k=='NAT','UV / RS arms need the uv object (e55_uv.UV)'
+                        keep,uvinfo=uv.keep(k,m,Kc,Vc,ids_['real'][k*CH:(k+1)*CH],keep);self.n_masked_keys=int((~keep).sum());self.n_masked_pairs=self.n_masked_keys*CH;extra_log=dict(uvinfo)      # E55 32.8: label-free sentence-vote mask (1-D keep over the window keys) computed with the weights BEFORE this write
                     if cnt:assert len(cnt)==2,('expected exactly the K and V leaves of the suffix SWA state, got',len(cnt))
                     pref_w=self.prefix_masked(m,jnp.asarray(ids_['real'][k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep))
                     if arm in E.ADAM:

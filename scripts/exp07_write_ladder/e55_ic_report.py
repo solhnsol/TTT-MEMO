@@ -130,7 +130,69 @@ def selftest():
             r_=rec(1.0+0.1*len(ar)%1);(d9/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (16,32,64,128)},'W0':{'out':r_['W0']['out']}}))
             (d9/f'E55_{tg}_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'n_masked_keys':600,'update_norm':0.01} for _ in range(128)],'dclm_w0':3.0,'dclm_end':3.04,'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.03,'_tail_nll':3.0},'canary_by_app':{'32':{'_gen_nll':3.01,'_tail_nll':3.0},'64':{'_gen_nll':3.02,'_tail_nll':3.0},'128':{'_gen_nll':3.03,'_tail_nll':3.0}}}))
     ERR.clear();t=q34_report(d9,[61,62,63]);assert 'PRE-SET success rule' in t and ' no |' in t.split("(3')")[1] and 'norm check' in t and 'cells shown as n/a failed' not in t,t
+    d10=Path(tempfile.mkdtemp())
+    for sd in (61,):
+        for tg,ar in [('uv',x) for x in ('UVA','UVB','UVC','RSA','RSB','RSC')]+[('q1b',x) for x in ('SENTPQADAMH','NATADAM')]:
+            r_=rec(1.0+0.1*len(ar)%1);(d10/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (16,32,64,128)},'W0':{'out':r_['W0']['out']}}))
+            (d10/f'E55_{tg}_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'n_masked_keys':600,'lab_recall':0.8,'lab_precision':0.7,'lab_bg_false':0.17} for _ in range(128)],'dclm_w0':3.0,'dclm_end':3.04,'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.03,'_tail_nll':3.0}}))
+    ERR.clear();t=uv_report(d10,[61]);assert 'verdict (pre-set rule' in t and 'one seed: first observation' in t and 'cells shown as n/a failed' not in t and '0.80' in t,t
     print('e55_ic_report SELFTEST OK')
+def uv_report(d,seeds,tag='uv',ref_tag='q1b',apps=(16,32,64,128),out=None,load=None):
+    """E55 32.8 online label-free sentence-vote masks. UVA/UVB/UVC (g3 sentence votes p25 k2 / p25 k3 / p20 k1) and the matched random-sentence controls RSA/RSB/RSC (same hidden-token count per chunk), all with the Adam-0.5N write (step = 0.5 x SENTPQ-STD update norm of the same seed), against SENTPQ-ADAM-0.5N (hide every fact sentence, reference) and NAT-ADAM (no mask) of tag q1b. Mask quality columns come from the per-chunk log (labels are used for the log only): hidden % of the window, fact-token recall, precision, background false-mask rate (chunks >= 8). Pre-set rule (design 32.8): R = g(UV) / g(SENTPQ-ADAM-0.5N) at a=128; R >= 0.7 and g(UV) - g(RS) >= +0.10 -> label-free sentence masking works; R <= 0.3 -> does not; otherwise undetermined. One seed = first observation."""
+    load=load or (lambda f:json.load(open(f)));arms=[('UVA','UV-A (g3, p25, k2)','RSA'),('UVB','UV-B (g3, p25, k3)','RSB'),('UVC','UV-C (g3, p20, k1)','RSC')];refs={'SENTPQADAMH':'SENTPQ-ADAM-0.5N (hide all fact sentences, reference)','NATADAM':'NAT-ADAM (no mask, reference)'};G={};S={}
+    for sd in seeds:
+        for ar in [a_[0] for a_ in arms]+[a_[2] for a_ in arms]:
+            for dd,dst in ((G,'read'),(S,'saved')):
+                f=Path(d)/f'E55_{tag}_{ar}_s{sd}.{dst}.json'
+                if f.exists():dd[sd,ar]=load(f) if dst=='read' else json.load(open(f))
+        for ar in refs:
+            for dd,dst in ((G,'read'),(S,'saved')):
+                f=Path(d)/f'E55_{ref_tag}_{ar}_s{sd}.{dst}.json'
+                if f.exists():dd[sd,ar]=load(f) if dst=='read' else json.load(open(f))
+    ERR.clear();W=8192
+    def pooled(ar,a,ctx='out'):
+        use=[s_ for s_ in seeds if (s_,ar) in G]
+        try:
+            if not use:return None
+            cx=[ctx if ctx!='in' else in_ctx(G[s_,ar]) for s_ in use]
+            return None if None in cx else np.concatenate([fact_g(G[s_,ar],a,c_) for s_,c_ in zip(use,cx)])
+        except Exception as e:ERR.append(f'{ar}@{a}: {e!r}');return None
+    mean=lambda v:float(np.mean(v)) if v is not None else float('nan');f_=lambda v,fm='{:+.3f}':'n/a' if v is None or v!=v else fm.format(v)
+    def lg(ar,key,lo=8):
+        v=[e[key] for s_ in seeds if (s_,ar) in S for e in S[s_,ar].get('log',[])[lo:] if e.get(key) is not None];return float(np.mean(v)) if v else None
+    def share(ar):
+        v=[e.get('n_masked_keys',0)/W for s_ in seeds if (s_,ar) in S for e in S[s_,ar].get('log',[])[8:]];return 100*float(np.mean(v)) if v else None
+    def crise(ar,a):
+        r=[]
+        for s_ in seeds:
+            x=S.get((s_,ar),{});c=(x.get('canary_by_app') or {}).get(str(a)) or (x.get('canary_end') if a==128 else None);w=x.get('canary_w0')
+            if c and w:r.append(max(c[k]-w[k] for k in ('_gen_nll','_tail_nll')))
+        return max(r) if r else None
+    def dclm(ar):
+        r=[S[s_,ar]['dclm_end']-S[s_,ar]['dclm_w0'] for s_ in seeds if (s_,ar) in S and S[s_,ar].get('dclm_end') is not None and S[s_,ar].get('dclm_w0') is not None];return float(np.mean(r)) if r else None
+    ref=mean(pooled('SENTPQADAMH',128));ref64=mean(pooled('SENTPQADAMH',64))
+    L=[f'# E55 32.8 online sentence-vote masks (UNIONVOTE) report, seeds {list(seeds)} (tag {tag}, references from tag {ref_tag})','','g = out-of-window rank gain u (W0 subtracted, unexposed question frames), 95% fact-bootstrap CI; Adam-0.5N write for every row. The mask of UV rows is computed online from the attention of the write chunk itself (all sentences of the chunk as queries, last third of the prefix layers, top-8 keys per head and token, sentences from the token stream); no label enters the mask. RS rows hide random window sentences with the same hidden-token count per chunk as the UV row they are matched to.','',
+       '| arm | hidden % of window | fact recall | precision | bg false-mask | '+' | '.join(f'g a={a}' for a in apps)+' | R a=64 | R a=128 | in-window g a=128 | DCLM rise a=128 | canary rise a=32 / 64 / 128 |','|---|---|---|---|---|'+'---|'*(len(apps)+5)]
+    rows=[]
+    for u,nm,r in arms:rows+=[(u,nm),(r,nm.split(' ')[0].replace('UV','RS')+' random sentences, same hidden tokens')]
+    rows+=[(k,v) for k,v in refs.items()]
+    for ar,nm in rows:
+        ps={a:pooled(ar,a) for a in apps};pi=pooled(ar,128,'in')
+        if all(v is None for v in ps.values()):L.append(f'| {nm} | n/a |'+' n/a |'*(len(apps)+8));continue
+        r64=mean(ps.get(64))/ref64 if ref64==ref64 and ref64!=0 and ps.get(64) is not None else float('nan');r128=mean(ps.get(128))/ref if ref==ref and ref!=0 and ps.get(128) is not None else float('nan')
+        L.append(f'| {nm} | {f_(share(ar),"{:.1f}")} | {f_(lg(ar,"lab_recall"),"{:.2f}")} | {f_(lg(ar,"lab_precision"),"{:.2f}")} | {f_(lg(ar,"lab_bg_false"),"{:.2f}")} | '+' | '.join(fmt(boot(ps[a])) if ps[a] is not None else 'n/a' for a in apps)+f' | {f_(r64,"{:.2f}")} | {f_(r128,"{:.2f}")} | '+(fmt(boot(pi)) if pi is not None else 'n/a')+f' | {f_(dclm(ar))} | '+' / '.join(f_(crise(ar,a)) for a in (32,64,128))+' |')
+    L+=['','## verdict (pre-set rule, design 32.8)','','| arm | R a=128 | g(UV) - g(RS) at a=128 [95% CI] | verdict |','|---|---|---|---|']
+    for u,nm,r in arms:
+        pu=pooled(u,128);pr=pooled(r,128);R=mean(pu)/ref if pu is not None and ref==ref and ref!=0 else float('nan')
+        if pu is not None and pr is not None and len(pu)==len(pr):dd=boot(pu-pr);dtxt=fmt(dd);dg=dd[0]
+        else:dtxt='n/a';dg=float('nan')
+        v='no data' if R!=R else ('WORKS (label-free sentence masking recovers the reference)' if R>=0.7 and dg==dg and dg>=0.10 else 'FAILS (R <= 0.3)' if R<=0.3 else 'undetermined')
+        L.append(f'| {nm} | {f_(R,"{:.2f}")} | {dtxt} | {v}{" (one seed: first observation)" if len(seeds)==1 else ""} |')
+    L+=['','Reading notes: recall / precision / bg false-mask are measured against the fact table of the world and appear only here (the mask never saw it). A low recall with a high R would mean the unmasked part of the shadowing is not needed; a high recall with a low R would mean the shadow sits somewhere the sentence unit does not reach (compare SENTPQ-ADAM-0.5N). R and verdict use the reference g(128) pooled over the same seeds. Definition note: the offline diagnostic of design 32.7 (e55_sentsel_vote_script.py) used the 16 question spans of the chunk as query units; here every sentence of the write chunk is a query unit (label-free), so recall / precision need not reproduce the 32.7 numbers (0.79 / 0.71 at p25 k2). Candidates (>= 4 tokens), score (sum of top-8 hits), p and k are the same.']
+    if ERR:L+=['',f'cells shown as n/a failed: {ERR}']
+    t='\n'.join(L)+'\n'
+    if out:open(out,'w').write(t)
+    return t
 def q1b_report(d,seeds,tag='q1b',nat_tag='v3a',arms=('SENTPQ','SENTPQADAM','NATADAM','SENTPQADAMH'),apps=(16,32,64,128),out=None,load=None):
     """E55 design 29.3 Q1-B (Adam-direction write on the masked / unmasked online stream, window kept, per-query SENTPQ convention): out-of-window g (u, W0 subtracted) at a = 16, 32, 64, 128 per arm (pooled over seeds, fact bootstrap), in-window g at 128, canary NLL rise at a = 32, 64, 128 (reference W0, and NAT of job 181 at a = 128), clip share and norm ratio, and the PRE-SET verdict rules (stated in the report body): SPEED, GAIN KEPT, DAMAGE relative and absolute, kept separate; plus the recorded item NAT-ADAM / SENTPQ-ADAM."""
     load=load or (lambda f:json.load(open(f)));G={};S={};NATS={}
@@ -637,6 +699,8 @@ if __name__=='__main__':
         _s.argv.remove('--q1b');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q1b');a=ap.parse_args();print(q1b_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     if '--all' in _s.argv:
         _s.argv.remove('--all');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='all');a=ap.parse_args();print(all_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
+    if '--uv' in _s.argv:
+        _s.argv.remove('--uv');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61');ap.add_argument('--out');ap.add_argument('--tag',default='uv');ap.add_argument('--ref-tag',default='q1b');a=ap.parse_args();print(uv_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,a.ref_tag,out=a.out));_s.exit(0)
     if '--q34' in _s.argv:
         _s.argv.remove('--q34');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q34');ap.add_argument('--ref-tag',default='q1b');a=ap.parse_args();print(q34_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,a.ref_tag,out=a.out));_s.exit(0)
     if '--ans' in _s.argv:
