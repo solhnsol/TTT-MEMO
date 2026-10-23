@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import e55_swap as E
 import s3
+import rope_fly;rope_fly.install()      # RoPE computed at the requested positions: no 2*seq_len table, so streams longer than the table (512 chunks) work and no compiled function carries a table constant (E57 / job 208)
 jax,jnp,eqx=s3.jax,s3.jnp,s3.eqx
 CH=1024;WIN=8192;NW=E.NW
 IMPLEMENTED0=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT','NATADAM','SENTPQADAM','SENTPQADAMH')
@@ -97,7 +98,7 @@ class Ladder55(s3.Ladder3):
         """what the write forward of chunk k gets: (Kc,Vc,keep,st_suffix,plan). recs[name] = (Kh,Vh) numpy [layers,T,nh,d]; sts[name] = suffix chain state."""
         pl=E.plan(arm,k,p);keep=keep_vector(pl)
         if arm in ('NAT','NATM','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75'):
-            Kc,Vc=self.ctx_kv(*recs['real'],k);st=sts['real']
+            Kc,Vc=self.ctx_kv(*recs['real'],self._km(k) if getattr(self,'_km',None) else k);st=sts['real']
             if arm in ('SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75'):keep,self.n_masked_keys=E.token_masks(arm,k,self.chunks_meta,CH,NW);self.n_masked_pairs=int((~keep).sum()) if keep.ndim==2 else int((~keep).sum())*CH
         else:
             src_k={n:recs[n][0] for n in recs};src_v={n:recs[n][1] for n in recs}
@@ -114,13 +115,23 @@ class Ladder55(s3.Ladder3):
             Kh[l]=K;Vh[l]=V;del K,V
             if len(ids)>=32*CH and (l%4==3 or l==nl-1):print(f'    record layer {l+1}/{nl}: {time.monotonic()-t0:.0f}s',flush=True)
         return Kh,Vh,h
-    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None,read_hook=None,hook_chunks=(),norm_targets=None,chunks_meta=None,diag_fn=None,diag_chunks=(),diag_multi=None,uv=None):
-        """-> {'log': per-chunk dicts, 'reads': {chunk: {...state file / hash / canary}}, 'stream_hash', 'clip_bind_frac'}"""
+    def run_stream(self,arm,p,real_ids,decoy_ids=None,bg_ids=None,read_chunks=(),nch=None,tag='',smoke=False,log=print,weights0=None,canary_chunks=None,read_hook=None,hook_chunks=(),norm_targets=None,chunks_meta=None,diag_fn=None,diag_chunks=(),diag_multi=None,uv=None,periodic=None,start_chunk=0,sts0=None):
+        """periodic (E57 1a, NAT only) = {'round_chunks': rc, 'rec_chunks': nrec}: the stream is a cyclic repetition of rounds of rc chunks; the natural K,V and prefix outputs are recorded for the first nrec chunks only (nrec a multiple of rc, >= 2 rc) and the window / prefix outputs / query positions of every later chunk k are those of the chunk kmap(k) = (nrec-rc) + ((k-(nrec-rc)) mod rc) of the last recorded round (relative RoPE: only the offsets matter; absolute positions stay below nrec*1024, inside the RoPE table). start_chunk / sts0: resume a run (weights0 = the weights after chunk start_chunk-1, sts0 = out['sts_final'] of that run).
+        -> {'log': per-chunk dicts, 'reads': {chunk: {...state file / hash / canary}}, 'stream_hash', 'clip_bind_frac'}"""
         assert arm in E.ARMS,arm
         if arm not in IMPLEMENTED:raise NotImplementedError(f'arm {arm} is not implemented')
         self.chunks_meta=chunks_meta;self.n_masked_keys=0
         if arm in CHUNK_META_ARMS:assert chunks_meta is not None and len(chunks_meta)>=(nch or len(real_ids)//CH),'SENT / KMASK need the sentence table of the world (chunks_meta)'
         rt=self.rt;n=len(real_ids)//CH;nch=nch or n;assert nch<=n and len(real_ids)%CH==0
+        kmap=None;nrec=nch;self._km=None
+        if periodic:
+            rc=int(periodic['round_chunks']);nrec=int(periodic['rec_chunks']);base_=nrec-rc
+            assert arm=='NAT' and uv is None and diag_fn is None and diag_multi is None and decoy_ids is None and bg_ids is None and read_hook is None,'periodic K,V sharing is for the plain NAT arm only'
+            assert rc>=1 and nrec%rc==0 and nrec>=2*rc and nrec<=nch,(rc,nrec,nch)
+            try:
+                sl=int(rt.cfg.model.seq_len);assert not os.environ.get('ROPE_TABLE') or nrec*CH<=2*sl,('recorded positions exceed the RoPE table (2*seq_len)',nrec*CH,2*sl)
+            except AttributeError:pass          # runtime without cfg: the caller checks the table size
+            kmap=lambda k_:k_ if k_<nrec else base_+((k_-base_)%rc);self._km=kmap
         names=['real']+(['decoy'] if arm in ('SWD','SWDS','SWDO') or (diag_multi is not None and decoy_ids is not None) else [])+(['bg'] if arm=='SWB' else [])
         ids_={'real':np.asarray(real_ids),'decoy':None if decoy_ids is None else np.asarray(decoy_ids),'bg':None if bg_ids is None else np.asarray(bg_ids)}
         for nm in names:assert ids_[nm] is not None and len(ids_[nm])>=nch*CH,(nm,'stream missing or too short')
@@ -128,13 +139,18 @@ class Ladder55(s3.Ladder3):
         m=weights0 if weights0 is not None else rt.base;st_all=s3.clone_state(rt.state_all);cum=0.0;adam=None
         if arm in E.ADAM:assert norm_targets is not None and len(norm_targets)>=nch,'Adam arms need the per-chunk update norms of the NAT run of the same seed (norm_targets)'
         with rt.mesh:
-            seqs={nm:self._stream_seq(ids_[nm],nch) for nm in names};prefs={nm:rt.prefix(rt.base,seqs[nm]) for nm in names}
+            seqs={nm:self._stream_seq(ids_[nm],nch) for nm in names};prefs={nm:rt.prefix(rt.base,seqs[nm] if not periodic else self._stream_seq(ids_[nm],nrec)) for nm in names}
             recs={}
             for nm in names:
-                t0=time.monotonic();Kh,Vh,_=self.record(ids_[nm][:nch*CH]);recs[nm]=(Kh,Vh);log(f'  recorded natural K,V of {nm} ({Kh.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s')
+                t0=time.monotonic();rk=(hashlib.sha256(np.asarray(ids_[nm][:nrec*CH],np.int64).tobytes()).hexdigest(),nrec);rc_=getattr(self,'rec_cache',None)       # rec_cache (a dict set by the caller, E55 32.10 sentence dump): the same stream is recorded once for several arms
+                if rc_ is not None and rk in rc_:Kh,Vh=rc_[rk];recs[nm]=(Kh,Vh);log(f'  natural K,V of {nm} taken from the record cache');continue
+                Kh,Vh,_=self.record(ids_[nm][:nrec*CH]);recs[nm]=(Kh,Vh)
+                if rc_ is not None:rc_[rk]=(Kh,Vh)
+                log(f'  recorded natural K,V of {nm} ({Kh.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s')
             sts={nm:s3.clone_state(rt.state_suffix) for nm in names}
-            if self.canary:out['canary_w0']=self.canary(m)
-            for k in range(nch):
+            if sts0 is not None:sts['real']=sts0
+            if self.canary and start_chunk==0:out['canary_w0']=self.canary(m)
+            for k in range(start_chunk,nch):
                 t0=time.monotonic();old=m;c=rt.chunk(seqs['real'],k);cnt=[]
                 self.n_masked_keys=0;self.n_masked_pairs=0;extra_log={}
                 if arm in E.MIX:
@@ -151,7 +167,7 @@ class Ladder55(s3.Ladder3):
                         assert uv is not None and arm_k=='NAT','UV / RS arms need the uv object (e55_uv.UV)'
                         keep,uvinfo=uv.keep(k,m,Kc,Vc,ids_['real'][k*CH:(k+1)*CH],keep);self.n_masked_keys=int((~keep).sum());self.n_masked_pairs=self.n_masked_keys*CH;extra_log=dict(uvinfo)      # E55 32.8: label-free sentence-vote mask (1-D keep over the window keys) computed with the weights BEFORE this write
                     if cnt:assert len(cnt)==2,('expected exactly the K and V leaves of the suffix SWA state, got',len(cnt))
-                    pref_w=self.prefix_masked(m,jnp.asarray(ids_['real'][k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep))
+                    pref_w=self.prefix_masked(m,jnp.asarray(ids_['real'][k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32((kmap(k) if kmap else k)*CH),jnp.asarray(keep))
                     if arm in E.ADAM:
                         f32=jnp.float32;g_,ce=self.grad_mask(m,st_w,c,pref_w,jnp.asarray(keep))
                         if adam is None:z=jax.tree.map(lambda x:jnp.zeros(x.shape,f32),m.inner_parameters());adam={'mu':z,'nu':jax.tree.map(jnp.zeros_like,z),'t':jnp.asarray(0.0,f32)}
@@ -167,8 +183,8 @@ class Ladder55(s3.Ladder3):
                         for cn in diag_multi.conds:   # arm names of the window conditions
                             Kx,Vx,kx,sx,_pl=self.window_inputs(cn,k,p,recs,sts,[]);conds[cn]=(Kx,Vx,kx,sx)
                         out.setdefault('diag_multi',{})[k]=diag_multi(k,m,conds,ids_['real'][k*CH:(k+1)*CH],c,out['log'])
-                    if diag_fn is not None and k in diag_chunks:out.setdefault('diag',{})[k]=diag_fn(k,m,Kc,Vc,keep,ids_['real'][k*CH:(k+1)*CH])      # E55 27.8: forward-only attention diagnostic with the window inputs of this chunk, weights before its write
-                for nm in names:sts[nm]=self.read_state(old,sts[nm],rt.chunk(seqs[nm],k),prefs[nm][k*CH:(k+1)*CH])   # same weights (start of the chunk) for every chain
+                    if diag_fn is not None and k in diag_chunks:out.setdefault('diag',{})[k]=(diag_fn(k,m,Kc,Vc,keep,ids_['real'][k*CH:(k+1)*CH],ctx={'st_w':st_w,'c':c,'pref_w':pref_w}) if getattr(diag_fn,'wants_ctx',False) else diag_fn(k,m,Kc,Vc,keep,ids_['real'][k*CH:(k+1)*CH]))      # E55 27.8: forward-only attention diagnostic with the window inputs of this chunk, weights before its write
+                for nm in names:sts[nm]=self.read_state(old,sts[nm],rt.chunk(seqs[nm],k),prefs[nm][(kmap(k) if kmap else k)*CH:((kmap(k) if kmap else k)+1)*CH])   # same weights (start of the chunk) for every chain
                 scale=adam_scale if arm in E.ADAM else 1.0
                 if arm=='NATM':          # size-matched NAT: the NAT update of chunk k is rescaled to the update norm norm_targets[k] (the per-chunk norm of arm SWD of the same seed); direction unchanged
                     assert norm_targets is not None and len(norm_targets)>=nch,'NATM needs the per-chunk update norms of the arm to match'
@@ -190,5 +206,6 @@ class Ladder55(s3.Ladder3):
                 elif k%8==0:log(f'  {arm} chunk {k+1}/{nch} {ent["sec"]:.1f}s ce {ent["ce"]:.3f}')
                 if adam is not None and reading and self.adam_offload:adam={'mu':jax.tree.map(lambda x:jnp.asarray(x,jnp.float32),adam['mu']),'nu':jax.tree.map(lambda x:jnp.asarray(x,jnp.float32),adam['nu']),'t':adam['t']}
             out['final_hash']=s3.reuse._hash_pytree(m.inner_parameters())[0];out['model']=m
+            if periodic or start_chunk or sts0 is not None:out['sts_final']=sts['real']      # resume bundle (callers of the E57 runs strip 'model' and 'sts_final' before json)
         cs=[e['coef'] for e in out['log']];out['clip_bind_frac']=sum(c_<1 for c_ in cs)/len(cs);out['cum_update_norm']=cum
         return out

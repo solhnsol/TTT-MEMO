@@ -81,7 +81,7 @@ if __name__=='__main__':
         nm,_,pth=x.partition('=');refs[nm]=Path(pth).read_text(errors='ignore') if Path(pth).exists() else None
     miss=[k for k,v in refs.items() if v is None]
     if a.require_refs and miss:print('reference files missing:',miss);sys.exit(2)
-    bg=G.default_bg_pool(a.seed,enc,refs) if a.default_refs else G.default_bg_pool(a.seed)
+    bg=G.default_bg_pool(a.seed,enc,refs,books=G.cell_books(a.cell)) if a.default_refs else G.default_bg_pool(a.seed,books=G.cell_books(a.cell))
     w=G.cell_world(a.seed,a.cell,enc,bg,decoys=('names','nofact'));R,t,ok=check(w,enc,bg,refs);print(t)
     if a.out:Path(a.out).write_text(t)
     sys.exit(0 if ok else 1)

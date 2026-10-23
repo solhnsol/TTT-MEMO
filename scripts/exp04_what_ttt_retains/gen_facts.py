@@ -53,7 +53,11 @@ def _clean_paragraphs(books):
             if p not in seen:seen.add(p);out.append(p)           # exact duplicates (after the name stripping) removed
     return out
 _POOL_CACHE={}
-def default_bg_pool(seed,enc=None,refs=None,books=('pg98.txt','pg1260.txt','pg768.txt','pg766.txt')):
+DEFAULT_BOOKS=('pg98.txt','pg1260.txt','pg768.txt','pg766.txt')
+EXT_BOOK_IDS=(84,74,76,1400,730,158,161,121,105,141,145,550,345,174,120,829,2701,1257,36,2852)      # E57 section 12 D: 20 more public-domain novels (e55_bgbooks.py fetches / pins them); the 512-chunk world needs ~4x the background of the 128-chunk worlds
+CELL_BOOKS={c:DEFAULT_BOOKS+tuple(f'pg{n}.txt' for n in EXT_BOOK_IDS) for c in ('v3_64_4','v3_16_4')}
+def cell_books(cell):return CELL_BOOKS.get(cell,DEFAULT_BOOKS)
+def default_bg_pool(seed,enc=None,refs=None,books=DEFAULT_BOOKS):
     """E55 v3 (design 13.3): paragraph pool of the four narrative books, cleaned like default_bg_all (names stripped, 200-900 characters), exact duplicates removed, and (when enc is given) FILTERED at the level of the background units the streams really use (make_units): in a fixed canonical order a paragraph is dropped if any of its units is a unit already kept, if any of its 13-grams was already kept in another paragraph, or if it shares a 13-gram with a reference text (refs = reference_grams(enc): SQuAD readout context, canary books, frame bank, question frames; a None entry raises). The kept paragraphs are then shuffled with a SEED-SPECIFIC order; consumers take paragraphs from the front of their own slice (no cycling)."""
     key=(tuple(books),id(enc) if enc is not None else None)
     if enc is None:paras=_clean_paragraphs(books)
@@ -352,6 +356,10 @@ CELLS={'base':dict(k=32,n=1,p=2,bank='50'),'p1':dict(k=16,n=1,p=1,bank='50'),'p4
        # design v3 (E55 section 13): 128 exposures per fact, bank of 300 frames, p = 1; read points in APPEARANCES = exposures / n (exposures 16, 32, 64, 128)
        'v3_16_1':dict(k=16,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),'v3_8_1':dict(k=8,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),'v3_8_4':dict(k=8,n=4,p=1,bank='300',n_app=32,read_apps=(4,8,16,32)),
        'v3_4_8':dict(k=4,n=8,p=1,bank='300',n_app=16,read_apps=(2,4,8,16)),'v3_4_1':dict(k=4,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128)),
+       # E57 section 12 recommendation D: 64 facts, period p = 4 (16 sentences per chunk as in v3_16_1), 128 exposures per fact, 512 chunks = 512 updates; same name / place pools, bank of 300 frames
+       'v3_64_4':dict(k=64,n=1,p=4,bank='300',n_app=128,read_apps=(16,32,64,128)),
+       # spacing control for v3_64_4 (E57 section 12 D): the baseline fact count (16) at period p = 4 (4 sentences per chunk), 128 exposures, 512 chunks
+       'v3_16_4':dict(k=16,n=1,p=4,bank='300',n_app=128,read_apps=(16,32,64,128)),
        # design 19 (R2 + R3): 64 exposures per fact, k = 16, p = 1; frames unique per fact (64 of the 300) or the same 64 frames for every fact (Latin assignment)
        'ic_u64':dict(k=16,n=1,p=1,bank='300',n_app=64,read_apps=(16,32,64)),'ic_s64':dict(k=16,n=1,p=1,bank='shared64',n_app=64,read_apps=(16,32,64)),
        'ic_r64':dict(k=16,n=1,p=1,bank='shared16rep',n_app=64,read_apps=(16,32,64))}

@@ -35,7 +35,7 @@ def decoy_kinds(arms,decoy):
 def build(a,seed=None,read_apps=None,arms=None):
     seed=a.seed if seed is None else seed;arms=(a.arms.split(',') if arms is None else arms)
     if getattr(a,'stub',False):enc=G.StubTok();bg=G._synth_bg(9000);tf=__file__                       # CPU test without tokenizers / lab data
-    else:tf=a.tokenizer_file or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.load_enc(tf);bg=G.default_bg_pool(seed,enc,G.reference_grams(enc,ROOT)) if getattr(a,'bg','default')=='pool' else G.default_bg()    # pool (design v3 13.3): 4 books, deduplicated, seed-specific order, no cycling
+    else:tf=a.tokenizer_file or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.load_enc(tf);bg=G.default_bg_pool(seed,enc,G.reference_grams(enc,ROOT),books=G.cell_books(a.cell)) if getattr(a,'bg','default')=='pool' else G.default_bg()    # pool (design v3 13.3): 4 books, deduplicated, seed-specific order, no cycling
     kw={} if read_apps is None else {'read_apps':tuple(sorted(read_apps))}
     w=G.cell_world(seed,a.cell,enc,bg,decoys=decoy_kinds(arms,getattr(a,'decoy','names')) or ('names',),**kw);return enc,w,tf
 def streams(w,enc=None):
@@ -272,6 +272,33 @@ def attdump(a):
     L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_attdump_s{sd}',canary=None);dfn=DG.make_dump_fn(L,rt,s3,w['chunks'],topm=a.dump_topm,log=lambda *x:print(*x,flush=True));t0=time.monotonic()
     r=L.run_stream('NAT',1,ids,nch=max(dch)+1,tag='attdump',log=lambda *x:print(*x,flush=True),diag_fn=dfn,diag_chunks=set(dch),chunks_meta=w['chunks'])
     np.savez_compressed(fn,**DG.flat_dump(r['diag']));json.dump({'seed':sd,'cell':a.cell,'stream_sha':sha,'code':git_rev(),'diag_chunks':dch,'topm':a.dump_topm,'sec_total':time.monotonic()-t0,'npz_bytes':fn.stat().st_size},open(OUT/f'e55_attdump_s{sd}.json','w'));print('wrote',fn,fn.stat().st_size,'bytes')
+def sentdump(a):
+    """E55 32.10 sentence-level selection dump (forward only at the dump chunks): the stream of seed --seed (cell v3_16_1, 128 chunks) is run in two arms, NAT and SENTPQADAMH (SENTPQ-ADAM-0.5N, norm target = the SENTPQ update norms of tag --norm-ref-tag, default q1b); at chunks --diag-chunks (default 16,32,64,127) the weights BEFORE the write of the chunk (= the state after k writes = the a = k read-point state; k = 127 is the exact state before the last write, not the a = 128 approximation) are used for the sentence attention dump with the UNMASKED real 8-chunk window (e55_sentdump). Nothing of the fact table enters the dump; the labels go to a separate file. Writes $OUT/e55_sentdump_s<seed>.npz, e55_sentdump_labels_s<seed>.npz, e55_sentdump_s<seed>.json. The saved read-point states of the earlier jobs are NOT used (the decomp runs of tag q1b did not save weights), so both arms are re-run through chunk 127 (K,V of the stream recorded once for both)."""
+    OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);dch=[int(x) for x in a.diag_chunks.split(',')];sd=a.seed;rtag=a.norm_ref_tag or 'q1b'
+    assert a.cell=='v3_16_1' and max(dch)<=127 and min(dch)>=8,(a.cell,dch)
+    import e55_uv as UVm,e55_sentdump as SD,e55_sentdump_labels as LB
+    if a.check_only:
+        enc,w,tf=build(a,sd,arms=['NAT']);S=streams(w,enc);ids,_=S['A'];ends=UVm.sentence_ends(UVm.tokenizer(tf),ids) if not getattr(a,'stub',False) else UVm.sentence_ends(type('T',(),{'id_to_token':staticmethod(lambda i:'.' if i%11==0 else 'w')})(),ids)
+        for k in dch:
+            q,wsid,wst,wlen=SD.layout(ends,k);lb=LB.labels(w['chunks'],ends,k);assert len(q)>0 and len(wlen)>0 and len(lb['w_fact'])==len(wlen) and len(lb['q_fact'])==len(q) and int(wsid.max())==len(wlen)-1,(k,len(q),len(wlen))
+            print(f'  chunk {k}: {len(q)} query sentences, {len(wlen)} window sentences, window fact sentences {(lb["w_fact"]>=0).sum()} ({(wlen[lb["w_fact"]>=0]).sum()/max(wlen.sum(),1):.3f} of window tokens)',flush=True)
+        fq=OUT/f'E55_{rtag}_SENTPQ_s{sd}.saved.json';print(f'sentdump check-only OK: cell {a.cell} seed {sd} chunks {dch}; norm file {fq} {"present" if fq.exists() else "MISSING (needed on the GPU run)"}');return
+    fn=OUT/f'e55_sentdump_s{sd}.npz'
+    if fn.exists() and not a.rerun:print('exists, reused:',fn);return
+    fq=OUT/f'E55_{rtag}_SENTPQ_s{sd}.saved.json';assert fq.exists(),('SENTPQ norm file needed',fq);ntg=[e['update_norm'] for e in json.load(open(fq))['log']][:128];assert len(ntg)==128
+    LD,s3,C=lab();rt=LD.Runtime();enc,w,tf=build(a,sd,arms=['NAT']);assert w['p']==1 and w['n_chunks']==128;S=streams(w,enc);ids,sha=S['A'];ends=UVm.sentence_ends(UVm.tokenizer(tf),ids)
+    L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_sentdump_s{sd}',canary=None);L.rec_cache={};t0=time.monotonic();dump={};secs={};lg=lambda *x:print(*x,flush=True)
+    for ar in ('NAT','SENTPQADAMH'):
+        t1=time.monotonic();dfn=SD.make_sentdump_fn(L,rt,s3,ends,ids,log=lg);print(f'== sentdump arm {ar}',flush=True)
+        r=L.run_stream(ar,1,ids,nch=max(dch)+1,tag='sd'+ar,log=lg,diag_fn=dfn,diag_chunks=set(dch),chunks_meta=w['chunks'],norm_targets=(ntg if ar=='SENTPQADAMH' else None))
+        for k,v in r['diag'].items():
+            for nm,x in v.items():dump[f'{ar}/c{k}/{nm}']=np.asarray(x)
+        secs[ar]=time.monotonic()-t1;r=None;import gc;gc.collect();LD.jax.clear_caches();print(memline(LD,f'after sentdump {ar}'),flush=True)
+    labs={}
+    for k in dch:
+        for nm,x in LB.labels(w['chunks'],ends,k).items():labs[f'c{k}/{nm}']=x
+    np.savez_compressed(fn,**dump);np.savez_compressed(OUT/f'e55_sentdump_labels_s{sd}.npz',**labs)
+    json.dump({'seed':sd,'cell':a.cell,'stream_sha':sha,'code':git_rev(),'chunks':dch,'states':{'NAT':'run through chunk 127, weights before the write of each dump chunk','SENTPQADAMH':'run through chunk 127 (SENTPQ-ADAM-0.5N, norm target = SENTPQ of tag '+rtag+'), weights before the write of each dump chunk'},'k127_note':'exact state before the write of chunk 127 (not the a=128 approximation)','window':'unmasked real 8 chunks','sec':secs,'sec_total':time.monotonic()-t0,'npz_bytes':fn.stat().st_size},open(OUT/f'e55_sentdump_s{sd}.json','w'),default=float);print('wrote',fn,fn.stat().st_size,'bytes')
 def probe(a):
     """E55 design 28.7 one-step binding probe (e55_diag.make_probe_fn): the NAT stream of seed --seed (no canary; the fake stream of the 'names' decoy is recorded for the SWD-style window); at the chunks --diag-chunks (0-based, default 32,64,127), from the NAT weights before the write of the chunk, for each window condition NAT / KMASK / SENTO / SENT / SWD / O-ALL / P-ALL / N-ALL the write step of the chunk is computed, rescaled to the sum of the last 8 NAT update norms, applied to a copy (not committed) and the out-of-window PM3 read of the 16 facts is taken. Writes $OUT/e55_probe_s<seed>.json and e55_probe_report.md."""
     OUT=Path(a.out or os.environ.get('EXP07_OUT','.'));OUT.mkdir(parents=True,exist_ok=True);dch=[int(x) for x in a.diag_chunks.split(',')];sd=a.seed
@@ -337,16 +364,20 @@ def decomp(a):
     for sd in seeds:
         todo=[ar for ar in arms if a.rerun or not (OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json').exists()]
         if not todo:print('all arms exist, reused for seed',sd,flush=True);continue
-        enc,w,tf=build(a,sd,read_apps=set(apps),arms=['NAT']);assert w['p']==1 and w['n_chunks']==128,(w['p'],w['n_chunks'])
+        enc,w,tf=build(a,sd,read_apps=set(apps),arms=['NAT']);PP=w['p'];NCH=w['n_chunks']       # p > 1 (E57 section 12 D, cell v3_64_4: p = 4, 512 chunks): read points at chunk a x p - 1, one update per chunk
         P=R.plan(w,enc);items=P['items'];tok=rt.tok;raw=rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=out_tail_8192(LD,tok,rt.bos,forbid_list(w))
         lg=lambda *x:print(*x,flush=True);R_=RG.Reads(rd,raw,len(items),G.NCAND,P['read'],out_tail,rt.base,apps,([int(x) for x in a.in_apps.split(',')] if a.in_apps else apps) if a.in_window else (),log=lg);print(f'seed {sd}: W0 read done',flush=True)
         dcl=DclmNll(LD,rt,a.dclm_ids,a.dclm_n) if a.dclm_ids else None;dcl_w0=None
         if dcl:dcl_w0=dcl(rt.base);print(f'seed {sd}: DCLM W0 NLL {dcl_w0:.4f} ({dcl.n} samples, ids sha {dcl.sha12})',flush=True)
-        nf=Path(a.norm_files.replace('{seed}',str(sd)));assert nf.exists(),('NAT run of this seed needed',nf);norms=[e['update_norm'] for e in json.load(open(nf))['log']][:128];T=I.cum_target(norms)
-        encr=lambda t:LD.stage2.enc(tok,t).ids;segs_iso=I.iso_rows(w,encr,sd,apps);S=streams(w,enc);ids,sha=S['A'];meta=G.item_meta(items)
+        nf=Path(a.norm_files.replace('{seed}',str(sd)));need_iso=any(x in ('ISOB','ISOD','NATB','FOS') for x in todo);norms=T=segs_iso=None
+        if nf.exists():norms=[e['update_norm'] for e in json.load(open(nf))['log']][:NCH];assert len(norms)==NCH,(len(norms),NCH,nf)
+        assert norms is not None or not (need_iso or 'NATADAM' in todo),('NAT run of this seed needed',nf)
+        encr=lambda t:LD.stage2.enc(tok,t).ids
+        if need_iso:assert PP==1,'ISO-type arms are defined for p = 1 worlds only';T=I.cum_target(norms);segs_iso=I.iso_rows(w,encr,sd,apps)
+        S=streams(w,enc);ids,sha=S['A'];meta=G.item_meta(items)
         todo=sorted(todo,key=lambda x:(x in E.ADAM and x!='NATADAM')+(x in E.RS))       # SENTPQ-ADAM arms after SENTPQ (their norm target = the per-chunk update norms of SENTPQ of the same seed and tag)
         for ar in todo:
-            got={};cw0=can(rt.base) if can else None
+            got={};cw0=can(rt.base) if can else None;uvo=None
             def hook(ap,m):
                 x=R_.at(ap,m);got[ap]=x
                 if can and (ap==128 or a.canary_all):x['canary']=can(m)
@@ -361,23 +392,24 @@ def decomp(a):
                 if ar in E.ADAM:       # E55 29.4: the Adam arm keeps the cumulative norm of ITS natural-size SGD arm (per chunk, same seed): NAT-ADAM <- NAT (job 181 file), SENTPQ-ADAM and SENTPQ-ADAM-0.5N <- SENTPQ (this tag; x factor 1 / 0.5), not the NAT norm
                     if ar=='NATADAM':ntg=norms;extra['norm_target']='NAT (norm file)'
                     else:
-                        fq=OUT/f'E55_{a.norm_ref_tag or a.tag}_SENTPQ_s{sd}.saved.json';assert fq.exists(),('SENTPQ of this seed and tag is needed first (norm target of the SENTPQ-ADAM arms)',fq);ntg=[e['update_norm'] for e in json.load(open(fq))['log']][:128];extra['norm_target']=f'SENTPQ (tag {a.norm_ref_tag or a.tag}, same seed)'
+                        fq=OUT/f'E55_{a.norm_ref_tag or a.tag}_SENTPQ_s{sd}.saved.json';assert fq.exists(),('SENTPQ of this seed and tag is needed first (norm target of the SENTPQ-ADAM arms)',fq);ntg=[e['update_norm'] for e in json.load(open(fq))['log']][:NCH];assert len(ntg)==NCH,(len(ntg),NCH,fq);extra['norm_target']=f'SENTPQ (tag {a.norm_ref_tag or a.tag}, same seed)'
                 if ar in E.SPAN:miss=E.annotate_answers(w['chunks'],w['facts'],enc,with_occ=True);assert miss==(0,0,0),('answer span not found in sentences (place, name, occupation):',miss);extra={'answer_span_miss':list(miss)}          # E55 design 25.3 (A): the online stream with the window, earlier fact sentences hidden from attention (as job 183 SENT), no norm matching
                 uvo=None
                 if ar in E.UVARMS:       # E55 32.8: online label-free sentence votes (the sentence boundaries come from the token stream; the fact table only feeds the log)
                     import e55_uv as UVm;ends=UVm.sentence_ends(UVm.tokenizer(tf),ids);rst=None
                     if ar in E.RS:
-                        fu=OUT/f'E55_{a.tag}_{E.RS[ar]}_s{sd}.saved.json';assert fu.exists(),('the matched UV arm of this seed and tag must run first (hidden-token counts per chunk)',fu);rst=[e['n_masked_keys'] for e in json.load(open(fu))['log']][:128];extra['rs_matched_to']=E.RS[ar]
+                        fu=OUT/f'E55_{a.tag}_{E.RS[ar]}_s{sd}.saved.json';assert fu.exists(),('the matched UV arm of this seed and tag must run first (hidden-token counts per chunk)',fu);rst=[e['n_masked_keys'] for e in json.load(open(fu))['log']][:NCH];extra['rs_matched_to']=E.RS[ar]
                     uvo=UVm.UV(ar,ends,w['chunks'],L=L,rt=rt,s3=s3,topm=a.uv_topm,group=a.uv_group,score=a.uv_score,rs_targets=rst,log=lg);extra['uv']={'topm':a.uv_topm,'group':a.uv_group,'score':a.uv_score,'sentence_ends':int(ends.sum()),'tokens':int(len(ends))}
-                r=L.run_stream(ar,1,ids,nch=128,tag='dc'+ar,log=lg,read_hook=lambda k,m:hook(k+1,m),hook_chunks=[a_-1 for a_ in apps],chunks_meta=w['chunks'],norm_targets=ntg,uv=uvo)
+                r=L.run_stream(ar,1,ids,nch=NCH,tag='dc'+ar,log=lg,read_hook=lambda k,m:hook((k+1)//PP,m),hook_chunks=[a_*PP-1 for a_ in apps],chunks_meta=w['chunks'],norm_targets=ntg,uv=uvo)
             elif ar=='NATB':
                 tg=I.bigstep_targets(norms,segs_iso,apps);extra={'target_mean_ratio_to_nat':float(np.mean(tg)/np.mean(norms))};print(f'  NATB: mean target norm / NAT norm = {extra["target_mean_ratio_to_nat"]:.3f}',flush=True)
                 r=L.run_stream('NATM',1,ids,nch=128,tag='dcNATB',log=lg,read_hook=lambda k,m:hook(k+1,m),hook_chunks=[a_-1 for a_ in apps],norm_targets=tg)
             else:
                 sep_ids=encr('\n\n');ids_f,ends,pad=I.fos_stream(segs_iso,sep_ids);tg=I.fos_targets(T,segs_iso,ends);extra={'pad_tokens':int(pad),'chunks':len(ids_f)//1024,'segment_last_chunks':ends};print(f'  FOS: {len(ids_f)//1024} chunks, {pad} pad tokens, read chunks {ends}',flush=True)
                 r=L.run_stream('NATM',1,ids_f,nch=len(ids_f)//1024,tag='dcFOS',log=lg,read_hook=lambda k,m:hook(apps[ends.index(k)],m),hook_chunks=list(ends),norm_targets=tg)
+            if uvo is not None and getattr(uvo,'vlog',None):extra['votes_file']=f'E55_{a.tag}_{ar}_s{sd}.votes.npz';extra['votes_chunks']=uvo.save_votes(OUT/extra['votes_file'])      # per-chunk vote vectors (E55 32.10)
             r.pop('model',None);r.pop('inline',None);can_by_app={str(k_):v_.pop('canary') for k_,v_ in got.items() if 'canary' in v_};can_=can_by_app.get('128');dcl_end=got.get(128,{}).pop('dclm',None)
-            rec=RG.make_records({ar:got},R_.W0,meta,P['read'],R_.idx,{'cell':a.cell,'seed':sd,'k':w['k'],'n':w['n'],'p':1,'bank':w['bank_kind'],'tag':a.tag,'code':git_rev(),'complete':True,'place_len':w['place_len']})[ar]
+            rec=RG.make_records({ar:got},R_.W0,meta,P['read'],R_.idx,{'cell':a.cell,'seed':sd,'k':w['k'],'n':w['n'],'p':PP,'bank':w['bank_kind'],'tag':a.tag,'code':git_rev(),'complete':True,'place_len':w['place_len']})[ar]
             json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{sd}.read.json','w'));lgs=r['log']
             r.update({'reads':{str(k):'in read.json' for k in r.get('reads',{})},'stream_sha':sha,'canary_w0':cw0,'canary_end':can_,'dclm_w0':dcl_w0,'dclm_end':dcl_end,'dclm_n':(dcl.n if dcl else 0),'sec_total':time.monotonic()-t0,'code':git_rev(),'cell':a.cell,'world_seed':sd,'extra':extra,'summary':{'mean_update_norm':float(np.mean([e['update_norm'] for e in lgs])),'steps':len(lgs),'mean_ce':float(np.mean([e['ce'] for e in lgs]))}})
             json.dump(r,open(OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json','w'),default=float);print('wrote',OUT/f'E55_{a.tag}_{ar}_s{sd}.saved.json',f'{time.monotonic()-t0:.0f}s',flush=True)
@@ -533,8 +565,8 @@ def fam(a):
                 if fnout(ar,sd).exists() and not a.rerun:print('exists, not overwritten:',fnout(ar,sd));continue
                 json.dump(rec,open(fnout(ar,sd),'w'));print('wrote',fnout(ar,sd))
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('cmd',choices=['dry','run','read','unit','fam','maskdump','iso','ft','decomp','q1a','attdiag','probe','attdump']);ap.add_argument('--cell',default='base',choices=list(G.CELLS));ap.add_argument('--seed',type=int,default=55);ap.add_argument('--arms',default='NAT,SWD');ap.add_argument('--tag',default='st0')
+    ap=argparse.ArgumentParser();ap.add_argument('cmd',choices=['dry','run','read','unit','fam','maskdump','iso','ft','decomp','q1a','attdiag','probe','attdump','sentdump']);ap.add_argument('--cell',default='base',choices=list(G.CELLS));ap.add_argument('--seed',type=int,default=55);ap.add_argument('--arms',default='NAT,SWD');ap.add_argument('--tag',default='st0')
     ap.add_argument('--out',default=None);ap.add_argument('--tokenizer-file',default=None);ap.add_argument('--smoke-chunks',type=int,default=0);ap.add_argument('--no-canary',action='store_true');ap.add_argument('--rerun',action='store_true');ap.add_argument('--stub',action='store_true',help='dry only: stub tokenizer and synthetic background (CPU test)');ap.add_argument('--host-gib-limit',type=float,default=100.0)
     ap.add_argument('--save-apps',default=None,help='run: appearances at which states are saved (default 2,4,8,16)');ap.add_argument('--canary-apps',default=None,help='run: appearances with a canary read (default = save-apps; W0 always)');ap.add_argument('--apps',default=None,help='read: appearances to read (default all saved)');ap.add_argument('--in-apps',default=None,help='read: comma list of appearances at which the in-window contexts are also read (e.g. 16); default none')
     ap.add_argument('--in-window',action='store_true',help='decomp: also in-window reads at the read appearances');ap.add_argument('--dclm-ids',default=None,help='decomp: DCLM validation ids (uint32, 8193 tokens/sample) for the first-chunk NLL damage read at a=128');ap.add_argument('--dclm-n',type=int,default=100);ap.add_argument('--q1-arms',default=','.join(['ISO-STD','ISO-SUR1','ISO-SUR2','ISO-ADAM','ISO-MOM']),help='q1a: arms');ap.add_argument('--diag-chunks',default='16,32,64,127',help='attdiag / probe: chunk indices (probe job: 32,64,127)');ap.add_argument('--norm-ref-tag',default=None,help='decomp: tag of the SENTPQ files that give the norm targets of the Adam arms (default: --tag)');ap.add_argument('--dump-topm',type=int,default=8,help='attdump: top-m window keys per query / per head');ap.add_argument('--uv-topm',type=int,default=8,help='decomp UV arms (E55 32.8): top-m window keys per (layer, head, query token)');ap.add_argument('--uv-group',default='g3',choices=['g1','g2','g3','all'],help='decomp UV arms: layer group of the votes (thirds of the prefix layers)');ap.add_argument('--uv-score',default='sum',choices=['density','sum'],help='decomp UV arms: total votes (sum, default; as the lab sentsel vote variant) or votes per window-sentence token (density)');ap.add_argument('--decomp-apps',default='64,128',help='decomp: read appearances (comma list ending at 128)');ap.add_argument('--canary-all',action='store_true',help='decomp: canary NLL at every read appearance (saved.json canary_by_app)');ap.add_argument('--check-only',action='store_true',help='decomp: validate arms/seeds and exit before any model load');ap.add_argument('--unit-masks',action='store_true',help='unit: also run the SENT / KMASK mask checks (U6)');ap.add_argument('--norm-files',default='experiments/exp07_write_ladder/E55_v3a_NAT_s{seed}.saved.json',help="iso: NAT saved.json of the same seed ('{seed}' replaced)");ap.add_argument('--no-match',action='store_true',help='iso: raw SGD steps, no cumulative-norm matching');ap.add_argument('--arm-lrs',default=None,help="ft: 'FT-NAT:3e-5,FT-MASK:1e-4,FT-ISO:3e-5' one learning rate per arm (overrides --lrs x --ft-arms)");ap.add_argument('--lrs',default='1e-5,3e-5,1e-4',help='ft: learning rates');ap.add_argument('--epochs',type=int,default=4,help='ft: epochs');ap.add_argument('--read-epochs',default='1,2,4',help='ft: epochs after which the frozen-weight reads run');ap.add_argument('--ft-arms',default='FT-NAT,FT-MASK,FT-ISO',help='ft: arms');ap.add_argument('--cells',default=None,help="run: 'cell:tag,cell:tag' several cells in one process (overrides --cell / --tag)");ap.add_argument('--seeds',default=None,help='run: comma list of world seeds (one model load for all)');ap.add_argument('--plan',default=None,help="run: per-seed read plan '55=all|1,2,4,8,16;56=2,4,8,16|16' (out-of-window appearances | in-window appearances)");ap.add_argument('--read-apps',default=None,help='run: default out-of-window inline reads (appearances, or all)');ap.add_argument('--arm-seeds',default=None,help="run: restrict an arm to seeds, e.g. 'SWB:55'");ap.add_argument('--decoy',default='names',choices=['names','world','namesin'],help='fake window of SWD: names = same chunks with fake names / places (primary), world = another fact world');ap.add_argument('--bg',default='default',choices=['default','pool'],help='background paragraphs: default = the old one-book list (E55 stage 0 jobs), pool = design v3 pooled / deduplicated / seed-shuffled four-book pool');ap.add_argument('--unit-chunks',type=int,default=12);ap.add_argument('--tol-ce',type=float,default=1e-3);ap.add_argument('--tol-upd',type=float,default=2e-3)
-    a=ap.parse_args();{'dry':dry,'run':run,'read':read,'unit':unit,'fam':fam,'maskdump':maskdump,'iso':iso,'ft':ft,'decomp':decomp,'q1a':q1a,'attdiag':attdiag,'attdump':attdump,'probe':probe}[a.cmd](a)
+    a=ap.parse_args();{'dry':dry,'run':run,'read':read,'unit':unit,'fam':fam,'maskdump':maskdump,'iso':iso,'ft':ft,'decomp':decomp,'q1a':q1a,'attdiag':attdiag,'attdump':attdump,'probe':probe,'sentdump':sentdump}[a.cmd](a)
