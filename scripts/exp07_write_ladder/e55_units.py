@@ -758,7 +758,58 @@ def u39():
     sq=R['SENTPQADAM'];vf=R['SENTPQVFIX10']
     assert all(abs(vf['log'][k]['ce']-sq['log'][k]['ce'])<2e-4 for k in range(E.VFIX_T+1)) and any(abs(vf['log'][k]['ce']-sq['log'][k]['ce'])>1e-7 for k in range(E.VFIX_T+1,n)),([e['ce'] for e in vf['log']],[e['ce'] for e in sq['log']])
     RES['U39']='vfix direction == Adam for 8 steps then v frozen (m keeps moving); SENTP25/50/75-ADAM-0.5N, ADAM-0.75N, VFIX arms hit factor x target norm (2%), masked pairs nested p25<p50<p75<SENTPQ, VFIX differs from Adam only after chunk 8'
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39}
+def u40():
+    """E55 32.8 online sentence-vote masks (CPU, tiny model): (a) sentence_ends rule (end punctuation + space/newline token, decimals do not split, last token ends); (b) vote_select recovers planted voted sentences and respects p and k; (c) rands_hidden hits the token target with < one sentence overshoot, seeded; (d) UV arm with planted votes on the fact sentences hides exactly the fact sentences (hidden tokens == SENT's, recall = precision = 1), writes with Adam-0.5N (update norm = 0.5 x target); (e) the real att pass of the tiny model gives top-m window keys only, shapes [layers_in_group, H, 1024, m]; (f) RS arm reproduces the hidden-token counts of its UV arm"""
+    import e55_uv as UVm
+    class FE:
+        m={1:'.',2:'\u0120the',3:'3',4:'5',5:'?',6:'\u010a\u010a',7:'\u0120A',8:'.\\"'}
+        def id_to_token(self,i):return self.m.get(int(i),'x')
+    e=UVm.sentence_ends(FE(),[2,1,2,1,7,3,1,4,2,5,7,6,2]);assert list(np.nonzero(e)[0])==[1,3,9,11,12],list(np.nonzero(e)[0])      # '.' before ' the' ends (idx3 is '.', next ' A'? idx4=7 starts with space) ; '3 . 5' decimal at idx5-7 does not split
+    # (b)
+    CH=1024;ends=np.zeros(CH*6,bool)
+    for c in range(6):
+        for b in (99,139,299,329,699,759,1023):ends[c*CH+b]=True
+    wsid,wst,wlen=UVm.window_sents(ends,5);assert len(wlen)==5*7 and wsid[:3*CH].min()==-1 and (wsid[3*CH:]>=0).all() and wlen.sum()==5*CH
+    fact_s=[j for j in range(len(wlen)) if wlen[j] in (40,30,60)];assert len(fact_s)==15
+    qs=np.repeat(np.arange(7),[100,40,160,30,370,60,264]);keys=np.asarray([wst[j]+2 for j in fact_s]);hidx=np.tile(keys[None,None,None,:],(1,2,CH,1)).astype(np.int16);hval=np.full(hidx.shape,0.1,np.float16)
+    hid,vi=UVm.vote_select(hidx,hval,qs,wsid,wlen,100,3);assert set(np.nonzero(hid)[0])==set(fact_s),(np.nonzero(hid)[0],fact_s)
+    hid2,_=UVm.vote_select(hidx,hval,qs,wsid,wlen,10,1);assert hid2.sum()==max(1,int(np.ceil(len(wlen)*0.10))) and not (hid2&~np.isin(np.arange(len(wlen)),fact_s)).any()
+    hid3,_=UVm.vote_select(hidx,hval,qs,wsid,wlen,100,8);assert hid3.sum()==0      # only 7 query sentences, k=8 -> nothing
+    # (c)
+    r1=UVm.rands_hidden(wlen,500,3);r2=UVm.rands_hidden(wlen,500,3);r3=UVm.rands_hidden(wlen,500,4);assert (r1==r2).all() and (r1!=r3).any() and 500<=wlen[r1].sum()<500+wlen.max() and UVm.rands_hidden(wlen,0,3).sum()==0
+    # (d)-(f)
+    nch=7;ends=np.zeros(NCH*CH,bool)
+    for c in range(NCH):
+        for b in (99,139,299,329,699,759,1023):ends[c*CH+b]=True
+    tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
+    a=nat();tg=[x['update_norm'] for x in a['log']]
+    sent=L.run_stream('SENT',2,REAL,nch=nch,tag='u',log=lambda *x:None,chunks_meta=tab)
+    uv=UVm.UV('UVA',ends,tab,L=L,rt=rt,s3=s3,topm=4,log=lambda *x:None);uv.p=100;uv.kmin=3
+    def planted(k,m,Kc,Vc,ids_k,keep):
+        ws,st,ln=UVm.window_sents(ends,k);fs=[j for j in range(len(ln)) if ln[j] in (40,30,60)]
+        if not fs:return np.zeros((1,1,CH,1),np.int16),np.zeros((1,1,CH,1),np.float16)
+        ki=np.asarray([st[j]+2 for j in fs]);return np.tile(ki[None,None,None,:],(1,1,CH,1)).astype(np.int16),np.full((1,1,CH,len(fs)),0.1,np.float16)
+    real_att=uv.att_pass;uv.att_pass=planted
+    r=L.run_stream('UVA',2,REAL,nch=nch,tag='u',log=lambda *x:None,chunks_meta=tab,norm_targets=tg,uv=uv)
+    for k in range(nch):
+        e_=r['log'][k];assert e_['n_masked_keys']==sent['log'][k]['n_masked_keys'],(k,e_['n_masked_keys'],sent['log'][k]['n_masked_keys'])
+        if k>0:assert e_['lab_recall']==1.0 and e_['lab_precision']==1.0 and e_['lab_bg_false']==0.0,(k,e_)
+        assert abs(e_['update_norm']-0.5*tg[k])<=0.02*0.5*tg[k],(k,e_['update_norm'],tg[k])
+    rs=UVm.UV('RSA',ends,tab,rs_targets=[x['n_masked_keys'] for x in r['log']],log=lambda *x:None)
+    q=L.run_stream('RSA',2,REAL,nch=nch,tag='u',log=lambda *x:None,chunks_meta=tab,norm_targets=tg,uv=rs)
+    for k in range(nch):assert abs(q['log'][k]['n_masked_keys']-r['log'][k]['n_masked_keys'])<=int(max(UVm.window_sents(ends,k)[2],default=0)),(k,q['log'][k]['n_masked_keys'],r['log'][k]['n_masked_keys'])
+    assert sum(x['n_masked_keys'] for x in q['log'])>0 and [x['ce'] for x in q['log']]!=[x['ce'] for x in r['log']]
+    # (e) real att pass: shapes / validity
+    uv2=UVm.UV('UVA',ends,tab,L=L,rt=rt,s3=s3,topm=4,log=lambda *x:None);seen={}
+    def spy(k,m,Kc,Vc,ids_k,keep):
+        hi,hv=real_att_(k,m,Kc,Vc,ids_k,keep);seen[k]=(hi,hv);return hi,hv
+    real_att_=uv2.att_pass;uv2.att_pass=spy
+    r2_=L.run_stream('UVC',2,REAL,nch=5,tag='u',log=lambda *x:None,chunks_meta=tab,norm_targets=tg,uv=uv2)
+    for k,(hi,hv) in seen.items():
+        assert hi.ndim==4 and hi.shape[2]==CH and hi.shape[3]==4 and hv.shape==hi.shape,hi.shape
+        ok=hv.astype(np.float32)>0;assert (hi[ok]>= (8-min(k,8))*CH).all() and (hi[ok]<8*CH).all()
+    RES['U40']='sentence ends from tokens only; vote_select recovers planted voted sentences (p,k respected); RS hits token target (< 1 sentence), seeded; UV with planted votes hides exactly the fact sentences of SENT (recall = precision = 1, bg 0), update norm 0.5 x target; real att pass: top-m window keys only'
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
