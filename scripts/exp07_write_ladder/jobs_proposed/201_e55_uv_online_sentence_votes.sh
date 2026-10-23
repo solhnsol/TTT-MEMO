@@ -79,5 +79,5 @@ $PY $S/e55_run.py decomp $DEC --check-only
 REP=$OUT/e55_uv_report.md
 if [ -f $REP ] && [ -z "$RERUN" ]; then echo "report $REP exists: not redone (exit 8; RERUN=1 to redo)"; exit 8; fi
 $PY $S/e55_run.py decomp $DEC --dclm-ids $DCLM --dclm-n 100
-$PY $S/e55_ic_report.py --q34 --dir $OUT --seeds $SEEDS --tag uv --ref-tag q1b --out $REP
+$PY $S/e55_ic_report.py --uv --dir $OUT --seeds $SEEDS --tag uv --ref-tag q1b --out $REP
 tail -60 $REP
