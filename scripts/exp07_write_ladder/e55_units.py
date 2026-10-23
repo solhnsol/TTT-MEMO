@@ -741,7 +741,24 @@ def u38():
         assert z['key_ans'][(8-k)*1024+105]==1 and z['key_ans'][(8-k)*1024+110]==2 and z['key_ans'][(8-k)*1024+120]==4 and z['key_sent'][(8-k)*1024+100]==0 and z['key_sent'][(8-k)*1024+1024+300]==64+1
     f_=tempfile.mktemp(suffix='.npz');np.savez_compressed(f_,**DG.flat_dump(b['diag']));rs=VG.grid(f_,('g3','all'),('avg','heads','mass'),(8,),(2,));os.remove(f_);assert rs and VG.report(rs)
     RES['U38']='attention dump: run with the dump == plain run bitwise; group mass == column sums of the attn_stats rows; per-query tops = the m largest valid keys; per-head tops valid and <= 1; key labels (fact / sentence id / name-place-occupation bits) match the table; npz round trip + votegrid'
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38}
+def u39():
+    """E55 34 (CPU, tiny model): (a) adam_dir_vfix == adam_dir for the first VFIX_T steps (same inputs) and the second moment stops changing after VFIX_T steps (bias correction fixed), while the first moment keeps moving; (b) arms SENTP25/50/75ADAMH (random-token masks + Adam, factor 0.5), SENTPQADAM75 (factor .75) and SENTPQVFIX10 / SENTPQVFIX05 (v frozen after 8 chunks, factors 1 / .5): per-chunk update norm == factor x the target (2%), masked pairs of SENTP25 < SENTP50 < SENTP75 < SENTPQ, the vfix arm differs from the plain Adam arm from chunk 8 on (v frozen) but not before."""
+    f32=jnp.float32;rng=np.random.default_rng(0);tr=lambda: {'a':jnp.asarray(rng.normal(size=(5,3)),f32),'b':jnp.asarray(rng.normal(size=(7,)),f32)}
+    mu=jax.tree.map(jnp.zeros_like,tr());nu=jax.tree.map(jnp.zeros_like,tr());mu2,nu2=mu,nu;nus=[]
+    for s in range(12):
+        g=tr();d1,mu,nu,_,_=L.adam_dir(g,mu,nu,jnp.asarray(float(s),f32));d2,mu2,nu2,_,_=L.adam_dir_vfix(g,mu2,nu2,jnp.asarray(float(s),f32));nus.append(nu2)
+        if s<E.VFIX_T:assert maxdiff(d1,d2)<1e-6,(s,maxdiff(d1,d2))
+    assert all(maxdiff(nus[i],nus[E.VFIX_T-1])==0 for i in range(E.VFIX_T,12)) and maxdiff(nus[3],nus[4])>0 and maxdiff(nu,nus[-1])>0 and maxdiff(d1,d2)>0
+    tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
+    a=nat();tg=[e['update_norm'] for e in a['log']];n=10;R={}
+    for ar in ('SENTP25ADAMH','SENTP50ADAMH','SENTP75ADAMH','SENTPQADAM75','SENTPQVFIX10','SENTPQVFIX05','SENTPQADAM'):R[ar]=L.run_stream(ar,2,REAL,nch=n,tag='u',log=lambda *x:None,chunks_meta=tab,norm_targets=tg)
+    for ar,f in (('SENTP25ADAMH',.5),('SENTP50ADAMH',.5),('SENTP75ADAMH',.5),('SENTPQADAM75',.75),('SENTPQVFIX10',1.0),('SENTPQVFIX05',.5)):
+        assert all(abs(e['update_norm']-f*tg[k])<=0.02*f*tg[k] for k,e in enumerate(R[ar]['log'])),ar
+    pr=[sum(e['n_masked_pairs'] for e in R[x]['log']) for x in ('SENTP25ADAMH','SENTP50ADAMH','SENTP75ADAMH','SENTPQADAM')];assert pr[0]<pr[1]<pr[2]<pr[3],pr
+    sq=R['SENTPQADAM'];vf=R['SENTPQVFIX10']
+    assert all(abs(vf['log'][k]['ce']-sq['log'][k]['ce'])<2e-4 for k in range(E.VFIX_T+1)) and any(abs(vf['log'][k]['ce']-sq['log'][k]['ce'])>1e-7 for k in range(E.VFIX_T+1,n)),([e['ce'] for e in vf['log']],[e['ce'] for e in sq['log']])
+    RES['U39']='vfix direction == Adam for 8 steps then v frozen (m keeps moving); SENTP25/50/75-ADAM-0.5N, ADAM-0.75N, VFIX arms hit factor x target norm (2%), masked pairs nested p25<p50<p75<SENTPQ, VFIX differs from Adam only after chunk 8'
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
