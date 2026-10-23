@@ -5,7 +5,7 @@
 # EXPECTED RUN TIME (Hans confirms before it runs): ESTIMATE ONLY, unmeasured. About 35-65 min: CPU part (selftests, 3 background gate checks, dry run, maskdump) 5-10 min; model load 7-20 min once; 3 runs (one per seed) of 128 chunks + 30 GiB K,V recording about 6-10 min each plus 2 out-of-window reads and the canary read about 1-3 min = 21-39 min. Not run on a GPU: the reads, the canary, the 3B paths.
 # Outputs (NEW names): $OUT/E55_all_ALLSPAN_s<seed>.* , $OUT/e55_all_report.md; exit 8 if the report exists unless RERUN=1. Nothing is overwritten.
 # CPU-only dry run (validates the arm through decomp --check-only and the real-tokenizer name / occupation / place span search through maskdump): git fetch origin claude/project-thread-rwhdac && git worktree add --detach /tmp/dry_all FETCH_HEAD && ln -s "$(pwd)/data" /tmp/dry_all/data && cd /tmp/dry_all && PY=/abs/path/python CPU_ONLY=1 bash scripts/exp07_write_ladder/jobs_proposed/196_e55_name_occ_place_mask.sh   (then git worktree remove --force /tmp/dry_all)
-# PY must be an ABSOLUTE path to the lab python. PINNED INSTALL, NO FETCH (exit 4 if the commit is absent, exit 5 on a sha256 mismatch). Lab ladder.py must be the patched W1 version (exit 6); lab s3.py must be f261120d0f03, a16e6dd0d4c9 or the new version (exit 6).
+# PY must be an ABSOLUTE path to the lab python. PINNED INSTALL, NO FETCH (exit 4 if the commit is absent, exit 5 on a sha256 mismatch). Lab ladder.py must be the patched W1 version (exit 6); lab s3.py must be any committed version of s3.py up to the pinned commit (exit 6).
 # Needs: SENTPQ and SENT files of jobs 189/190 (tag dc) and the NAT file of job 181 (tag v3a) per seed. Independent of jobs 194 and 195 (own tag all). Queue position: after 195 (core thread).
 set -eo pipefail
 PY=$(realpath -s "$PY")   # the runner exports a relative PY (.venv/bin/python): make it absolute BEFORE the cd below, WITHOUT resolving symlinks (uv venv; readlink -f breaks it)
@@ -13,7 +13,7 @@ case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
 D4=scripts/exp04_what_ttt_retains
-COMMIT=406b49a82aba4ab0f981a68c8c317f854ffc9d8f
+COMMIT=7e12ff296952bc98b28aabf484d2404b05aea068
 FILES="$D/e55_run.py $D/e55_core.py $D/e55_gpu.py $D/e55_swap.py $D/e55_read.py $D/e55_analyze.py $D/e55_metrics.py $D/e55_ic_report.py $D/e55_iso.py $D/e55_diag.py $D/s3.py $D4/gen_facts.py $D4/gen_world_ctl.py $D4/frame_bank.py $D/e55_gates.py $D4/frames300.txt"
 LADDER_OK="714b08ea3b90"
 S3_OLD="f261120d0f03"   # lab s3.py after job 189 (2-D mask version); the pre-189 version a16e6dd0d4c9 is accepted too
@@ -23,7 +23,8 @@ if [ -z "$NO_INSTALL" ]; then
   GL=$(sha256sum $D/ladder.py | cut -c1-12); [ "$GL" = "$LADDER_OK" ] || { echo "lab ladder.py ($GL) is not the patched W1 version ($LADDER_OK): exit 6"; exit 6; }
   git cat-file -e $COMMIT^{commit} || { echo "commit $COMMIT not in the local clone: git fetch origin claude/project-thread-rwhdac first (exit 4)"; exit 4; }
   S3NEW=$(git show $COMMIT:$D/s3.py | sha256sum | cut -c1-12); S3H=$(sha256sum $D/s3.py | cut -c1-12)
-  [ "$S3H" = "$S3_OLD" ] || [ "$S3H" = "a16e6dd0d4c9" ] || [ "$S3H" = "$S3NEW" ] || { echo "lab s3.py ($S3H) is neither the committed old version ($S3_OLD) nor the new one ($S3NEW): not overwritten (exit 6)"; exit 6; }
+  S3OK=$( (echo "$S3_OLD"; echo a16e6dd0d4c9; for C in $(git log --format=%H $COMMIT -- $D/s3.py); do git show $C:$D/s3.py | sha256sum | cut -c1-12; done) )   # every s3.py version that was ever committed up to $COMMIT is accepted (a local edit never is)
+  echo "$S3OK" | grep -qx "$S3H" || { echo "lab s3.py ($S3H) is not any committed version of s3.py up to $COMMIT (new one: $S3NEW): not overwritten (exit 6)"; exit 6; }
   git checkout $COMMIT -- $FILES
 fi
 if [ -z "$SKIP_VERIFY" ]; then
