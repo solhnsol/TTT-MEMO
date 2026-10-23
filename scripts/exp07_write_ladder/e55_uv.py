@@ -1,9 +1,10 @@
 """E55 32.8 online label-free sentence-vote masks (UNIONVOTE) and their random-sentence controls.
 Per write chunk k (before its write, current weights, NAT window): (1) forward-only 'att' pass of the prefix layers with ALL tokens of the chunk as queries (nothing from the world's labels); every (layer, head, query token) gives its top-m WINDOW keys; (2) sentence boundaries are found from the token stream only (end punctuation followed by a space/newline token, newline tokens, and chunk starts) - the fact table is NOT used for them;
-(3) per query sentence s and window sentence j: votes V[s,j] = number of top-m hits of the tokens of s on the tokens of j, summed over the heads of the layer group (default g3 = last third of the prefix layers), score = V / len(j) ('density') or V ('sum'); (4) each query sentence selects the top p % of the window sentences with a positive score; (5) a window sentence is hidden when it is selected by >= k different query sentences; hidden keys are hidden from EVERY query of the chunk (1-D keep, like SENT). RS arms: random window sentences (seeded) until the hidden-token count of the matched UV arm at the same chunk is reached.
+(3) per query sentence s and window sentence j: score V[s,j] = number of top-m hits of the tokens of s on the tokens of j, summed over the heads of the layer group (default g3 = last third of the prefix layers); 'sum' (default, as the lab's sentsel vote variant: count of top-8 hits, zero scores excluded) or 'density' = V / len(j); window sentences shorter than MIN_TOK=4 tokens are never candidates; (4) each query sentence selects the top p % of the candidate window sentences with a positive score; (5) a window sentence is hidden when it is selected by >= k different query sentences; hidden keys are hidden from EVERY query of the chunk (1-D keep, like SENT). RS arms: random window sentences (seeded) until the hidden-token count of the matched UV arm at the same chunk is reached.
 The fact table (chunks_meta) is used ONLY for the per-chunk log (recall / precision / background false-mask rate); it never enters the mask. CPU tested with the tiny model (e55_units.py U40); the 3B GPU path is NOT run."""
 import numpy as np
-RS_SEED=55061
+RS_SEED=55061;MIN_TOK=4
+# Difference to the lab's offline diagnostic (e55_sentsel_vote_script.py): there the query units were the 16 question spans of the chunk (qfact rows, label-dependent); here the query units are ALL sentences of the write chunk (label-free). Candidates, score (sum of top-8 hits), p and k are the same.
 def sentence_ends(enc,ids):
     """bool [N]: token i ends a sentence. Rule (label-free): the decoded token, minus trailing quote/bracket characters, ends with . ? ! and the NEXT token starts with a space or a newline (so 3.5 and e.g.x do not split); a token containing a newline ends a sentence; the last token of the stream ends one."""
     ids=np.asarray(ids);toks=[enc.id_to_token(int(i)) or '' for i in ids];n=len(ids);e=np.zeros(n,bool)
@@ -29,7 +30,7 @@ def window_sents(ends,k,CH=1024,nw=8):
         off=(c-k+nw)*CH
         for a,b in chunk_sents(ends,c,CH):sid[off+a:off+b]=len(st);st.append(off+a);ln.append(b-a)
     return sid,np.asarray(st,np.int64),np.asarray(ln,np.int64)
-def vote_select(hidx,hval,qsid,wsid,wlen,p,kmin,score='density'):
+def vote_select(hidx,hval,qsid,wsid,wlen,p,kmin,score='sum'):
     """hidx, hval: [Lg,H,rows,m] top-m window key index / probability (hval<=0 = padding); qsid [rows] query sentence id; wsid [W] window sentence id of every window key (-1 none); wlen [nW].
     -> (hidden sentence mask [nW] bool, info dict)"""
     nQ=int(qsid.max())+1 if len(qsid) else 0;nW=len(wlen)
@@ -38,7 +39,9 @@ def vote_select(hidx,hval,qsid,wsid,wlen,p,kmin,score='density'):
     S=np.where(Vv,wsid[np.clip(I,0,len(wsid)-1)],-1);ok=S>=0
     rr=np.broadcast_to(qsid[:,None],S.shape)[ok];ss=S[ok];V=np.bincount(rr*nW+ss,minlength=nQ*nW).reshape(nQ,nW).astype(np.float64)
     if score=='density':V=V/np.maximum(wlen,1)[None,:]
-    nsel=max(1,int(np.ceil(nW*p/100.0)));order=np.argsort(-V,axis=1,kind='stable')[:,:nsel];sel=np.zeros((nQ,nW),bool);np.put_along_axis(sel,order,True,axis=1);sel&=V>0
+    V[:,wlen<MIN_TOK]=0;nc=int((wlen>=MIN_TOK).sum())
+    if nc==0:return np.zeros(nW,bool),{'n_query_sents':nQ,'n_window_sents':nW,'sel_per_query':0}
+    nsel=max(1,int(np.ceil(nc*p/100.0)));order=np.argsort(-V,axis=1,kind='stable')[:,:nsel];sel=np.zeros((nQ,nW),bool);np.put_along_axis(sel,order,True,axis=1);sel&=V>0
     cnt=sel.sum(0);return cnt>=kmin,{'n_query_sents':nQ,'n_window_sents':nW,'sel_per_query':float(sel.sum(1).mean()),'votes_max':int(cnt.max())}
 def rands_hidden(wlen,target_tokens,k,seed=RS_SEED):
     """random window sentences (shuffle by (seed, k)) until the hidden-token count reaches target_tokens (overshoot < one sentence)"""
@@ -55,7 +58,7 @@ def label_stats(hid_keys,chunks_meta,k,CH=1024,nw=8):
     return {'recall':float((h&ft).sum()/max(ft.sum(),1)),'precision':float((h&ft).sum()/max(h.sum(),1)) if h.sum() else None,'bg_false':float((h&bg).sum()/max(bg.sum(),1)),'fact_share':float(ft.sum()/max(valid.sum(),1)),'share':float(h.sum()/max(valid.sum(),1))}
 class UV:
     """one object per arm: .keep(k, m, Kc, Vc, ids_k, keep_all) -> (keep 1-D bool [WIN+CH], log dict); the GPU/att pass is in .votes (monkey-patchable for the CPU test)"""
-    def __init__(self,arm,ends,chunks_meta=None,L=None,rt=None,s3=None,topm=8,group='g3',score='density',rs_targets=None,CH=1024,nw=8,log=print):
+    def __init__(self,arm,ends,chunks_meta=None,L=None,rt=None,s3=None,topm=8,group='g3',score='sum',rs_targets=None,CH=1024,nw=8,log=print):
         import e55_swap as E
         self.arm=arm;self.ends=np.asarray(ends);self.meta=chunks_meta;self.L=L;self.rt=rt;self.s3=s3;self.topm=topm;self.group=group;self.score=score;self.CH=CH;self.nw=nw;self.rs_targets=rs_targets;self.log=log
         if arm in E.UV:self.p,self.kmin=E.UV[arm]

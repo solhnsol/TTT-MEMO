@@ -809,7 +809,23 @@ def u40():
         assert hi.ndim==4 and hi.shape[2]==CH and hi.shape[3]==4 and hv.shape==hi.shape,hi.shape
         ok=hv.astype(np.float32)>0;assert (hi[ok]>= (8-min(k,8))*CH).all() and (hi[ok]<8*CH).all()
     RES['U40']='sentence ends from tokens only; vote_select recovers planted voted sentences (p,k respected); RS hits token target (< 1 sentence), seeded; UV with planted votes hides exactly the fact sentences of SENT (recall = precision = 1, bg 0), update norm 0.5 x target; real att pass: top-m window keys only'
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40}
+def u41():
+    """E55 job 200a leak (CPU, tiny model): every arm leaves ~38 live (32768,16) complex64 RoPE tables (held as constants of its compiled functions) -> live-array count grows per arm; jax.clear_caches() after the arm returns the count to the baseline, for an Adam arm and for a UV arm with the real attention pass"""
+    import gc,e55_uv as UVm
+    def live():
+        gc.collect();x=jax.live_arrays();return len(x),sum(1 for v in x if v.shape==(32768,16))
+    tab=[{'sents':[{'fact':0,'start':100,'end':140},{'fact':1,'start':300,'end':330},{'fact':2,'start':700,'end':760}]} for _ in range(NCH)]
+    tg=[e['update_norm'] for e in nat()['log']];jax.clear_caches();b=live()
+    ends=np.zeros(NCH*1024,bool)
+    for c in range(NCH):
+        for q in (99,139,299,329,699,759,1023):ends[c*1024+q]=True
+    for arm in ('SENTPQADAMH','UVA'):
+        L2=C.Ladder55(rt,save_dir='/tmp/e55_units_states');uv=UVm.UV(arm,ends,tab,L=L2,rt=rt,s3=s3,topm=4,log=lambda *x:None) if arm=='UVA' else None
+        r=L2.run_stream(arm,2,REAL,nch=4,tag='u',log=lambda *x:None,chunks_meta=tab,norm_targets=tg,uv=uv);r.pop('model',None);r=L2=uv=None
+        g=live();assert g[0]>b[0] and g[1]>0,(arm,'expected a leak without clear_caches (the reason for the fix)',g,b)
+        jax.clear_caches();h=live();assert h==b,(arm,h,b)
+    RES['U41']='arm leaves live RoPE tables without jax.clear_caches() (tiny model: +38 arrays) and none after it, for an Adam arm and a UV arm (real attention pass); baseline restored exactly'
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40,'U41':u41}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:
