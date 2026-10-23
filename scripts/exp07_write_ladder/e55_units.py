@@ -672,6 +672,10 @@ def u35():
     sq=L.run_stream('SENTPQ',2,REAL,nch=2,tag='u',log=lambda *x:None,chunks_meta=tab);assert abs(r2['log'][0]['ce']-sq['log'][0]['ce'])<2e-4 and abs(r2['log'][1]['ce']-sq['log'][1]['ce'])>1e-9
     seen=[];rh=L.run_stream('NATADAM',2,REAL,nch=n,tag='u',log=lambda *x:None,chunks_meta=tab,norm_targets=tg,read_hook=lambda k,m:seen.append(k) or {},hook_chunks=[1,3])      # E55 29.5: the Adam moments leave the device during a read and come back bit for bit
     assert seen==[1,3] and rh['final_hash']==r1['final_hash'],(seen,rh['final_hash'],r1['final_hash'])
+    L.adam_offload=True;seen2=[]
+    try:ro=L.run_stream('NATADAM',2,REAL,nch=n,tag='u',log=lambda *x:None,chunks_meta=tab,norm_targets=tg,read_hook=lambda k,m:seen2.append(k) or {},hook_chunks=[1,3])
+    finally:L.adam_offload=False
+    assert seen2==[1,3] and ro['final_hash']==r1['final_hash']      # the optional host offload is also bit-exact
     try:L.run_stream('NATADAM',2,REAL,nch=2,tag='u',log=lambda *x:None,chunks_meta=tab);raise SystemExit('norm_targets not required')
     except AssertionError:pass
     RES['U35']='Adam arms: per-chunk update norm == factor x NAT norm (within 2%, factors 1 / 1 / 0.5), NATADAM chunk-0 CE == NAT and different final weights, SENTPQADAM chunk-0 CE == SENTPQ, masked pairs logged only for the masked arm, norm_targets required'
