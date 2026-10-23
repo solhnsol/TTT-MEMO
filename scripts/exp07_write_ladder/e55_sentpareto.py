@@ -23,10 +23,19 @@ def wide_configs(sweep=True):
                 seen.add(kk(d));out.append(d)
     return out
 _CH=None;_LAB=None
+_STR={}
+def strmask(st,k,d,n):
+    key=(st,k,n)
+    if key not in _STR:_STR[key]=SEL.select_str(d,dict(n=n))
+    return _STR[key]
 def _one(cfg):
-    f=SEL.select_str if cfg.get('sel')=='str' else SEL.select_v7 if cfg.get('v7') else SEL.select_heads if cfg.get('v6') else SEL.select;res={}
+    f=SEL.select_str if cfg.get('sel')=='str' else SEL.select_v7 if cfg.get('v7') else SEL.select_heads if cfg.get('v6') else SEL.select;res={};cb=cfg.get('combo')
     for st,cs in _CH.items():
-        for k,d in cs.items():res[f'{st}|{k}']=G.counts(f(d,cfg),d,_LAB[k]).tolist()
+        for k,d in cs.items():
+            h=f(d,cfg)
+            if cb:
+                sm=strmask(st,k,d,cfg.get('combo_n',6));h=(h|sm) if cb=='union' else (h&sm)
+            res[f'{st}|{k}']=G.counts(h,d,_LAB[k]).tolist()
     return res
 def evaluate(chunks,lab,cfgs,workers=1):
     global _CH,_LAB;_CH,_LAB=chunks,lab
@@ -86,9 +95,36 @@ def plot(T,path):
         ax.plot([0,1],[0,1],'k:',label='random masking');
         for tau in TAUS:ax.axhline(tau,color='gray',lw=.4)
         ax.set_xlabel('hidden share of the window');ax.set_ylabel('recall of fact tokens');ax.set_title(f'{st}: Pareto front by chunk range');ax.legend();fig.tight_layout();fig.savefig(str(path).replace('.png',f'_{st}.png'),dpi=120);plt.close(fig)
-def run_all(chunks,lab,out=None,sweep=True,workers=1):
-    cfgs=wide_configs(sweep);res=evaluate(chunks,lab,cfgs,workers);states=sorted(chunks);T=table(cfgs,res,[s for s in ('SENTPQADAMH','NAT') if s in states] or states)
+COMBOS=(('union','+STR6 union'),('inter','+STR6 intersection'))
+def with_combos(cfgs,n=6):
+    out=list(cfgs)
+    for c in cfgs:
+        if c.get('sel')=='str':continue
+        for cb,lab_ in COMBOS:out.append(dict(c,combo=cb,combo_n=n,name=c['name']+f' {lab_.replace("6",str(n))}'))
+    return out
+def compare(cfgs,results,states,ranges=RANGES):
+    """attention only vs + string union vs + string intersection: lowest hidden at recall >= tau"""
+    L=['','## attention alone vs + exact 6-token string match (E50 style, label-free; the string rule marks a window sentence that shares >= 6 consecutive token ids with the write chunk)','','union = hidden if the attention rule OR the string rule marks it; intersection = hidden only if BOTH mark it (second-stage string filter on the attention candidates). Lowest hidden share (and its precision) at recall >= tau.','','| state | range | tau | attention alone | + string union | + string intersection |','|---|---|---|---|---|---|']
+    for st in states:
+        for rn,lo,hi in ranges:
+            by={}
+            for c,r in zip(cfgs,results):
+                t=pooled(r,st,lo,hi)
+                if t[3]>0:by.setdefault(c.get('combo') or 'attn',[]).append((c['name'],G.metrics(t)))
+            if not by:continue
+            for tau in TAUS:
+                cell=lambda m:(lambda b:f"{b[1]['hidden']:.3f} (recall {b[1]['recall']:.3f}, prec {b[1]['precision']:.3f}) {b[0][:70]}" if b else 'none')(min_hidden(by.get(m,[]),tau))
+                L.append(f'| {st} | {rn} | {tau:.2f} | {cell("attn")} | {cell("union")} | {cell("inter")} |')
+    return L
+def run_all(chunks,lab,out=None,sweep=True,workers=1,combo=False):
+    cfgs=wide_configs(sweep)
+    if combo:cfgs=with_combos(cfgs)
+    res=evaluate(chunks,lab,cfgs,workers);states=sorted(chunks);ss_=[s for s in ('SENTPQADAMH','NAT') if s in states] or states
+    T=table([c for c in cfgs if not c.get('combo')],[r for c,r in zip(cfgs,res) if not c.get('combo')],ss_)
     t=report(T,len(cfgs),out)
+    if combo:
+        t+='\n'.join(compare(cfgs,res,ss_))+'\n'
+        if out:Path(out).write_text(t)
     if out:Path(str(out).replace('.md','.json')).write_text(json.dumps(dict(configs=[c['name'] for c in cfgs],counts=res,note='counts per config and "state|chunk": [hidden-fact, fact, hidden, window, hidden-bg, bg] tokens')));plot(T,str(out).replace('.md','.png'))
     return t,T
 def selftest():
@@ -104,8 +140,9 @@ def selftest():
     b=min_hidden(rows,0.0);assert b and min_hidden(rows,1.01) is None
     t=report(T,len(sub));assert 'lowest hidden share' in t and 'Pareto front' in t
     t2,_=run_all(cap['c'],cap['l'],None,False,1);assert 'state SENTPQADAMH' in t2 and 'state NAT' in t2
+    t3,_=run_all(cap['c'],cap['l'],None,False,1,True);assert 'attention alone vs + exact 6-token' in t3 and 'string union' in t3
     print('e55_sentpareto selftest ok:',len(cfgs),'configs;',len(fr),'front points on the sub grid')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--dump');ap.add_argument('--labels');ap.add_argument('--out');ap.add_argument('--sweep',type=int,default=1);ap.add_argument('--workers',type=int,default=4);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--dump');ap.add_argument('--labels');ap.add_argument('--out');ap.add_argument('--sweep',type=int,default=1);ap.add_argument('--workers',type=int,default=4);ap.add_argument('--combo',type=int,default=0);a=ap.parse_args()
     if a.selftest:selftest();sys.exit(0)
-    chunks,lab=G.load(a.dump,a.labels);print(run_all(chunks,lab,a.out,bool(a.sweep),a.workers)[0])
+    chunks,lab=G.load(a.dump,a.labels);print(run_all(chunks,lab,a.out,bool(a.sweep),a.workers,bool(a.combo))[0])
