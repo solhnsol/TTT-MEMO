@@ -1,5 +1,5 @@
 #!/bin/bash
-# E57-LITE FREEZE (CPU only, NO GPU, NO model, NO download; E57 sections 16.1 / 16.10 requests 1-2; replaces job 222 which was built before the 16.1 correction). (1) Event list fixed: the 12 regex events of job 220 / 221 WITHOUT Nipah virus and IDFC First Bank fraud + the next 6 clusters of the job-219 list (not recurring / product suspects with keyword share >= 0.3, not overlapping with an event already taken (>= 20 % of the members shared or >= 2 of 3 top title tokens equal), in the order of members) = 16 events. (2) Ethics filter per target only (family words reject only together with the private-individual proxy of S). (3) Frozen bank of the LEAD variant (c >= 3): per target the question for S (fixed frame per answer type), the candidates (same type, same event, lead exposure c'; fill order strict > middle > relaxed, at most 16, G >= 8 for the main analysis), 4 seeded S' for the cross null; strata table (c 3-4 / 5-9 / 10-19 / 20+) per event, answer type and main targets. No article text in any output (ids, sentence indices, strings).
+# E57-LITE FREEZE (CPU only, NO GPU, NO model, NO download; E57 sections 16.1 / 16.10 requests 1-2; replaces job 222 which was built before the 16.1 correction). (1) Event list fixed: the 12 regex events of job 220 / 221 WITHOUT Nipah virus and IDFC First Bank fraud + the next 6 clusters of the job-219 list (not recurring / product suspects with keyword share >= 0.3, not overlapping with an event already taken (>= 20 % of the members shared or >= 2 of 3 top title tokens equal), in the order of members) = 16 events. (2) Ethics filter per target only (family words reject only together with the private-individual proxy of S). (3) Frozen bank of the LEAD variant (c >= 3): per target the question for S (fixed frame per answer type), the candidates (same type, same event, lead exposure c'; fill order strict > middle > relaxed, at most 16, G >= 8 for the main analysis), 4 seeded S' for the cross null; strata table (c 3-4 / 5-9 / 10-19 / 20+) per event, answer type and main targets; and the article-cap tables N = 10 / 15 / 20 per event (main rule: articles with the most lead targets first, ties by publication date; comparison rule: first N by date; selection frozen in lite_caps.json): targets c >= 3, strata, main share (G >= 8), targets with 4 S', round tokens (compared with 8192). No article text in any output (ids, sentence indices, strings).
 # Needs $OUT/titles.pkl of job 202, $OUT/e57_bigclusters/clusters_big.pkl (job 215) and e57_biglist.json (job 219) (exit 7 if missing), the parquet shards in $RAW. Outputs $OUT/e57_lite/lite_events.json, lite_bank.json, lite_manifest.json, e57_lite_report.md (NEW names). Exit 8 if the report exists unless RERUN=1.
 # EXPECTED RUN TIME (Hans confirms before it runs): ESTIMATE ONLY, unmeasured, CPU only. About 0.5-2 h: the analysis of job 221 (use its measured time) plus 6 added clusters (can be large) plus bank building (seconds to minutes). Server load (~80) up to 2x.
 # Needs: lab python with pyarrow, numpy, tokenizers (exit 3 if missing). Writes only under $OUT/e57_lite. PINNED INSTALL, NO FETCH (exit 4 / 5). CPU_ONLY=1 (check run): install check, manifest, selftests and the input checks only, then exit 0 without the full run. NOT APPROVED yet.
@@ -8,7 +8,7 @@ PY=$(realpath -s "$PY")
 case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
-COMMIT=fcf3fb3d447a3e23f56bd3776ec76548522f3268
+COMMIT=0eeb040d6f9b72ab3e22c20f7ee926b760524266
 FILES="$D/e56/e56_text.py $D/e57/e57_common.py $D/e57/e57_news.py $D/e57/e57_news96.py $D/e57/e57_news10.py $D/e57/e57_rope.py $D/e57/e57_freeze.py $D/e57/e57_bigclusters.py $D/e57/e57_events.py $D/e57/e57_namedevents.py $D/e57/e57_namedevents2.py $D/e57/e57_namedevents3.py $D/e57/e57_lite.py"
 : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}/e57_news}"; mkdir -p "$OUT"; : "${RAW:=$OUT/news_raw}"; : "${WORKERS:=8}"
 if [ -z "$NO_INSTALL" ]; then
@@ -33,7 +33,7 @@ b9b3ae99f2ef e57/e57_events.py
 fe7309299152 e57/e57_namedevents.py
 38b621622a9b e57/e57_namedevents2.py
 a35230989359 e57/e57_namedevents3.py
-820d24fb67f3 e57/e57_lite.py
+5b9a944b1794 e57/e57_lite.py
 MANIFEST
   echo "installed code verified against the manifest"
 fi
