@@ -13,7 +13,7 @@ import e57_news10 as Q10
 import e57_events as EV
 import e57_namedevents as ND
 import e57_namedevents2 as N2
-CAPS=(20,30,40);NDRAW=5;NEXTRA=4;OVERLAP=0.2;SUSPECT=0.3
+DROP=('Nipah virus','IDFC First Bank fraud');CAPS=(20,30,40);NDRAW=5;NEXTRA=6;OVERLAP=0.2;SUSPECT=0.3
 def target_reasons(W):
     """job-221 rules, except that the family words reject only together with the private-individual proxy of S"""
     if not W:return []
@@ -74,12 +74,12 @@ def cap_stats(r,vn,seed):
             sub=set(random.Random(seed*1000+cap*10+d).sample(range(n),cap));tot+=sum(1 for t in V['targets'] if sum(1 for ai in t['occ_tok'] if ai in sub)>=3)
         res[cap]=tot/NDRAW
     res['articles']=n;return res
-def run(a):
+def analyze_all(a):
+    """events (regex events minus a.drop + added job-219 clusters), texts, analysis, target-level ethics filter -> dict used by run() and by e57_lite"""
     out=pathlib.Path(a.out);tp=out/'titles.pkl';assert tp.exists(),('titles.pkl missing in',str(out))
-    fd=out/'e57_namedevents3';fd.mkdir(exist_ok=True);rep=fd/'e57_namedevents3_report.md'
-    if rep.exists() and not a.rerun:print('report exists (exit 8; RERUN=1 to redo):',rep);sys.exit(8)
+    drop=getattr(a,'drop',DROP)
     t0=time.time();D=pickle.load(open(tp,'rb'));D['_ridx']={r:i for i,r in enumerate(D['rid'])};pub_date={r:EV.to_ord(d) for r,d in zip(D['rid'],D['date'])}
-    rx=collections.OrderedDict((k,[re.compile(x,re.I) for x in v]) for k,v in N2.EVENTS.items())
+    rx=collections.OrderedDict((k,[re.compile(x,re.I) for x in v]) for k,v in N2.EVENTS.items() if k not in drop)
     matched={k:ND.match_titles(D['title'],v) for k,v in rx.items()};print({k:len(v) for k,v in matched.items()},flush=True)
     extra=extra_events(D,out,list(matched.values()),a.n_extra)
     for nm,mem,row in extra:matched[nm]=mem
@@ -120,6 +120,11 @@ def run(a):
             for vn in('lead','full'):
                 tc,V=EV.target_counts(r,vn);row[vn]=dict(counts=tc,targets=len(V['targets']),pool=ND.pool_sat(r,vn),by_type=by_type(r,vn),caps=cap_stats(r,vn,a.seed))
         rows.append(row)
+    return dict(D=D,names=names,matched=matched,res=res,meta=meta,rows=rows,rejects=rejects,extra=extra,tank=tank,mach=mach,pub_date=pub_date,t0=t0,tinfo=tinfo)
+def run(a):
+    out=pathlib.Path(a.out);fd=out/'e57_namedevents3';fd.mkdir(exist_ok=True);rep=fd/'e57_namedevents3_report.md'
+    if rep.exists() and not a.rerun:print('report exists (exit 8; RERUN=1 to redo):',rep);sys.exit(8)
+    X=analyze_all(a);D,names,matched,res,meta,rows,rejects,extra,tank,mach,pub_date,t0=[X[k] for k in('D','names','matched','res','meta','rows','rejects','extra','tank','mach','pub_date','t0')]
     okidx=[i for i,r in enumerate(res) if r['ok'] and EV.target_counts(r,'lead')[1]['targets']]
     for i in okidx:
         for vn in('lead','full'):rows[i][vn]['outside']=N2.out_of_window(res,i,pub_date,vn,a.seed)
@@ -153,7 +158,7 @@ def report(M,a):
             for k in('all',20,30,40):tot[vn][k]+=c[k]
     for vn in('lead','full'):L.append(f"| all events | {vn} | | {tot[vn]['all']} | {tot[vn][20]:.1f} | {tot[vn][30]:.1f} | {tot[vn][40]:.1f} |")
     return '\n'.join(L+['','---','']+base)
-def _selftest():
+def _selftest(after=None):
     import tempfile,datetime,types,pyarrow as pa,pyarrow.parquet as pq
     W=['His wife and daughter were there.']
     assert target_reasons(W)==[] and N2.target_reasons(W)
@@ -181,13 +186,14 @@ def _selftest():
     class E:
         def encode_batch(self,ss,add_special_tokens=False):return [types.SimpleNamespace(ids=list(range(len(s.split())))) for s in ss]
     N._ENC=E()
-    a=argparse.Namespace(out=str(td),dup_jac=0.5,min_articles=5,min_domains=5,min_c=3,workers=1,seed=5,rerun=True,n_extra=4)
+    a=argparse.Namespace(out=str(td),dup_jac=0.5,min_articles=5,min_domains=5,min_c=3,workers=1,seed=5,rerun=True,n_extra=4,drop=())
     run(a);M=json.load(open(td/'e57_namedevents3'/'e57_namedevents3.json'));byn={r['event']:r for r in M['rows']}
     assert [e['name'] for e in M['extra']]==['Cluster: Zebra festival draws crowds in Nairobi 0'],M['extra']     # Nipah overlaps an earlier event, Quarterly is a recurring suspect
     z=byn['Cluster: Zebra festival draws crowds in Nairobi 0'];assert z['ok'] and z['lead']['targets']>=1 and z['lead']['caps']['20']>=0 and z['lead']['by_type']
     n=byn['Nipah virus'];assert n['lead']['caps']['all']==n['lead']['targets'] and n['lead']['caps']['40']==n['lead']['targets']
     t=(td/'e57_namedevents3'/'e57_namedevents3_report.md').read_text();assert 'article cap' in t and 'candidate pools' in t
     print('e57_namedevents3 selftest ok:',{k:(v['titles'],v['n_dedup'],v.get('lead',{}).get('targets')) for k,v in byn.items() if v['titles']})
+    if after:after(td)
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--out',default='e57_news');ap.add_argument('--raw',default='news_raw');ap.add_argument('--dup-jac',type=float,default=0.5);ap.add_argument('--min-articles',type=int,default=5);ap.add_argument('--min-domains',type=int,default=5);ap.add_argument('--min-c',type=int,default=3)
     ap.add_argument('--workers',type=int,default=8);ap.add_argument('--seed',type=int,default=57);ap.add_argument('--n-extra',type=int,default=NEXTRA);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
