@@ -46,7 +46,7 @@ def extra_events(D,out,matched_sets,n=NEXTRA):
     for r in sorted(M['rows'],key=lambda r:(-r['members'],-r['core'])):
         if len(res)>=n:break
         if r['recur']>=SUSPECT or r['product']>=SUSPECT:continue
-        mem=set(cl[r['ci']]['members']);tt=set(r['top_tokens'])
+        mem=set(cl[r['ci']]['members']);tt={x if isinstance(x,str) else x[0] for x in r['top_tokens']}   # real rows: [token, share] pairs (json lists)
         bad=False
         for s,t_ in zip(taken,toks):
             if len(mem&s)>=OVERLAP*len(mem) or (t_ is not None and len(tt&t_)>=2):bad=True;break
@@ -181,7 +181,7 @@ def _selftest(after=None):
     idx=lambda p:[i for i,t in enumerate(title) if t.startswith(p)]
     cl=[dict(members=idx('Nipah'),n_hosts=14),dict(members=idx('Zebra'),n_hosts=10),dict(members=idx('Quarterly'),n_hosts=10)]
     pickle.dump(dict(clusters=cl),open(fd/'clusters_big.pkl','wb'))
-    rows=[dict(ci=0,members=14,core=.9,first=20260101,last=20260110,top_tokens=['nipah','virus','case'],recur=0.,product=0.,examples=['Nipah virus case confirmed update 0'],split=dict(largest_share=.9)),dict(ci=2,members=10,core=.9,first=20260101,last=20260110,top_tokens=['quarterly','results','earnings'],recur=1.,product=0.,examples=['Quarterly results earnings report 0'],split=dict(largest_share=.9)),dict(ci=1,members=10,core=.9,first=20260101,last=20260110,top_tokens=['zebra','festival','crowds'],recur=0.,product=0.,examples=['Zebra festival draws crowds in Nairobi 0'],split=dict(largest_share=.9))]
+    rows=[dict(ci=0,members=14,core=.9,first=20260101,last=20260110,top_tokens=[['nipah',.9],['virus',.8],['case',.7]],recur=0.,product=0.,examples=['Nipah virus case confirmed update 0'],split=dict(largest_share=.9)),dict(ci=2,members=10,core=.9,first=20260101,last=20260110,top_tokens=[['quarterly',.9],['results',.8],['earnings',.7]],recur=1.,product=0.,examples=['Quarterly results earnings report 0'],split=dict(largest_share=.9)),dict(ci=1,members=10,core=.9,first=20260101,last=20260110,top_tokens=[['zebra',.9],['festival',.8],['crowds',.7]],recur=0.,product=0.,examples=['Zebra festival draws crowds in Nairobi 0'],split=dict(largest_share=.9))]
     json.dump(dict(rows=rows),open(fd/'e57_biglist.json','w'))
     class E:
         def encode_batch(self,ss,add_special_tokens=False):return [types.SimpleNamespace(ids=list(range(len(s.split())))) for s in ss]
