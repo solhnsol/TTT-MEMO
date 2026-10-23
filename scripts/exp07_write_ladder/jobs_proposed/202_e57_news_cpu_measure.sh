@@ -10,7 +10,7 @@ PY=$(realpath -s "$PY")
 case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
-COMMIT=10853fe4aa571c1b7e5276c482da2b70e21dce3a
+COMMIT=fcc1d2b8447f1e03982b21bbc5957a479961b7f6
 FILES="$D/e56/e56_text.py $D/e57/e57_common.py $D/e57/e57_news.py"
 : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}/e57_news}"; mkdir -p "$OUT"; : "${RAW:=$OUT/news_raw}"; : "${WORKERS:=16}"; : "${MAXCL:=3000}"
 if [ -z "$NO_INSTALL" ]; then
@@ -25,7 +25,7 @@ if [ -z "$SKIP_VERIFY" ]; then
   done <<'MANIFEST'
 f09dcb7e69eb e56/e56_text.py
 a0590cd53539 e57/e57_common.py
-5a813562330b e57/e57_news.py
+dfb4de7621d0 e57/e57_news.py
 MANIFEST
   echo "installed code verified against the manifest"
 fi
