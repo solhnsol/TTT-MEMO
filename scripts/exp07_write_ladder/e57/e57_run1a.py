@@ -7,8 +7,11 @@ HERE=pathlib.Path(__file__).resolve().parent;sys.path.insert(0,str(HERE.parent))
 CH=1024;WIN=8192;LIMIT=0.10
 def choose_rec_rounds(rc,seq_len,n_prefix):
     """-> (P, exact, need, maxfit)"""
-    need=math.ceil(n_prefix*WIN/(rc*CH))+1;maxfit=int((2*seq_len)//(rc*CH));assert maxfit>=2,('one round is longer than half of the RoPE table',rc*CH,2*seq_len)
-    P=max(2,min(need,maxfit));return P,bool(P>=need),need,maxfit
+    need=math.ceil(n_prefix*WIN/(rc*CH))+1;maxfit=int((2*seq_len)//(rc*CH))
+    if os.environ.get('ROPE_TABLE'):       # upstream table lookup: recorded positions must stay inside 2*seq_len
+        assert maxfit>=2,('one round is longer than half of the RoPE table',rc*CH,2*seq_len);P=max(2,min(need,maxfit))
+    else:P=max(2,need)                      # rope_fly (no table): the exact number of rounds always fits
+    return P,bool(P>=need),need,maxfit
 def load_frozen(fd):
     fd=pathlib.Path(fd);man=json.load(open(fd/'freeze_manifest.json'))
     for name,sha in man['files'].items():

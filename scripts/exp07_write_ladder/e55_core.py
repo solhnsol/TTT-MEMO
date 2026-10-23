@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import e55_swap as E
 import s3
+import rope_fly;rope_fly.install()      # RoPE computed at the requested positions: no 2*seq_len table, so streams longer than the table (512 chunks) work and no compiled function carries a table constant (E57 / job 208)
 jax,jnp,eqx=s3.jax,s3.jnp,s3.eqx
 CH=1024;WIN=8192;NW=E.NW
 IMPLEMENTED0=('NAT','NATM','SWD','SWB','SWDS','SWDO','MSK','SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75','MIX25','MIX50','MIX75','ALT','NATADAM','SENTPQADAM','SENTPQADAMH')
@@ -128,7 +129,7 @@ class Ladder55(s3.Ladder3):
             assert arm=='NAT' and uv is None and diag_fn is None and diag_multi is None and decoy_ids is None and bg_ids is None and read_hook is None,'periodic K,V sharing is for the plain NAT arm only'
             assert rc>=1 and nrec%rc==0 and nrec>=2*rc and nrec<=nch,(rc,nrec,nch)
             try:
-                sl=int(rt.cfg.model.seq_len);assert nrec*CH<=2*sl,('recorded positions exceed the RoPE table (2*seq_len)',nrec*CH,2*sl)
+                sl=int(rt.cfg.model.seq_len);assert not os.environ.get('ROPE_TABLE') or nrec*CH<=2*sl,('recorded positions exceed the RoPE table (2*seq_len)',nrec*CH,2*sl)
             except AttributeError:pass          # runtime without cfg: the caller checks the table size
             kmap=lambda k_:k_ if k_<nrec else base_+((k_-base_)%rc);self._km=kmap
         names=['real']+(['decoy'] if arm in ('SWD','SWDS','SWDO') or (diag_multi is not None and decoy_ids is not None) else [])+(['bg'] if arm=='SWB' else [])

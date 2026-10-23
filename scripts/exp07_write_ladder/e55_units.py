@@ -864,7 +864,56 @@ def u43():
     for a_,b_ in zip(A['reads'][1:],P2['reads'][1:]):assert abs(a_['crise']-b_['crise'])<=1e-2*max(a_['crise'],1e-6),(a_['R'],a_['crise'],b_['crise'])
     assert RA.decision(A).startswith('canary rise <= ') or 'R_max' in RA.decision(A);assert 'R_max' in RA.report(A)
     RES['U43']=f"stage-1a runner on the tiny model: reads only at the ends of rounds 2,3,4 (chunks 7,11,15), canary rises {[round(x['crise'],3) for x in A['reads']]}, summary / saved json without model objects, resume bundle reproduces the later reads of the one-piece run (rise within 1%)"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40,'U41':u41,'U42':u42,'U43':u43}
+def u44():
+    """RoPE without table (rope_fly): (a) inside the table the patched apply_rope equals the upstream table version (max abs diff on random q, k at random and edge positions); (b) beyond the table (positions up to 3.4M, table = 2*seq_len) the values are finite and a q.k score depends on the relative offset only (median relative error < 2%); (c) the upstream lookup beyond the table is NOT usable (clamps: wrong rotation); (d) a 3-chunk NAT stream is identical with and without the patch"""
+    import rope_fly as RF;assert RF.UPSTREAM is not None,'patch not installed'
+    from ttt.model import attention as A
+    att=[m for m in jax.tree.leaves(rt.base,is_leaf=lambda x:isinstance(x,A.AttentionBase)) if isinstance(x:=m,A.AttentionBase)][0]
+    tab=2*int(att.config.seq_len);hd=att.head_dim;rng=np.random.default_rng(3)
+    q=jnp.asarray(rng.standard_normal((1,256,att.num_heads,hd)),jnp.float32);pos=jnp.asarray(np.concatenate([rng.integers(0,tab,200),np.tile([0,1,tab-1],19)[:56]]),jnp.int32)
+    new=att.apply_rope(q,pos);old=RF.UPSTREAM(att,q,pos);da=float(jnp.max(jnp.abs(new-old)))
+    assert da<=1e-5,da
+    q1=jnp.asarray(rng.standard_normal((1,1,att.num_heads,hd)),jnp.float32);k1=jnp.asarray(rng.standard_normal((1,1,att.num_heads,hd)),jnp.float32);errs=[]
+    for t in (0,tab-1,tab+5,500000,1700000,3400000):
+        for d in (1,64,1024,8191):
+            sq=lambda a,b:float(jnp.sum(att.apply_rope(q1,jnp.asarray([a],jnp.int32))*att.apply_rope(k1,jnp.asarray([b],jnp.int32))))
+            s_=sq(t+d,t);s0=sq(d,0);errs.append(abs(s_-s0)/(float(jnp.linalg.norm(q1))*float(jnp.linalg.norm(k1))))
+    assert all(np.isfinite(errs)) and float(np.median(errs))<0.02,np.median(errs)
+    far=jnp.asarray([3400000],jnp.int32);cl=float(jnp.max(jnp.abs(RF.UPSTREAM(att,q1,far)-RF.UPSTREAM(att,q1,jnp.asarray([tab-1],jnp.int32)))));fa=float(jnp.max(jnp.abs(att.apply_rope(q1,far)-RF.UPSTREAM(att,q1,jnp.asarray([tab-1],jnp.int32)))))
+    ids=REAL[:3*CH];r_new=L.run_stream('NAT',1,ids,nch=3,tag='u44',log=lambda *x:None);n_new=[e['update_norm'] for e in r_new['log']];r_new.pop('model',None)
+    import packing;saved=packing._orig_rope;packing._orig_rope=RF.UPSTREAM
+    try:
+        jax.clear_caches();L3=C.Ladder55(rt,save_dir='/tmp/e55_units_states');r_old=L3.run_stream('NAT',1,ids,nch=3,tag='u44o',log=lambda *x:None);n_old=[e['update_norm'] for e in r_old['log']];r_old.pop('model',None)
+    finally:packing._orig_rope=saved;jax.clear_caches()
+    dn=max(abs(a-b)/max(abs(b),1e-9) for a,b in zip(n_new,n_old));assert dn<1e-4,(n_new,n_old)
+    RES['U44']=f"inside the table max abs diff {da:.2e}; beyond it (up to 3.4M) median relative score error {float(np.median(errs)):.4f}, max {max(errs):.4f}; upstream lookup at 3.4M gives {"NaN" if cl!=cl else "the last table row"} (differs from the patched value by {fa:.2f}), unusable; 3-chunk NAT update norms patched vs table: max relative diff {dn:.1e}"
+def u45():
+    """E57 approximation error (CPU, tiny model with ONE prefix layer, round = 4 chunks, so exactness needs P = 3 recorded rounds): the same 5-round stream plain vs periodic with P = 3 (exact) and P = 2 (approximate: context deeper than the recorded rounds is cut). Reports the per-chunk relative deviation of CE and of the update norm and the final weight difference relative to the weight change; the P = 3 run must be exact to 1e-3, the P = 2 deviation is a measurement (only required to be finite and below 50 %)."""
+    rt2=H.TinyRuntime(layers=3,suffix=2);L2=C.Ladder55(rt2,save_dir='/tmp/e55_units_states')
+    rc=4;R=5;nch=rc*R;ids=np.tile(np.random.default_rng(7).integers(3,rt2.cfg.model.vocab_size,size=rc*CH),R)
+    a=L2.run_stream('NAT',1,ids,nch=nch,tag='u45a',log=lambda *x:None);w0=rt2.base.inner_parameters()
+    dev={}
+    for P in (3,2):
+        b=L2.run_stream('NAT',1,ids,nch=nch,tag=f'u45p{P}',log=lambda *x:None,periodic={'round_chunks':rc,'rec_chunks':P*rc})
+        ce=[abs(a['log'][k]['ce']-b['log'][k]['ce'])/abs(a['log'][k]['ce']) for k in range(nch)];un=[abs(a['log'][k]['update_norm']-b['log'][k]['update_norm'])/a['log'][k]['update_norm'] for k in range(nch)]
+        dev[P]=dict(ce_max=max(ce),ce_late=max(ce[P*rc:]),un_max=max(un),un_late=max(un[P*rc:]),wd=maxdiff(a['model'].inner_parameters(),b['model'].inner_parameters())/maxdiff(a['model'].inner_parameters(),w0))
+    assert dev[3]['ce_max']<=1e-3 and dev[3]['un_max']<=1e-3 and all(np.isfinite(list(v.values())).all() and v['ce_max']<0.5 and v['un_max']<0.5 for v in dev.values()),dev
+    RES['U45']="P=3 (exact): max rel. deviation CE %.1e / update norm %.1e, final weights %.1e of the total weight change; P=2 (approximate, chunks %d-%d use the cut context): CE %.2e (max), %.2e (late chunks), update norm %.2e / %.2e, final weights %.2e of the total weight change"%(dev[3]['ce_max'],dev[3]['un_max'],dev[3]['wd'],2*rc,nch-1,dev[2]['ce_max'],dev[2]['ce_late'],dev[2]['un_max'],dev[2]['un_late'],dev[2]['wd'])
+def u46():
+    """world with period p = 4 (cell v3_64_4 shape: k sentences per 4 chunks, 3 exposures here = 12 chunks) through the decomp stream path on the tiny model: the read hook is called exactly at the chunks a x p - 1 and maps to the exposure count (k + 1) // p; SENTPQ masks earlier fact sentences from chunk 1 on; SENTPQADAMH takes half the SENTPQ update norm per chunk"""
+    import gen_facts as G
+    enc=G.StubTok();w=G.build_fact_world(61,enc=enc,bg=G._synth_bg(9000),k=16,n=1,p=4,bank='300',n_app=3,decoys=('names',));PP=w['p'];nch=w['n_chunks'];assert PP==4 and nch==12 and w['read_chunks']==[3,7,11] or w['read_chunks']==[a*PP-1 for a in w['read_apps']],(w['read_chunks'],nch)
+    V=rt.cfg.model.vocab_size;ids=np.asarray(G.stream_ids(G.realize(w)),np.int64)%V;ids[ids<3]+=3
+    got={};hc=[3,7,11]
+    def run(ar,ntg=None):
+        calls=[]
+        L2=C.Ladder55(rt,save_dir='/tmp/e55_units_states')
+        r=L2.run_stream(ar,1,ids,nch=nch,tag='u46'+ar,log=lambda *x:None,chunks_meta=w['chunks'],norm_targets=ntg,read_hook=lambda k,m:calls.append((k,(k+1)//PP)) or {},hook_chunks=hc);r.pop('model',None);return r,calls
+    rn,cn=run('NAT');assert cn==[(3,1),(7,2),(11,3)],cn
+    rs,cs=run('SENTPQ');assert cs==cn and rs['log'][0]['n_masked_keys']==0 and all(e['n_masked_keys']>0 for e in rs['log'][1:]),[e['n_masked_keys'] for e in rs['log']]
+    tg=[e['update_norm'] for e in rs['log']];ra,_=run('SENTPQADAMH',tg);ratio=float(np.mean([a['update_norm']/b for a,b in zip(ra['log'],tg)]));assert 0.45<=ratio<=0.55,ratio
+    RES['U46']=f"p = 4 world (16 facts, 12 chunks): hook calls {cn} (chunk, exposure count); SENTPQ masked keys per chunk {[e['n_masked_keys'] for e in rs['log']][:5]}...; Adam-0.5N / SENTPQ mean update norm ratio {ratio:.3f}"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40,'U41':u41,'U42':u42,'U43':u43,'U44':u44,'U45':u45,'U46':u46}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

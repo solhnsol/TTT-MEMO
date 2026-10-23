@@ -136,6 +136,12 @@ def selftest():
             r_=rec(1.0+0.1*len(ar)%1);(d10/f'E55_{tg}_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (16,32,64,128)},'W0':{'out':r_['W0']['out']}}))
             (d10/f'E55_{tg}_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'n_masked_keys':600,'lab_recall':0.8,'lab_precision':0.7,'lab_bg_false':0.17} for _ in range(128)],'dclm_w0':3.0,'dclm_end':3.04,'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':{'_gen_nll':3.03,'_tail_nll':3.0}}))
     ERR.clear();t=uv_report(d10,[61]);assert 'verdict (pre-set rule' in t and 'one seed: first observation' in t and 'cells shown as n/a failed' not in t and '0.80' in t,t
+    d11=Path(tempfile.mkdtemp())
+    for sd in (61,62,63):
+        for i,ar in enumerate(('NAT','SENTPQ','SENTPQADAMH')):
+            r_=rec(1.0*i);(d11/f'E55_d64_{ar}_s{sd}.read.json').write_text(json.dumps({**r_,'read':{str(a):{'out':r_['read']['16']['out']} for a in (16,32,64,128)},'W0':{'out':r_['W0']['out']}}))
+            ce={'_gen_nll':3.02+0.02*i,'_tail_nll':3.0};(d11/f'E55_d64_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'coef':0.9 if k%2 else 1.0,'update_norm':0.01*(1+i)} for k in range(512)],'dclm_w0':3.0,'dclm_end':3.01,'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':ce,'canary_by_app':{'16':ce,'32':ce,'64':ce,'128':ce}}))
+    ERR.clear();t=d64_report(d11,[61,62,63]);assert 'reading rules applied' in t and 'SENTPQ - NAT' in t and 'cells shown as n/a failed' not in t and '1. shadowing at k = 64: YES' in t and '2. effect kept (SENTPQ g(128) >= 0.12): YES' in t and '4. canary rise at a = 128 <= 0.10 for every arm: YES' in t,t       # in-window cell n/a: the synthetic records carry no in-window context
     print('e55_ic_report SELFTEST OK')
 def uv_report(d,seeds,tag='uv',ref_tag='q1b',apps=(16,32,64,128),out=None,load=None):
     """E55 32.8 online label-free sentence-vote masks. UVA/UVB/UVC (g3 sentence votes p25 k2 / p25 k3 / p20 k1) and the matched random-sentence controls RSA/RSB/RSC (same hidden-token count per chunk), all with the Adam-0.5N write (step = 0.5 x SENTPQ-STD update norm of the same seed), against SENTPQ-ADAM-0.5N (hide every fact sentence, reference) and NAT-ADAM (no mask) of tag q1b. Mask quality columns come from the per-chunk log (labels are used for the log only): hidden % of the window, fact-token recall, precision, background false-mask rate (chunks >= 8). Pre-set rule (design 32.8): R = g(UV) / g(SENTPQ-ADAM-0.5N) at a=128; R >= 0.7 and g(UV) - g(RS) >= +0.10 -> label-free sentence masking works; R <= 0.3 -> does not; otherwise undetermined. One seed = first observation."""
@@ -388,6 +394,77 @@ def q34_report(d,seeds,tag='q34',ref_tag='q1b',apps=(16,32,64,128),out=None,load
     for ar,fac in (('SENTP25ADAMH',.5),('SENTP50ADAMH',.5),('SENTP75ADAMH',.5),('SENTPQADAM75',.75),('SENTPQVFIX10',1.0),('SENTPQVFIX05',.5)):
         r=[np.mean([e['update_norm'] for e in S[s_,ar]['log']])/np.mean([e['update_norm'] for e in S[s_,'SENTPQ']['log']]) for s_ in seeds if (s_,ar) in S and (s_,'SENTPQ') in S and S[s_,ar].get('log') and S[s_,'SENTPQ'].get('log')]
         L.append(f'- {ar}: '+(f'{np.mean(r):.2f} (target {fac})' if r else 'n/a'))
+    if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t)
+    return t
+def d64_report(d,seeds,tag='d64',arms=('NAT','SENTPQ','SENTPQADAMH'),apps=(16,32,64,128),out=None,load=None):
+    """E57 section 12 recommendation D, step 1 (world v3_64_4: 64 facts, period p = 4, 128 exposures per fact, 512 chunks = 512 updates): out-of-window g (W0 subtracted) at a = 16, 32, 64, 128 per arm (pooled over seeds, fact bootstrap), in-window g at 128, paired differences, canary NLL rise vs W0 (max of generic and tail text, max over seeds) at each read point, DCLM first-chunk NLL change, update norms, and the PRE-SET reading rules (fixed in the text before any result)."""
+    load=load or (lambda f:json.load(open(f)));G={};S={}
+    for sd in seeds:
+        for ar in arms:
+            f=Path(d)/f'E55_{tag}_{ar}_s{sd}.read.json'
+            if f.exists():G[sd,ar]=load(f)
+            f=Path(d)/f'E55_{tag}_{ar}_s{sd}.saved.json'
+            if f.exists():S[sd,ar]=json.load(open(f))
+    ERR.clear();name={'NAT':'NAT (plain write)','SENTPQ':'SENTPQ (masked, SGD)','SENTPQADAMH':'SENTPQ-ADAM-0.5N (masked, Adam direction, half norm)'}
+    def pooled(ar,a,ctx='out'):
+        use=[s_ for s_ in seeds if (s_,ar) in G]
+        try:
+            if not use:return None
+            cx=[ctx if ctx!='in' else in_ctx(G[s_,ar]) for s_ in use]
+            return None if None in cx else np.concatenate([fact_g(G[s_,ar],a,c_) for s_,c_ in zip(use,cx)])
+        except Exception as e:ERR.append(f'{ar}@{a}: {e!r}');return None
+    def seedmean(ar,s_,a):
+        try:return float(np.mean(fact_g(G[s_,ar],a,'out')))
+        except Exception as e:ERR.append(f'{ar}/{s_}: {e!r}');return float('nan')
+    def rise(s_,ar,a):
+        x=S.get((s_,ar),{});c=(x.get('canary_by_app') or {}).get(str(a)) or (x.get('canary_end') if a==apps[-1] else None);w=x.get('canary_w0')
+        return None if not c or not w else max(c[k]-w[k] for k in ('_gen_nll','_tail_nll'))
+    def mx(v):
+        v=[y for y in v if y is not None];return max(v) if v else None
+    L=[f'# E55 world v3_64_4 report (E57 section 12 recommendation D, step 1): 64 facts, seeds {list(seeds)}','',
+       'World v3_64_4: 64 facts, each fact in every 4th chunk (period p = 4), 16 fact sentences per chunk (the density of v3_16_1), 128 exposures per fact = 512 chunks = 512 updates, frame bank of 300, same name / place pools, background from the extended public-domain book pool (the background is never repeated). Window 8192 kept. Reads: out-of-window (unexposed frames, W0 subtracted) at a = 16, 32, 64, 128 exposures, in-window at a = 128, canary NLL and DCLM first-chunk NLL. Arms: NAT = plain write; SENTPQ = the same stream with earlier fact sentences masked from attention (SGD step, natural size); SENTPQ-ADAM-0.5N = masked + Adam-direction step of half the SENTPQ norm (job 192 rule, norm target = the SENTPQ update norms of the same seed).','',
+       '## Pre-set reading rules (written before any result)','',
+       '1. SHADOWING at k = 64: NAT pooled g(128) within +-0.10 AND SENTPQ - NAT at a = 128 has a 95% interval above 0.',
+       '2. EFFECT KEPT at k = 64 (orientation, not the same world): SENTPQ g(128) >= 0.5 x 0.239 (the k = 16 value of SENTPQ-STD, e55_q1b_report) = 0.12; below this the effect is reduced at the larger fact count (capacity / competition between facts), at or above it it is kept.',
+       '3. ADAM-0.5N: SENTPQ-ADAM-0.5N - SENTPQ at a = 128 has a 95% interval above 0 (the k = 16 values were +0.326 versus +0.239).',
+       '4. DAMAGE (absolute, E57 limit): canary NLL rise vs W0 at a = 128 <= 0.10 for every arm (k = 16 reference at 128 updates: SGD +0.023, 0.5N +0.043); the rise at a = 32 / 64 / 128 is the damage curve versus the number of updates (128 / 256 / 512 updates at a = 32 / 64 / 128 exposures x p = 4 = 128 / 256 / 512 chunks).','',
+       '## g by exposure count (out-of-window)','','| arm | '+' | '.join(f'a={a}' for a in apps)+' | in-window a=128 |','|---|'+'---|'*(len(apps)+1)]
+    for ar in arms:
+        ps={a:pooled(ar,a) for a in apps};pi=pooled(ar,apps[-1],'in')
+        L.append(f'| {name[ar]} | '+' | '.join(fmt(boot(ps[a])) if ps[a] is not None else 'n/a' for a in apps)+' | '+(fmt(boot(pi)) if pi is not None else 'n/a')+' |')
+    L+=['','per seed (out-of-window seed mean g):','','| arm | seed | '+' | '.join(f'a={a}' for a in apps)+' |','|---|---|'+'---|'*len(apps)]
+    for ar in arms:
+        for s_ in seeds:
+            if (s_,ar) in G:L.append(f'| {name[ar]} | {s_} | '+' | '.join(f'{seedmean(ar,s_,a):+.3f}' for a in apps)+' |')
+    L+=['','paired differences (pooled over seeds, same facts):','','| contrast | '+' | '.join(f'a={a}' for a in apps)+' |','|---|'+'---|'*len(apps)]
+    cont=(('SENTPQ - NAT','SENTPQ','NAT'),('SENTPQ-ADAM-0.5N - NAT','SENTPQADAMH','NAT'),('SENTPQ-ADAM-0.5N - SENTPQ','SENTPQADAMH','SENTPQ'))
+    for nm,x,y in cont:
+        row=[]
+        for a in apps:
+            use=[s_ for s_ in seeds if (s_,x) in G and (s_,y) in G]
+            try:row.append(fmt(boot(np.concatenate([fact_g(G[s_,x],a,'out')-fact_g(G[s_,y],a,'out') for s_ in use]))) if use else 'n/a')
+            except Exception as e:ERR.append(f'diff {nm}: {e!r}');row.append('n/a')
+        L.append(f'| {nm} | '+' | '.join(row)+' |')
+    L+=['','## damage: canary NLL rise vs W0 (max of generic and tail text, max over seeds) and DCLM first-chunk NLL change at a = 128 (mean over seeds)','','| arm | rise a=16 | a=32 | a=64 | a=128 | DCLM change a=128 | mean update norm | clip share (coef < 1) |','|---|---|---|---|---|---|---|---|']
+    f_=lambda v:'n/a' if v is None else f'{v:+.3f}';r128={}
+    for ar in arms:
+        rw={a:mx([rise(s_,ar,a) for s_ in seeds if (s_,ar) in S]) for a in apps};r128[ar]=rw[apps[-1]]
+        dc=[S[s_,ar]['dclm_end']-S[s_,ar]['dclm_w0'] for s_ in seeds if (s_,ar) in S and S[s_,ar].get('dclm_end') is not None and S[s_,ar].get('dclm_w0') is not None]
+        un=[float(np.mean([e['update_norm'] for e in S[s_,ar]['log']])) for s_ in seeds if (s_,ar) in S and S[s_,ar].get('log')];cl=[float(np.mean([e['coef']<1 for e in S[s_,ar]['log']])) for s_ in seeds if (s_,ar) in S and S[s_,ar].get('log')]
+        L.append(f'| {name[ar]} | '+' | '.join(f_(rw[a]) for a in apps)+f' | {f_(float(np.mean(dc)) if dc else None)} | '+(f'{np.mean(un):.4f}' if un else 'n/a')+' | '+(f'{np.mean(cl):.2f}' if cl else 'n/a')+' |')
+    p_nat,p_s,p_ah=pooled('NAT',128),pooled('SENTPQ',128),pooled('SENTPQADAMH',128);yn=lambda v:'n/a' if v is None else ('YES' if v else 'NO')
+    r1=None;r2=None;r3=None
+    try:
+        if p_nat is not None and p_s is not None:
+            dd=boot(np.concatenate([fact_g(G[s_,'SENTPQ'],128,'out')-fact_g(G[s_,'NAT'],128,'out') for s_ in seeds if (s_,'SENTPQ') in G and (s_,'NAT') in G]));r1=abs(float(np.mean(p_nat)))<=0.10 and dd[1]>0
+        if p_s is not None:r2=float(np.mean(p_s))>=0.12
+        if p_s is not None and p_ah is not None:
+            dd=boot(np.concatenate([fact_g(G[s_,'SENTPQADAMH'],128,'out')-fact_g(G[s_,'SENTPQ'],128,'out') for s_ in seeds if (s_,'SENTPQADAMH') in G and (s_,'SENTPQ') in G]));r3=dd[1]>0
+    except Exception as e:ERR.append(f'verdict: {e!r}')
+    r4=None if not r128 or any(v is None for v in r128.values()) else all(v<=0.10 for v in r128.values())
+    L+=['','## reading rules applied','',f'1. shadowing at k = 64: {yn(r1)}',f'2. effect kept (SENTPQ g(128) >= 0.12): {yn(r2)}',f'3. Adam-0.5N better than SENTPQ at a = 128: {yn(r3)}',f'4. canary rise at a = 128 <= 0.10 for every arm: {yn(r4)}']
     if ERR:L+=['',f'cells shown as n/a failed: {sorted(set(ERR))[:4]}']
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
@@ -697,6 +774,8 @@ if __name__=='__main__':
         _s.argv.remove('--q1a');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q1a');a=ap.parse_args();print(q1a_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     if '--q1b' in _s.argv:
         _s.argv.remove('--q1b');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q1b');a=ap.parse_args();print(q1b_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
+    if '--d64' in _s.argv:
+        _s.argv.remove('--d64');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='d64');a=ap.parse_args();print(d64_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     if '--all' in _s.argv:
         _s.argv.remove('--all');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='all');a=ap.parse_args();print(all_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     if '--uv' in _s.argv:
