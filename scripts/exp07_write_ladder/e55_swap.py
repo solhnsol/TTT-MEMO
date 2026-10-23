@@ -35,6 +35,7 @@ def compose_window(src,k,pl,CH,seqlen=None,axis=0):
         a=src[s];assert a.shape==ref.shape,('recording shape differs',s);parts.append(sl(a,c));keep.append(np.ones(CH,bool))
     return np.concatenate(parts,axis),np.concatenate(keep)
 UV={'UVA':(25,2),'UVB':(25,3),'UVC':(20,1)};RS={'RSA':'UVA','RSB':'UVB','RSC':'UVC'};UVARMS=tuple(UV)+tuple(RS)   # E55 32.8 online label-free UNIONVOTE sentence masks: UV(p %, k votes); RS = random window sentences with the same hidden-token count per chunk as the UV arm it is matched to. All six write with Adam-0.5N (norm target = 0.5 x SENTPQ)
+SELARMS=tuple(f'SELC{i}' for i in range(1,11));RS.update({f'RSELC{i}':f'SELC{i}' for i in range(1,11)});UVARMS=UVARMS+SELARMS+tuple(f'RSELC{i}' for i in range(1,11))      # E55 32.11: SELC<r> = stored label-free masks of the sentence-grid candidate of rank r (e55_selmask, computed once per seed, shared by the arms), RSELC<r> = random window sentences with the same hidden-token count per chunk; both write with Adam-0.5N like UVA
 ADAM.update({a:('NAT',0.5,False) for a in UVARMS})
 ARMS+=[k for k in ADAM if k not in ARMS]
 MASK_ARMS=('SENT','KMASK','SENTO','SENTPQ','OSPAN','PSPAN','NSPAN','OSPANR25','OSPANR50','OSPANR75','OCCSPAN','ALLSPAN','SENTP25','SENTP50','SENTP75')

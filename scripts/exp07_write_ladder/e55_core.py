@@ -142,7 +142,11 @@ class Ladder55(s3.Ladder3):
             seqs={nm:self._stream_seq(ids_[nm],nch) for nm in names};prefs={nm:rt.prefix(rt.base,seqs[nm] if not periodic else self._stream_seq(ids_[nm],nrec)) for nm in names}
             recs={}
             for nm in names:
-                t0=time.monotonic();Kh,Vh,_=self.record(ids_[nm][:nrec*CH]);recs[nm]=(Kh,Vh);log(f'  recorded natural K,V of {nm} ({Kh.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s')
+                t0=time.monotonic();rk=(hashlib.sha256(np.asarray(ids_[nm][:nrec*CH],np.int64).tobytes()).hexdigest(),nrec);rc_=getattr(self,'rec_cache',None)       # rec_cache (a dict set by the caller, E55 32.10 sentence dump): the same stream is recorded once for several arms
+                if rc_ is not None and rk in rc_:Kh,Vh=rc_[rk];recs[nm]=(Kh,Vh);log(f'  natural K,V of {nm} taken from the record cache');continue
+                Kh,Vh,_=self.record(ids_[nm][:nrec*CH]);recs[nm]=(Kh,Vh)
+                if rc_ is not None:rc_[rk]=(Kh,Vh)
+                log(f'  recorded natural K,V of {nm} ({Kh.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s')
             sts={nm:s3.clone_state(rt.state_suffix) for nm in names}
             if sts0 is not None:sts['real']=sts0
             if self.canary and start_chunk==0:out['canary_w0']=self.canary(m)
@@ -179,7 +183,7 @@ class Ladder55(s3.Ladder3):
                         for cn in diag_multi.conds:   # arm names of the window conditions
                             Kx,Vx,kx,sx,_pl=self.window_inputs(cn,k,p,recs,sts,[]);conds[cn]=(Kx,Vx,kx,sx)
                         out.setdefault('diag_multi',{})[k]=diag_multi(k,m,conds,ids_['real'][k*CH:(k+1)*CH],c,out['log'])
-                    if diag_fn is not None and k in diag_chunks:out.setdefault('diag',{})[k]=diag_fn(k,m,Kc,Vc,keep,ids_['real'][k*CH:(k+1)*CH])      # E55 27.8: forward-only attention diagnostic with the window inputs of this chunk, weights before its write
+                    if diag_fn is not None and k in diag_chunks:out.setdefault('diag',{})[k]=(diag_fn(k,m,Kc,Vc,keep,ids_['real'][k*CH:(k+1)*CH],ctx={'st_w':st_w,'c':c,'pref_w':pref_w}) if getattr(diag_fn,'wants_ctx',False) else diag_fn(k,m,Kc,Vc,keep,ids_['real'][k*CH:(k+1)*CH]))      # E55 27.8: forward-only attention diagnostic with the window inputs of this chunk, weights before its write
                 for nm in names:sts[nm]=self.read_state(old,sts[nm],rt.chunk(seqs[nm],k),prefs[nm][(kmap(k) if kmap else k)*CH:((kmap(k) if kmap else k)+1)*CH])   # same weights (start of the chunk) for every chain
                 scale=adam_scale if arm in E.ADAM else 1.0
                 if arm=='NATM':          # size-matched NAT: the NAT update of chunk k is rescaled to the update norm norm_targets[k] (the per-chunk norm of arm SWD of the same seed); direction unchanged
