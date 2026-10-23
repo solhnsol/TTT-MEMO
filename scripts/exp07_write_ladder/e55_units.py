@@ -966,7 +966,55 @@ def u47():
     chunks={'NAT':{k:{**dn}},'SENTPQADAMH':{k:{**ds}}};lab={k:lb};rows=GR.run(chunks,lab,GR.configs()[:20]+[c_ for c_ in GR.configs() if c_.get('v6') or c_.get('v7')][::9]);t=GR.report(rows,chunks);assert 'Verdict' in t
     assert float(ds['A'].astype(np.float32).sum(-1).max())<=1.0+1e-2 and np.isfinite(ds['q_ce']).all()
     RES['U47']=f"sentence dump at chunk 9 of a p=1 world: A {A.shape} (groups, heads, {nQ} query sentences, {nW} window sentences), max row sum {float(A.sum(-1).max()):.3f}, deviation from the by-hand aggregation of the full attention rows {err:.1e}; q_ce weighted mean {cew:.3f} vs write CE {ln[k]['ce']:.3f}; {nf} window fact sentences labelled; grid and selection run on the dump"
-TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40,'U41':u41,'U42':u42,'U43':u43,'U44':u44,'U45':u45,'U46':u46,'U47':u47}
+def u48():
+    """E55 32.11 candidate mask stage on the tiny model (p = 1 world, 10 chunks, 3 prefix layers): (a) the lean pass (max window mass + key index) equals the token statistics of the full sentence-dump pass (T_max within float16, T_key identical); (b) SM.compute (record once, one pass per chunk) gives the same hidden window sentences as the selection applied to the arrays of the full dump; (c) STATE INDEPENDENCE: during a real Adam write stream (arm SELC1) the selection recomputed online from the CURRENT weights before every write equals the stored mask of every chunk; (d) SelMask keep mask hides exactly the stored sentences (n_masked_keys log), RSELC1 hides the same token count within one sentence, the arms run through the Adam write with the 0.5 x norm target; (e) an unsupported candidate (sentence-level arrays) is refused"""
+    import gen_facts as G,e55_sentdump as SD,e55_selmask as SM,e55_uv as UVm
+    enc=G.StubTok();w=G.build_fact_world(61,enc=enc,bg=G._synth_bg(9000),k=16,n=1,p=1,bank='300',n_app=10,decoys=('names',));nch=w['n_chunks'];assert nch==10
+    V=512;ids=np.asarray(G.stream_ids(G.realize(w)),np.int64)%V;ids[ids<3]+=3
+    ends=np.zeros(nch*CH,bool)
+    for c in range(nch):
+        for x in w['chunks'][c]['sents']:ends[c*CH+x['end']-1]=True
+        ends[c*CH+np.arange(49,CH,50)]=True;ends[c*CH+CH-1]=True
+    rt2=H.TinyRuntime(layers=5,suffix=2);L2=C.Ladder55(rt2,save_dir='/tmp/e55_units_states');L2.rec_cache={};k=9
+    cands=[dict(name='t-v7-sharp',v7=True,sel='tok',kind='sharp',hpct=50,thr=0.01,nsink=4,norecent=1,trig='q',k=1,hgroup='all',group='all',heads='sel'),
+           dict(name='t-v6-tok',v6=True,sel='tok',hgroup='all',hpct=50,thr=0.01,trig='q',k=1,group='all',heads='sharp'),
+           dict(name='t-v7-copy-rare',v7=True,sel='tok',kind='copy',hpct=25,thr=0.0,qf='rare',nsink=4,norecent=1,trig='q',k=1,hgroup='all',group='all',heads='sel'),
+           dict(name='t-sentence-level',v7=True,sel='hsagg',src='AL',agg='sum',kind='sharp',hpct=10,trig='q',k=1,group='all',heads='sel')]
+    assert not SM.supported(cands[3]) and all(SM.supported(c_) for c_ in cands[:3])
+    try:SM.compute(L2,rt2,s3,ends,ids,cands,[4],nch=nch,k0=k);raise AssertionError('unsupported candidate not refused')
+    except AssertionError as e:assert 'lean mask stage' in str(e) or 'needs arrays' in str(e) or isinstance(e.args[0],tuple),e
+    res={}
+    with rt2.mesh:
+        Kh,Vh,_=L2.record(ids[:nch*CH]);Kc,Vc=L2.ctx_kv(Kh,Vh,k);ids_k=ids[k*CH:(k+1)*CH]
+        dfn=SD.make_sentdump_fn(L2,rt2,s3,ends,ids,log=lambda *x:None);full=dfn(k,rt2.base,Kc,Vc,np.ones(W+CH,bool),ids_k)
+    tm,tk=SM.lean_pass(L2,rt2,s3,rt2.base,Kc,Vc,ids_k,k)
+    assert tm.shape==full['T_max'].shape and float(np.max(np.abs(tm.astype(np.float32)-full['T_max'].astype(np.float32))))<2e-3 and (tk==full['T_key']).mean()>0.999,(float(np.max(np.abs(tm.astype(np.float32)-full['T_max'].astype(np.float32)))),(tk==full['T_key']).mean())
+    # (b)
+    hid,wl,cnt,per=SM.compute(L2,rt2,s3,ends,ids,cands,[1,2,3],chunks_meta=w['chunks'],nch=nch,k0=1,log=lambda *x:None)
+    for r in (1,2,3):
+        ref=SM.choose({**full},cands[r-1]);assert np.array_equal(ref,hid[k][r]),(r,int(ref.sum()),int(hid[k][r].sum()))
+    nh={r:sum(int(hid[kk][r].sum()) for kk in hid if r in hid[kk]) for r in (1,2,3)};assert all(v>0 for v in nh.values()),nh      # the test candidates do hide something
+    # (c)+(d)
+    import tempfile,os;fn=os.path.join(tempfile.mkdtemp(),'m.npz');SM.save(fn,hid,wl);mk={a_:b_ for a_,b_ in np.load(fn).items()}
+    eq=[]
+    class Online(SM.SelMask):
+        def keep(self,k_,m,Kc_,Vc_,ids_k_,keep_all):
+            tm_,tk_=SM.lean_pass(L2,rt2,s3,m,Kc_,Vc_,ids_k_,k_);d_=SM.lean_arrays(k_,ends,ids,ids_k_,tm_,tk_)
+            if len(d_['w_len']):eq.append(bool(np.array_equal(SM.choose(d_,cands[0]),hid[k_][1])))
+            return super().keep(k_,m,Kc_,Vc_,ids_k_,keep_all)
+    with rt2.mesh:
+        nat_=L2.run_stream('NAT',1,ids,nch=nch,tag='u48n',log=lambda *x:None);tg=[e['update_norm'] for e in nat_['log']];nat_.pop('model',None)
+        sm=Online('SELC1',1,mk,ends,w['chunks'],log=lambda *x:None);r1=L2.run_stream('SELC1',1,ids,nch=nch,tag='u48s',log=lambda *x:None,chunks_meta=w['chunks'],norm_targets=tg,uv=sm)
+        rs=[e['n_masked_keys'] for e in r1['log']];ru=UVm.UV('RSELC1',ends,w['chunks'],L=L2,rt=rt2,s3=s3,rs_targets=rs,log=lambda *x:None);r2=L2.run_stream('RSELC1',1,ids,nch=nch,tag='u48r',log=lambda *x:None,chunks_meta=w['chunks'],norm_targets=tg,uv=ru)
+    assert len(eq)>=8 and all(eq),('online selection from the current weights differs from the stored mask',eq)
+    for kk in range(1,nch):
+        wsid,wst,wlen=UVm.window_sents(ends,kk);exp=int(wlen[hid[kk][1]].sum()) if len(wlen) else 0;assert r1['log'][kk]['n_masked_keys']==exp,(kk,r1['log'][kk]['n_masked_keys'],exp)
+        wl_=UVm.window_sents(ends,kk)[2]
+        if r1['log'][kk]['n_masked_keys']>0:assert abs(r2['log'][kk]['n_masked_keys']-r1['log'][kk]['n_masked_keys'])<=int(wl_.max()),(kk,r2['log'][kk]['n_masked_keys'],r1['log'][kk]['n_masked_keys'])
+    for r_ in (r1,r2):
+        for kk in range(nch):assert abs(r_['log'][kk]['update_norm']/(0.5*tg[kk])-1)<5e-2,(kk,r_['log'][kk]['update_norm'],0.5*tg[kk])     # Adam arms: 0.5 x the norm target
+    RES['U48']=f"candidate mask stage on the tiny model: lean pass == full token statistics (T_key identical), compute == selection on the full dump arrays for 3 candidates, stored masks == selection recomputed online from the current write weights at {len(eq)} chunks (state independence), SELC1 hides exactly the stored sentences ({sum(e['n_masked_keys'] for e in r1['log'])} key-chunks), RSELC1 matched ({sum(e['n_masked_keys'] for e in r2['log'])}), Adam norm 0.5 x target, unsupported candidate refused; hidden sentences of the 3 candidates {nh}"
+TESTS={'U0':u0,'U1':u1,'U2':u2,'U3':u3,'U4':u4,'U5':u5,'U6':u6,'U7':u7,'U8':u8,'U9':u9,'U10':u10,'U11':u11,'U12':u12,'U13':u13,'U14':u14,'U15':u15,'U16':u16,'U17':u17,'U18':u18,'U19':u19,'U20':u20,'U21':u21,'U22':u22,'U23':u23,'U24':u24,'U25':u25,'U26':u26,'U27':u27,'U28':u28,'U29':u29,'U30':u30,'U31':u31,'U32':u32,'U33':u33,'U34':u34,'U35':u35,'U36':u36,'U37':u37,'U38':u38,'U39':u39,'U40':u40,'U41':u41,'U42':u42,'U43':u43,'U44':u44,'U45':u45,'U46':u46,'U47':u47,'U48':u48}
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--only',default=None);a=ap.parse_args();sel=a.only.split(',') if a.only else list(TESTS);fails=[]
     for n in sel:

@@ -143,9 +143,11 @@ def selftest():
             ce={'_gen_nll':3.02+0.02*i,'_tail_nll':3.0};(d11/f'E55_d64_{ar}_s{sd}.saved.json').write_text(json.dumps({'log':[{'coef':0.9 if k%2 else 1.0,'update_norm':0.01*(1+i)} for k in range(512)],'dclm_w0':3.0,'dclm_end':3.01,'canary_w0':{'_gen_nll':3.0,'_tail_nll':3.0},'canary_end':ce,'canary_by_app':{'16':ce,'32':ce,'64':ce,'128':ce}}))
     ERR.clear();t=d64_report(d11,[61,62,63]);assert 'reading rules applied' in t and 'SENTPQ - NAT' in t and 'cells shown as n/a failed' not in t and '1. shadowing in this world: YES' in t and '2. effect kept (SENTPQ g(128) >= 0.12): YES' in t and '4. canary rise at a = 128 <= 0.10 for every arm: YES' in t,t       # in-window cell n/a: the synthetic records carry no in-window context
     print('e55_ic_report SELFTEST OK')
-def uv_report(d,seeds,tag='uv',ref_tag='q1b',apps=(16,32,64,128),out=None,load=None):
+def uv_report(d,seeds,tag='uv',ref_tag='q1b',apps=(16,32,64,128),out=None,load=None,sel_ranks=None):
     """E55 32.8 online label-free sentence-vote masks. UVA/UVB/UVC (g3 sentence votes p25 k2 / p25 k3 / p20 k1) and the matched random-sentence controls RSA/RSB/RSC (same hidden-token count per chunk), all with the Adam-0.5N write (step = 0.5 x SENTPQ-STD update norm of the same seed), against SENTPQ-ADAM-0.5N (hide every fact sentence, reference) and NAT-ADAM (no mask) of tag q1b. Mask quality columns come from the per-chunk log (labels are used for the log only): hidden % of the window, fact-token recall, precision, background false-mask rate (chunks >= 8). Pre-set rule (design 32.8): R = g(UV) / g(SENTPQ-ADAM-0.5N) at a=128; R >= 0.7 and g(UV) - g(RS) >= +0.10 -> label-free sentence masking works; R <= 0.3 -> does not; otherwise undetermined. One seed = first observation."""
-    load=load or (lambda f:json.load(open(f)));arms=[('UVA','UV-A (g3, p25, k2)','RSA'),('UVB','UV-B (g3, p25, k3)','RSB'),('UVC','UV-C (g3, p20, k1)','RSC')];refs={'SENTPQADAMH':'SENTPQ-ADAM-0.5N (hide all fact sentences, reference)','NATADAM':'NAT-ADAM (no mask, reference)'};G={};S={}
+    load=load or (lambda f:json.load(open(f)));arms=[('UVA','UV-A (g3, p25, k2)','RSA'),('UVB','UV-B (g3, p25, k3)','RSB'),('UVC','UV-C (g3, p20, k1)','RSC')]
+    if sel_ranks:arms=[(f'SELC{r}',f'SELC{r} (sentence-grid candidate rank {r}, stored mask)',f'RSELC{r}') for r in sel_ranks]      # E55 32.11: the same report for the candidate-mask arms (rule R >= 0.7 and g(SELC) - g(RSELC) >= +0.10 unchanged)
+    refs={'SENTPQADAMH':'SENTPQ-ADAM-0.5N (hide all fact sentences, reference)','NATADAM':'NAT-ADAM (no mask, reference)'};G={};S={}
     for sd in seeds:
         for ar in [a_[0] for a_ in arms]+[a_[2] for a_ in arms]:
             for dd,dst in ((G,'read'),(S,'saved')):
@@ -179,8 +181,9 @@ def uv_report(d,seeds,tag='uv',ref_tag='q1b',apps=(16,32,64,128),out=None,load=N
     ref=mean(pooled('SENTPQADAMH',128));ref64=mean(pooled('SENTPQADAMH',64))
     L=[f'# E55 32.8 online sentence-vote masks (UNIONVOTE) report, seeds {list(seeds)} (tag {tag}, references from tag {ref_tag})','','g = out-of-window rank gain u (W0 subtracted, unexposed question frames), 95% fact-bootstrap CI; Adam-0.5N write for every row. The mask of UV rows is computed online from the attention of the write chunk itself (all sentences of the chunk as queries, last third of the prefix layers, top-8 keys per head and token, sentences from the token stream); no label enters the mask. RS rows hide random window sentences with the same hidden-token count per chunk as the UV row they are matched to.','',
        '| arm | hidden % of window | fact recall | precision | bg false-mask | '+' | '.join(f'g a={a}' for a in apps)+' | R a=64 | R a=128 | in-window g a=128 | DCLM rise a=128 | canary rise a=32 / 64 / 128 |','|---|---|---|---|---|'+'---|'*(len(apps)+5)]
+    if sel_ranks:L[0]=L[0].replace('32.8 online sentence-vote masks (UNIONVOTE)','32.11 sentence-grid candidate masks (stored, label-free)')
     rows=[]
-    for u,nm,r in arms:rows+=[(u,nm),(r,nm.split(' ')[0].replace('UV','RS')+' random sentences, same hidden tokens')]
+    for u,nm,r in arms:rows+=[(u,nm),(r,(r if sel_ranks else nm.split(' ')[0].replace('UV','RS'))+' random sentences, same hidden tokens')]
     rows+=[(k,v) for k,v in refs.items()]
     for ar,nm in rows:
         ps={a:pooled(ar,a) for a in apps};pi=pooled(ar,128,'in')
@@ -779,7 +782,7 @@ if __name__=='__main__':
     if '--all' in _s.argv:
         _s.argv.remove('--all');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='all');a=ap.parse_args();print(all_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,out=a.out));_s.exit(0)
     if '--uv' in _s.argv:
-        _s.argv.remove('--uv');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61');ap.add_argument('--out');ap.add_argument('--tag',default='uv');ap.add_argument('--ref-tag',default='q1b');a=ap.parse_args();print(uv_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,a.ref_tag,out=a.out));_s.exit(0)
+        _s.argv.remove('--uv');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61');ap.add_argument('--out');ap.add_argument('--tag',default='uv');ap.add_argument('--ref-tag',default='q1b');ap.add_argument('--sel-ranks',default=None);a=ap.parse_args();print(uv_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,a.ref_tag,out=a.out,sel_ranks=[int(x) for x in a.sel_ranks.split(',')] if a.sel_ranks else None));_s.exit(0)
     if '--q34' in _s.argv:
         _s.argv.remove('--q34');ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds',default='61,62,63');ap.add_argument('--out');ap.add_argument('--tag',default='q34');ap.add_argument('--ref-tag',default='q1b');a=ap.parse_args();print(q34_report(a.dir,[int(x) for x in a.seeds.split(',')],a.tag,a.ref_tag,out=a.out));_s.exit(0)
     if '--ans' in _s.argv:
