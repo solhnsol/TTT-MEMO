@@ -12,7 +12,7 @@ import e57_common as C
 import e57_news as N
 import e57_events as EV
 import e57_namedevents3 as N3
-FREEZE_SEED=57231;G_MIN=8;NCAND=16;NSP=4;STRATA=(('3-4',3,4),('5-9',5,9),('10-19',10,19),('20+',20,10**9))
+CAPN=(10,15,20);FREEZE_SEED=57231;G_MIN=8;NCAND=16;NSP=4;STRATA=(('3-4',3,4),('5-9',5,9),('10-19',10,19),('20+',20,10**9))
 NOUN={'NAME':'name','NUM':'number or amount','DATE':'date'}
 FRAME='Question: In the news about this event, which {noun} is mentioned together with {S}?\nAnswer:'
 def hsh(*x):return hashlib.md5(('|'.join(map(str,(FREEZE_SEED,)+x))).encode()).hexdigest()
@@ -62,6 +62,35 @@ def event_bank(ei,name,r,D,id0):
             n_strict=len(strict),n_middle=len(mid),n_relaxed=len(cands),strict_ge8=len(strict)>=G_MIN,middle_ge8=len(mid)>=G_MIN,relaxed_ge8=len(cands)>=G_MIN,candidates=filled,G=len(filled),main=len(filled)>=G_MIN,
             cross_null=[dict(S=u,surface=subj_surf.get(u,u),question=FRAME.format(noun=NOUN.get(ty,'string'),S=subj_surf.get(u,u))) for u in sp]))
     return bank
+def subset_view(r,keep):
+    """analysis result restricted to the articles `keep` (old indices), re-indexed; targets keep the mined set, their occurrences are restricted"""
+    new={o:n for n,o in enumerate(keep)};r2=dict(r)
+    for k in('arts','sents','facts','rids'):r2[k]=[r[k][o] for o in keep]
+    r2['targets']=[dict(t,occ={new[ai]:v for ai,v in t['occ'].items() if ai in new}) for t in r['targets']]
+    return r2
+def cap_select(r,pub_date,N_):
+    """-> (main rule: articles with the most lead targets first, ties by publication date; date rule: the first N_ by date); old indices"""
+    V=N.variant(r,'lead');score=collections.Counter()
+    for t in V['targets']:
+        for ai in t['occ_tok']:score[ai]+=1
+    n=len(r['arts']);dt=lambda ai:(pub_date[r['rids'][ai]],r['rids'][ai])
+    main=sorted(sorted(range(n),key=dt),key=lambda ai:-score[ai])[:N_];date=sorted(range(n),key=dt)[:N_]
+    return sorted(main),sorted(date)
+def cap_tables(names,res,D,pub_date):
+    """for every N in CAPN and both rules: per event frozen selection and the bank statistics"""
+    out={};sel={}
+    for N_ in CAPN:
+        for rule in('main','date'):
+            per=[];allb=[];tok_tot=0;nid=0
+            for ei,(nm,r) in enumerate(zip(names,res)):
+                if not r['ok']:continue
+                m,d=cap_select(r,pub_date,N_);keep=m if rule=='main' else d;r2=subset_view(r,keep);b=event_bank(ei,nm,r2,D,nid);nid+=len(b);allb+=b
+                V=N.variant(r2,'lead');tok=sum(V['tok'].values());tok_tot+=tok
+                per.append(dict(event=ei,name=nm,articles=len(keep),tokens=tok,targets=len(b),main=sum(x['main'] for x in b),sp4=sum(len(x['cross_null'])==NSP for x in b)))
+                sel[f'{N_}|{rule}|{nm}']=[r['rids'][ai] for ai in keep]
+            out[f'{N_}|{rule}']=dict(per=per,targets=len(allb),strata={s[0]:sum(x['stratum']==s[0] for x in allb) for s in STRATA},main=sum(x['main'] for x in allb),sp4=sum(len(x['cross_null'])==NSP for x in allb),tokens=tok_tot,
+                tok_med=sorted(p['tokens'] for p in per)[len(per)//2] if per else 0,tok_max=max((p['tokens'] for p in per),default=0),over8k=sum(p['tokens']>8192 for p in per),events=len(per))
+    return out,sel
 def run(a):
     out=pathlib.Path(a.out);fd=out/'e57_lite';fd.mkdir(exist_ok=True);rep=fd/'e57_lite_report.md'
     if rep.exists() and not a.rerun:print('report exists (exit 8; RERUN=1 to redo):',rep);sys.exit(8)
@@ -72,11 +101,12 @@ def run(a):
         arts=[] if not r['ok'] else sorted(((pub_date[x],x) for x in r['rids']))
         events.append(dict(event=ei,name=nm,source=row['source'],matched_titles=row['titles'],independent_articles=row['n_dedup'] if r['ok'] else 0,ok=r['ok'],first=row['first'],last=row['last'],
             targets_before_ethics=row.get('targets_f2_before'),rejected_by_ethics=row.get('rejected_targets'),bank_targets=len(b),articles=[dict(rid=x,date=d) for d,x in arts]))
+    caps,sel=cap_tables(names,res,D,pub_date);(fd/'lite_caps.json').write_text(json.dumps(dict(rule='main = articles with the most lead targets first, ties by publication date then id; date = first N by publication date',caps=caps,selection=sel),indent=1))
     ej=json.dumps(dict(seed=FREEZE_SEED,rules=dict(g_min=G_MIN,ncand=NCAND,nsp=NSP,frame=FRAME,dropped=list(N3.DROP),n_extra=a.n_extra),events=events),indent=1,default=str)
     bj=json.dumps(bank,indent=1,default=str);(fd/'lite_events.json').write_text(ej);(fd/'lite_bank.json').write_text(bj)
-    man=dict(files={'lite_events.json':hashlib.sha256(ej.encode()).hexdigest(),'lite_bank.json':hashlib.sha256(bj.encode()).hexdigest()},n_events=len(events),n_events_with_bank=sum(bool(e['bank_targets']) for e in events),n_targets=len(bank),seed=FREEZE_SEED)
-    (fd/'lite_manifest.json').write_text(json.dumps(man,indent=1));txt=report(events,bank,X,a,time.time()-t0);rep.write_text(txt);print(txt[:9000])
-def report(events,bank,X,a,sec):
+    man=dict(files={'lite_caps.json':hashlib.sha256((fd/'lite_caps.json').read_bytes()).hexdigest(),'lite_events.json':hashlib.sha256(ej.encode()).hexdigest(),'lite_bank.json':hashlib.sha256(bj.encode()).hexdigest()},n_events=len(events),n_events_with_bank=sum(bool(e['bank_targets']) for e in events),n_targets=len(bank),seed=FREEZE_SEED)
+    (fd/'lite_manifest.json').write_text(json.dumps(man,indent=1));txt=report(events,bank,X,a,time.time()-t0,caps);rep.write_text(txt);print(txt[:9000])
+def report(events,bank,X,a,sec,caps=None):
     f=EV.fmt;L=['# E57-lite freeze (CPU, regex proxy)','',f"{len(events)} events ({sum(e['source']=='regex' for e in events)} fixed regex events + {sum(e['source']!='regex' for e in events)} clusters of the job-219 list), {len(bank)} frozen targets (lead variant, c >= 3, after the target-level ethics filter). Candidates / questions / cross null as defined in the docstring of e57_lite.py; the pool uses LEAD exposures (job 220 / 221 used whole-article exposures for the pool tables, so the numbers differ). Run {sec:.0f} s.",'',
        '## events','','| # | event | source | matched titles | independent articles | first | last | targets f>=2 before ethics | rejected | frozen targets | main (G >= 8) |','|---|---|---|---|---|---|---|---|---|---|---|']
     for e in events:
@@ -98,13 +128,22 @@ def report(events,bank,X,a,sec):
         if sel:L.append(f"| {s} | {len(sel)} | {sum(b['strict_ge8'] for b in sel)} | {sum(b['middle_ge8'] for b in sel)} | {sum(b['relaxed_ge8'] for b in sel)} | {statistics.median(b['G'] for b in sel):.0f} | {sum(len(b['cross_null'])==NSP for b in sel)} | {sum(b['frame_overlap'] for b in sel)} |")
         else:L.append(f'| {s} | 0 | | | | | | |')
     cn=collections.Counter(len(b['cross_null']) for b in bank);L+=['',f"- cross-null S' available per target (count of S' -> targets): {dict(sorted(cn.items()))}",f"- ethics: {sum(e['rejected_by_ethics'] or 0 for e in events)} targets rejected of {sum(e['targets_before_ethics'] or 0 for e in events)}; reasons per event in e57_namedevents3-style counts are in the rejects json of this run (kept by job 222, not written here)."]
+    if caps:
+        L+=['',f"## article cap per event N = {', '.join(map(str,CAPN))} (selection frozen in lite_caps.json)",'','Rule main: articles ordered by the number of lead targets they contain (most first), ties by publication date; rule date: the first N articles by publication date. Targets are re-counted on the selected articles only (c >= 3 inside the selection; the mined target set is the one of all articles). Round tokens = lead tokens (+2 per article) of the selected articles of all events; per event tokens are compared with 8192.','',
+           '| N | rule | events | targets c >= 3 | '+' | '.join('c '+x for x in st)+' | main (G >= 8) | with 4 S\' | round tokens (all events) | tokens per event median / max | events over 8192 |','|---|---|---|---|'+'---|'*len(st)+'---|---|---|---|---|']
+        for N_ in CAPN:
+            for rule in('main','date'):
+                c=caps[f'{N_}|{rule}'];L.append(f"| {N_} | {rule} | {c['events']} | {c['targets']} | "+' | '.join(str(c['strata'][x]) for x in st)+f" | {c['main']} ({c['main']/max(1,c['targets']):.2f}) | {c['sp4']} ({c['sp4']/max(1,c['targets']):.2f}) | {c['tokens']} | {c['tok_med']} / {c['tok_max']} | {c['over8k']} |")
+        for N_ in CAPN:
+            L+=['',f'### N = {N_}, rule main: per event','','| event | articles | tokens | targets | main | with 4 S\' |','|---|---|---|---|---|---|']
+            L+=[f"| {p['name']} | {p['articles']} | {p['tokens']} | {p['targets']} | {p['main']} | {p['sp4']} |" for p in caps[f'{N_}|main']['per']]
     L+=['','Titles of the added clusters are shown only to identify them; no article text is written.']
     return '\n'.join(L)+'\n'
 def _selftest():
     def after(td):
         a=argparse.Namespace(out=str(td),dup_jac=0.5,min_articles=5,min_domains=5,min_c=3,workers=1,seed=5,rerun=True,n_extra=4,drop=())
         N3.DROP=();run(a);fd=td/'e57_lite';B=json.load(open(fd/'lite_bank.json'));E=json.load(open(fd/'lite_events.json'));M=json.load(open(fd/'lite_manifest.json'))
-        assert B and M['n_targets']==len(B) and (fd/'e57_lite_report.md').exists()
+        assert B and M['n_targets']==len(B) and (fd/'e57_lite_report.md').exists() and (fd/'lite_caps.json').exists() and 'article cap per event' in (fd/'e57_lite_report.md').read_text() and 'lite_caps.json' in M['files']
         for b in B:
             assert b['question'].startswith('Question:') and b['subject_surface'] in b['question'] and all(c['key']!=b['answer_key'] for c in b['candidates']) and b['stratum'] in('3-4','5-9','10-19','20+')
             assert all(u['S']!=b['subject_key'] for u in b['cross_null']) and b['G']==len(b['candidates']) and b['main']==(b['G']>=G_MIN)
