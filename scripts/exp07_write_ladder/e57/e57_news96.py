@@ -104,11 +104,11 @@ def build_event_inputs(ev_sel,idx,a,seed_art):
         n=0
         for ti,t in enumerate(V['targets']):
             o={(ei,ai):v for ai,v in t['occ_tok'].items() if (ei,ai) in tokof}
-            if len(o)>=3:occ[(ei,ti)]=o;n+=1
+            if len(o)>=3 and (getattr(a,'cset',None) is None or len(o) in a.cset):occ[(ei,ti)]=o;n+=1
         per_ev.append(n)
     return events,tokof,occ,per_ev
 def get_results(a,tp,cp):
-    cache=pathlib.Path(a.out)/'analyze_cache.pkl'
+    mf=getattr(a,'min_f',2);cache=pathlib.Path(a.out)/('analyze_cache.pkl' if mf==2 else f'analyze_cache_f{mf}.pkl')
     if cache.exists() and not a.rerun:
         d=pickle.load(open(cache,'rb'));print(f'cached text-stage results: {len(d["res"])} clusters ({cache})',flush=True);return d['res'],d['n_title_clusters']
     D=pickle.load(open(tp,'rb'));CL=pickle.load(open(cp,'rb'));cl=CL['clusters'];rng=random.Random(a.seed);samp=cl if len(cl)<=a.max_clusters else rng.sample(cl,a.max_clusters)
@@ -117,7 +117,7 @@ def get_results(a,tp,cp):
     jobs=[]
     for c in samp:
         ids=[(i,D['rid'][i]) for i in c['members'] if D['rid'][i] in got]
-        jobs.append(dict(title=c['title'],texts=[got[r] for _,r in ids],hosts=[D['host'][i] for i,_ in ids],args=dict(dup_jac=a.dup_jac,min_articles=a.min_articles,min_domains=a.min_domains,min_c=a.min_c)))
+        jobs.append(dict(title=c['title'],texts=[got[r] for _,r in ids],hosts=[D['host'][i] for i,_ in ids],args=dict(dup_jac=a.dup_jac,min_articles=a.min_articles,min_domains=a.min_domains,min_c=a.min_c,min_f=getattr(a,'min_f',2))))
     if a.workers>1:
         import multiprocessing as mp
         with mp.Pool(a.workers) as p:res=p.map(N.analyze,jobs,chunksize=4)

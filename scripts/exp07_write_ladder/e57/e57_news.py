@@ -132,7 +132,7 @@ def analyze(cl):
             occ[ai]=ss
             for si in ss[:1]:items.append((arts[ai]['sents'][si],[surf[(ty,ak)],surf.get(('NAME',sk),sk)]+[f[2] for f in arts[ai]['facts'][si] if (f[0],f[1]) in ((ty,ak),('NAME',sk))]))
         f=C.n_forms(items)
-        if f<2:continue
+        if f<A.get('min_f',2):continue
         # conflict proxy: another value of the same type that co-occurs with S, in >= max(2, c/2) articles, in a sentence of the SAME slot-masked form as a sentence of this target (a competing value for the same slot)
         if ty in('NUM','DATE'):
             tg=[C.ngr(C.words(C.masked(x,[y for y in sfs])),5) for x,sfs in items]
