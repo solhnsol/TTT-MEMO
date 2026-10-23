@@ -133,6 +133,39 @@ def membership(X,names,res,D,out):
         mixed[nm]=dict(articles=len(lt),with_other_event=sum(1 for x in oth if x>0),share=sum(1 for x in oth if x>0)/max(1,len(lt)))
         for ai in range(len(lt)):sample.append(dict(event=nm,rid=r['rids'][ai],title=D['title'][D['_ridx'][r['rids'][ai]]],lead=lt[ai][:700]))
     random.Random(FREEZE_SEED+7).shuffle(sample);return dict(partition=part,pairs=sorted(pairs,key=lambda x:-x['overlap']),mixed=mixed),sample[:50]
+WEEKDAYS={'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'}
+PLACE_CTX=re.compile(r"(?:\b(?:in|at|near|from|across|outside|inside|around|to|into|of)\s)$",re.I)
+PERSON_BEFORE=re.compile(r"(?:\b(?:Mr|Mrs|Ms|Dr|President|Minister|Mayor|Governor|Senator|Coach|Judge|Chairman|Actor|Actress|Director|Prime Minister|Chief|Captain)\.?\s)$")
+PERSON_AFTER=re.compile(r"^\s*(?:,\s*[^,]{0,60},)?\s*(?:said|says|told|added|stated|announced|confirmed|has|was|is|will|had)\b")
+def attributes(names,res,topn=5):
+    """per event: the most frequent attribute strings of the LEAD (first sentences, ~350 tokens) per class and the share of the event's independent articles whose lead holds them. Classes: place / person are PROXIES from the local context of a capitalised phrase (place: preceded by in / at / near / from ...; person: preceded by a title or followed by said / told / was ...; majority of its labelled occurrences decides; unlabelled phrases stay 'other name'); date and number as mined by e57_common"""
+    out={}
+    for nm,r in zip(names,res):
+        if not r['ok']:continue
+        V=N.variant(r,'lead');n=len(r['arts']);arts=collections.defaultdict(set);surf={};votes=collections.defaultdict(collections.Counter)
+        for ai in range(n):
+            for si in range(V['kept'][ai]):
+                sent=r['sents'][ai][si]
+                fs_=C.facts_in_sentence(sent);spans=[(x[3],x[4]) for x in fs_ if x[0]=='NAME']
+                for m_ in re.finditer(r'\b[A-Z][a-z]{3,}\b',sent):       # single capitalised words (places like Mumbai): ignored by the target miner, added here for the attribute table only
+                    w_=m_.group(0)
+                    if m_.start()==0 or re.search(r'[.!?"]\s$',sent[max(0,m_.start()-2):m_.start()]) or w_.lower() in C.MONTHNUM or w_ in C.STARTERS or w_ in WEEKDAYS or any(a0<=m_.start()<b0 for a0,b0 in spans):continue
+                    fs_.append(('NAME',w_.lower(),w_,m_.start(),m_.end()))
+                for ty,key,sf,a_,b_ in fs_:
+                    arts[(ty,key)].add(ai);surf.setdefault((ty,key),sf)
+                    if ty=='NAME':
+                        if PLACE_CTX.search(sent[max(0,a_-12):a_]):votes[key]['place']+=1
+                        if PERSON_BEFORE.search(sent[max(0,a_-16):a_]) or PERSON_AFTER.search(sent[b_:b_+80]):votes[key]['person']+=1
+        cls=collections.defaultdict(list)
+        for (ty,key),aset in arts.items():
+            if ty=='NAME':
+                v=votes.get(key,{});c='place' if v.get('place',0)>v.get('person',0) else 'person' if v.get('person',0)>v.get('place',0) else 'other name'
+            else:c={'DATE':'date','NUM':'number'}.get(ty,ty)
+            cls[c].append((len(aset),surf[(ty,key)],key))
+        out[nm]={'articles':n}
+        for c,lst in cls.items():
+            lst.sort(key=lambda x:(-x[0],x[2]));out[nm][c]=[dict(surface=sf,key=k,articles=cnt,share=cnt/max(1,n)) for cnt,sf,k in lst[:topn]]
+    return out
 def run(a):
     out=pathlib.Path(a.out);fd=out/'e57_lite';fd.mkdir(exist_ok=True);rep=fd/'e57_lite_report.md'
     if rep.exists() and not a.rerun:print('report exists (exit 8; RERUN=1 to redo):',rep);sys.exit(8)
@@ -145,12 +178,13 @@ def run(a):
             targets_before_ethics=row.get('targets_f2_before'),rejected_by_ethics=row.get('rejected_targets'),bank_targets=len(b),articles=[dict(rid=x,date=d) for d,x in arts]))
     bt,exs=binding_tables(names,res,pub_date,a.seed);mem,samp=membership(X,names,res,D,out)
     (fd/'lite_binding_examples.json').write_text(json.dumps(dict(note='article sentences (publisher text): stays on the server',examples=exs,sample50_for_reading=samp),indent=1,default=str))
+    attr=attributes(names,res);(fd/'lite_attributes.json').write_text(json.dumps(attr,indent=1))
     caps,sel=cap_tables(names,res,D,pub_date);(fd/'lite_caps.json').write_text(json.dumps(dict(rule='main = articles with the most lead targets first, ties by publication date then id; date = first N by publication date',caps=caps,selection=sel),indent=1))
     ej=json.dumps(dict(seed=FREEZE_SEED,rules=dict(g_min=G_MIN,ncand=NCAND,nsp=NSP,frame=FRAME,dropped=list(N3.DROP),n_extra=a.n_extra),events=events),indent=1,default=str)
     bj=json.dumps(bank,indent=1,default=str);(fd/'lite_events.json').write_text(ej);(fd/'lite_bank.json').write_text(bj)
     man=dict(files={'lite_caps.json':hashlib.sha256((fd/'lite_caps.json').read_bytes()).hexdigest(),'lite_events.json':hashlib.sha256(ej.encode()).hexdigest(),'lite_bank.json':hashlib.sha256(bj.encode()).hexdigest()},n_events=len(events),n_events_with_bank=sum(bool(e['bank_targets']) for e in events),n_targets=len(bank),seed=FREEZE_SEED)
-    (fd/'lite_manifest.json').write_text(json.dumps(man,indent=1));txt=report(events,bank,X,a,time.time()-t0,caps,bt,mem,exs,samp);rep.write_text(txt);print(txt[:9000])
-def report(events,bank,X,a,sec,caps=None,bt=None,mem=None,exs=None,samp=None):
+    (fd/'lite_manifest.json').write_text(json.dumps(man,indent=1));txt=report(events,bank,X,a,time.time()-t0,caps,bt,mem,exs,samp,attr);rep.write_text(txt);print(txt[:9000])
+def report(events,bank,X,a,sec,caps=None,bt=None,mem=None,exs=None,samp=None,attr=None):
     f=EV.fmt;L=['# E57-lite freeze (CPU, regex proxy)','',f"{len(events)} events ({sum(e['source']=='regex' for e in events)} fixed regex events + {sum(e['source']!='regex' for e in events)} clusters of the job-219 list), {len(bank)} frozen targets (lead variant, c >= 3, after the target-level ethics filter). Candidates / questions / cross null as defined in the docstring of e57_lite.py; the pool uses LEAD exposures (job 220 / 221 used whole-article exposures for the pool tables, so the numbers differ). Run {sec:.0f} s.",'',
        '## events','','| # | event | source | matched titles | independent articles | first | last | targets f>=2 before ethics | rejected | frozen targets | main (G >= 8) |','|---|---|---|---|---|---|---|---|---|---|---|']
     for e in events:
@@ -196,13 +230,22 @@ def report(events,bank,X,a,sec,caps=None,bt=None,mem=None,exs=None,samp=None):
                 L.append(f"| {p_['event']} | {p_['articles']} | {dd(p_['sent'])} | {f(p_['sent']['mean'])} | {p_['sent']['median']} | {dd(p_['targ'])} | {f(p_['targ']['mean'])} | {p_['targ']['median']} | {f(p_['zero'])} | {p_['rep_pairs']} | {f(p_['rep_ge2'])} |")
             L.append('')
         L+=['Pairs with >= 2 sentences = the same target repeated inside one article lead (possible within-article shadowing). Ten seeded examples (S, A, event; the sentences are in lite_binding_examples.json on the server):','']+[f"- {e['event']} | S = {e['S']} | A = {e['A']} ({e['ty']}) | {e['n_sent']} binding sentence(s) in the article" for e in exs]
+    if attr:
+        L+=['','## event attribute candidates (lead of the event articles)','',"Per event and class the 5 most frequent strings and the share of the event's independent articles whose lead (first sentences, ~350 tokens) holds the string. place / person are PROXIES from the local context of a capitalised phrase (see attributes() in e57_lite.py), 'other name' = organisations and unlabelled phrases. Single capitalised words (e.g. a city name) are included here although the target miner ignores them. Gap = share of the 1st minus the 2nd string (how clearly one value stands out). Strings are mined, not checked by hand.",'']
+        for nm,o in attr.items():
+            L+=[f"### {nm} ({o['articles']} independent articles)",'','| class | strings (share of articles) | top-1 share | gap 1st - 2nd |','|---|---|---|---|']
+            for c in('place','person','other name','date','number'):
+                lst=o.get(c,[])
+                if lst:L.append(f"| {c} | "+'; '.join(f"{x['surface']} ({x['share']:.2f})" for x in lst)+f" | {lst[0]['share']:.2f} | {lst[0]['share']-(lst[1]['share'] if len(lst)>1 else 0):.2f} |")
+                else:L.append(f'| {c} | none | | |')
+            L.append('')
     L+=['','Titles of the added clusters are shown only to identify them; no article text is written.']
     return '\n'.join(L)+'\n'
 def _selftest():
     def after(td):
         a=argparse.Namespace(out=str(td),dup_jac=0.5,min_articles=5,min_domains=5,min_c=3,workers=1,seed=5,rerun=True,n_extra=4,drop=())
         N3.DROP=();run(a);fd=td/'e57_lite';B=json.load(open(fd/'lite_bank.json'));E=json.load(open(fd/'lite_events.json'));M=json.load(open(fd/'lite_manifest.json'))
-        assert B and M['n_targets']==len(B) and (fd/'e57_lite_report.md').exists() and (fd/'lite_caps.json').exists() and 'article cap per event' in (fd/'e57_lite_report.md').read_text() and 'lite_caps.json' in M['files'] and (fd/'lite_binding_examples.json').exists() and 'binding sentences in the lead' in (fd/'e57_lite_report.md').read_text() and 'one event only' in (fd/'e57_lite_report.md').read_text()
+        assert B and M['n_targets']==len(B) and (fd/'e57_lite_report.md').exists() and (fd/'lite_caps.json').exists() and 'article cap per event' in (fd/'e57_lite_report.md').read_text() and 'lite_caps.json' in M['files'] and (fd/'lite_binding_examples.json').exists() and 'binding sentences in the lead' in (fd/'e57_lite_report.md').read_text() and 'one event only' in (fd/'e57_lite_report.md').read_text() and 'attribute candidates' in (fd/'e57_lite_report.md').read_text() and (fd/'lite_attributes.json').exists()
         for b in B:
             assert b['question'].startswith('Question:') and b['subject_surface'] in b['question'] and all(c['key']!=b['answer_key'] for c in b['candidates']) and b['stratum'] in('3-4','5-9','10-19','20+')
             assert all(u['S']!=b['subject_key'] for u in b['cross_null']) and b['G']==len(b['candidates']) and b['main']==(b['G']>=G_MIN)
