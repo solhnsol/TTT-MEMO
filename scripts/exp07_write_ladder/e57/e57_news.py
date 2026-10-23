@@ -249,7 +249,12 @@ def main():
     a.date_from=a.date_from;a.license_text=open(a.license_text).read() if a.license_text and os.path.exists(a.license_text) else None
     if a.cmd=='fetch':
         from huggingface_hub import snapshot_download
-        pats=[f'data/year=2026/month={m}/*' for m in a.months.split(',')]+['LICENSE-DATA'];snapshot_download('ruggsea/infini-news-corpus',repo_type='dataset',allow_patterns=pats,local_dir=a.raw);return
+        pats=[f'data/year=2026/month={m}/*' for m in a.months.split(',')]+['LICENSE-DATA']
+        if a.max_files:
+            import fnmatch;from huggingface_hub import list_repo_files
+            fl=sorted(f for f in list_repo_files('ruggsea/infini-news-corpus',repo_type='dataset') if any(fnmatch.fnmatch(f,q) for q in pats[:-1]))
+            pats=fl[:a.max_files]+['LICENSE-DATA']
+        snapshot_download('ruggsea/infini-news-corpus',repo_type='dataset',allow_patterns=pats,local_dir=a.raw);return
     if a.cmd in('titles','all') and (a.rerun or not tp.exists()):stage_titles(a,tp)
     if a.cmd in('cluster','all') and (a.rerun or not cp.exists()):stage_cluster(a,tp,cp)
     if a.cmd in('measure','all'):
