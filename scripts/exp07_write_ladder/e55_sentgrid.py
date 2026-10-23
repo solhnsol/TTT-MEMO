@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import e55_sentsel as SEL
-STRICT=(0.8,0.8,0.40);RELAXED=(0.75,0.65,0.45)
+STRICT=(0.8,0.8,0.40);RELAXED=(0.75,0.65,0.45);NCAND=10
 def configs():
     out=[]
     for group,heads in itertools.product(('g2','g3','all'),('sum','head')):
@@ -66,18 +66,17 @@ def report(rows,chunks,out=None):
     sts=sorted(chunks);ks=sorted(next(iter(chunks.values())))
     key='SENTPQADAMH' if 'SENTPQADAMH' in sts else sts[0]
     L=['# E55 32.10 sentence selection grid (label-free scores, labels used only for the metrics)','',f'States {sts}, chunks {ks}. Chance precision = fact share of the window. Pass rules fixed before the data: STRICT recall >= {STRICT[0]}, precision >= {STRICT[1]}, hidden <= {STRICT[2]}; RELAXED recall >= {RELAXED[0]}, precision >= {RELAXED[1]}, hidden <= {RELAXED[2]}. Judged on the pooled numbers of state {key}; NAT shown too.','']
-    sc=lambda m:m['f1'];ksr=sorted(ks);half=len(ksr)//2
-    L+=[f'**Multiple-comparison rule (fixed before the data):** the configuration is SELECTED on the first half of the dump chunks {ksr[:half]} (rank by F1 of state {key}) and CONFIRMED on the second half {ksr[half:]}; the verdict uses ONLY the confirmation numbers of the selection-top-1 configuration (and, as a robustness line, of the selection-top-5). The pooled numbers over all chunks are descriptive only. A different-seed dump would be used the same way (select on one seed, confirm on the other).','']
-    ranked=sorted(rows,key=lambda r:-sc(r[1][(key,'sel')]));top1=ranked[0];c1=top1[1][(key,'conf')]
-    nS5=sum(passes(r[1][(key,'conf')],STRICT) for r in ranked[:5]);nR5=sum(passes(r[1][(key,'conf')],RELAXED) for r in ranked[:5])
-    L+=[f'configurations: {len(rows)}; selection-top-1: {top1[0]["name"]} (selection F1 {top1[1][(key,"sel")]["f1"]:.3f}); its CONFIRMATION recall {c1["recall"]:.3f}, precision {c1["precision"]:.3f}, hidden {c1["hidden"]:.3f}, F1 {c1["f1"]:.3f}; confirmation passes among selection-top-5: STRICT {nS5}, RELAXED {nR5}.','']
-    if passes(c1,STRICT):L.append('**Verdict: STRICT criterion met on the confirmation chunks by the selection-top-1 configuration.**')
-    elif passes(c1,RELAXED):L.append('**Verdict: RELAXED criterion met on the confirmation chunks (not strict): proceed to the GPU arm test with this selection.**')
-    else:L.append('**Verdict: the selection-top-1 configuration does not meet even the RELAXED criterion on the confirmation chunks: label-free sentence masking from this attention is not viable in this form; change direction (lexical prefilter / learned classifier).**')
-    L+=['','## top 20 configurations by SELECTION F1 (chunks '+str(ksr[:half])+'), with the confirmation numbers (chunks '+str(ksr[half:])+') in the right columns; metrics over the window tokens, target = fact-sentence tokens, state '+key,'','| config | group | heads | sel F1 | sel recall | sel precision | conf F1 | conf accuracy | conf recall | conf precision | conf hidden | conf bg false | chance | strict | relaxed | NAT conf recall / precision / hidden |','|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
-    for cfg,per in ranked[:20]:
-        m=per[(key,'conf')];sl=per[(key,'sel')];n=per.get(('NAT','conf')) if key!='NAT' else None
-        L.append(f"| {cfg['name']} | {cfg['group']} | {cfg['heads']} | {sl['f1']:.3f} | {sl['recall']:.3f} | {sl['precision']:.3f} | {m['f1']:.3f} | {m['acc']:.3f} | {m['recall']:.3f} | {m['precision']:.3f} | {m['hidden']:.3f} | {m['bg_false']:.3f} | {m['chance']:.3f} | {'yes' if passes(m,STRICT) else 'no'} | {'yes' if passes(m,RELAXED) else 'no'} | "+(f"{n['recall']:.3f} / {n['precision']:.3f} / {n['hidden']:.3f}" if n else '-')+' |')
+    sc=lambda m:m['f1'];ksr=sorted(ks)
+    L+=[f'**Multiple-comparison rule (fixed before the data, Hans 10/23):** this report ranks all {len(rows)} configurations on THIS dump (seed with the candidate list below) by pooled F1 of state {key} and fixes the TOP {NCAND} (string baseline excluded) as the CANDIDATES (written to the candidates file). A candidate counts as REPLICATED only if it meets the pass rules (STRICT or RELAXED) on the SENTPQADAMH pooled numbers of BOTH other seeds (62 and 63), evaluated by `--candidates` on those seeds\' dumps with NO new selection. The ranking on the selection seed is NOT a verdict.','']
+    ranked=sorted(rows,key=lambda r:-sc(r[1][(key,'pooled')]));cands=[r for r in ranked if r[0].get('sel')!='str'][:NCAND]
+    nS=sum(passes(r[1][(key,'pooled')],STRICT) for r in cands);nR=sum(passes(r[1][(key,'pooled')],RELAXED) for r in cands)
+    L+=[f'configurations: {len(rows)}; candidates (top {NCAND}) meeting STRICT on the selection seed: {nS}, RELAXED: {nR} (descriptive only).','']
+    if out:Path(str(out).replace('.md','_candidates.json')).write_text(json.dumps([r[0] for r in cands],indent=1))
+    L+=['## top 20 configurations by pooled F1 (selection seed), state '+key,'','| rank | config | group | heads | F1 | accuracy | recall | precision | hidden | bg false | chance | strict | relaxed | NAT recall / precision / hidden |','|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+    for n_,(cfg,per) in enumerate(ranked[:20],1):
+        m=per[(key,'pooled')];n=per.get(('NAT','pooled')) if key!='NAT' else None
+        L.append(f"| {n_}{'*' if (cfg,per) in cands else ''} | {cfg['name']} | {cfg['group']} | {cfg['heads']} | {m['f1']:.3f} | {m['acc']:.3f} | {m['recall']:.3f} | {m['precision']:.3f} | {m['hidden']:.3f} | {m['bg_false']:.3f} | {m['chance']:.3f} | {'yes' if passes(m,STRICT) else 'no'} | {'yes' if passes(m,RELAXED) else 'no'} | "+(f"{n['recall']:.3f} / {n['precision']:.3f} / {n['hidden']:.3f}" if n else '-')+' |')
+    L.append('');L.append('(* = candidate)')
     strs=[r for r in rows if r[0].get('sel')=='str'];hb=[r for r in ranked if r[0].get('sel')!='str'][:1]
     if strs and hb:
         L+=['','## string-match baseline (exact n-gram overlap of window sentences with the write chunk, no attention) and its overlap with the best attention configuration','','| config | F1 | recall | precision | hidden |','|---|---|---|---|---|']
@@ -94,6 +93,21 @@ def report(rows,chunks,out=None):
             m=per[(st,k)];L.append(f"| {st} | {k} | {m['f1']:.3f} | {m['acc']:.3f} | {m['recall']:.3f} | {m['precision']:.3f} | {m['hidden']:.3f} | {m['bg_false']:.3f} | {m['chance']:.3f} |")
     t='\n'.join(L)+'\n'
     if out:Path(out).write_text(t)
+    return t
+def confirm(cand_json,chunks,lab,out=None,prev=None,tag=''):
+    """no new selection: the candidate configurations (top NCAND of the selection seed) evaluated on this seed's dump; with prev = the confirmation json of the other seed: replicated = pass on both"""
+    cfgs=json.load(open(cand_json));rows=run(chunks,lab,cfgs);key='SENTPQADAMH' if 'SENTPQADAMH' in chunks else sorted(chunks)[0]
+    res=[{'name':c['name'],'strict':passes(per[(key,'pooled')],STRICT),'relaxed':passes(per[(key,'pooled')],RELAXED),'f1':float(per[(key,'pooled')]['f1'])} for c,per in rows]
+    L=[f'# E55 32.10 candidate confirmation {tag}','',f'Candidates fixed on the selection seed (file {Path(cand_json).name}); evaluated here without any new selection; state {key} pooled over the dump chunks {sorted(next(iter(chunks.values())))}. Pass rules STRICT recall >= {STRICT[0]}, precision >= {STRICT[1]}, hidden <= {STRICT[2]}; RELAXED recall >= {RELAXED[0]}, precision >= {RELAXED[1]}, hidden <= {RELAXED[2]}.','','| candidate | F1 | accuracy | recall | precision | hidden | bg false | chance | strict | relaxed | NAT recall / precision / hidden |','|---|---|---|---|---|---|---|---|---|---|---|']
+    for c,per in rows:
+        m=per[(key,'pooled')];n=per.get(('NAT','pooled')) if key!='NAT' else None
+        L.append(f"| {c['name']} | {m['f1']:.3f} | {m['acc']:.3f} | {m['recall']:.3f} | {m['precision']:.3f} | {m['hidden']:.3f} | {m['bg_false']:.3f} | {m['chance']:.3f} | {'yes' if passes(m,STRICT) else 'no'} | {'yes' if passes(m,RELAXED) else 'no'} | "+(f"{n['recall']:.3f} / {n['precision']:.3f} / {n['hidden']:.3f}" if n else '-')+' |')
+    if prev and Path(prev).exists():
+        pr={r['name']:r for r in json.load(open(prev))};both_s=[r['name'] for r in res if r['strict'] and pr.get(r['name'],{}).get('strict')];both_r=[r['name'] for r in res if r['relaxed'] and pr.get(r['name'],{}).get('relaxed')]
+        L+=['',f'**Replication on both seeds (this and the other confirmation seed): STRICT {len(both_s)}, RELAXED {len(both_r)} of {len(res)} candidates.** RELAXED-replicated: {both_r or "none"}; STRICT-replicated: {both_s or "none"}.']
+    else:L+=['','Replication on both seeds needs the confirmation of the other seed (--prev).']
+    t='\n'.join(L)+'\n'
+    if out:Path(out).write_text(t);Path(str(out).replace('.md','.json')).write_text(json.dumps(res))
     return t
 def selftest():
     import tempfile,re
@@ -115,7 +129,7 @@ def selftest():
         lab[k]={'w_fact':np.where(fact,np.arange(nW)%16,-1).astype(np.int16)}
     rows=run(chunks,lab);t=report(rows,chunks)
     best=max(rows,key=lambda r:r[1][('SENTPQADAMH','pooled')]['recall']+r[1][('SENTPQADAMH','pooled')]['precision']);m=best[1][('SENTPQADAMH','pooled')]
-    assert m['precision']>0.9 and 'Verdict' in t and len(rows)>100,(m,len(rows))
+    assert m['precision']>0.9 and 'CANDIDATES' in t and len(rows)>100,(m,len(rows))
     v6=[r for r in rows if r[0].get('v6')];assert len(v6)>100;b6=max(v6,key=lambda r:r[1][('SENTPQADAMH','pooled')]['f1']);m6=b6[1][('SENTPQADAMH','pooled')];assert m6['f1']>0.6 and m6['precision']>0.9 and 0<=m6['acc']<=1,(b6[0]['name'],m6)
     v7=[r for r in rows if r[0].get('v7')];assert len(v7)>150;b7=max(v7,key=lambda r:r[1][('SENTPQADAMH','pooled')]['f1']);m7=b7[1][('SENTPQADAMH','pooled')];assert m7['f1']>0.4 and m7['precision']>0.8,(b7[0]['name'],m7)
     assert any(r[0]['name'].startswith('STR') for r in rows);print('V7 best',b7[0]['name'],{k:round(float(v),3) for k,v in m7.items()})
@@ -125,6 +139,8 @@ def selftest():
     print('V6 best',b6[0]['name'],{k:round(v,3) for k,v in m6.items()})
     print('e55_sentgrid selftest ok:',len(rows),'configs, planted-signal best',{k:round(v,3) for k,v in m.items()})
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--dump');ap.add_argument('--labels');ap.add_argument('--out');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--selftest',action='store_true');ap.add_argument('--dump');ap.add_argument('--labels');ap.add_argument('--out');ap.add_argument('--candidates');ap.add_argument('--prev');ap.add_argument('--tag',default='');a=ap.parse_args()
     if a.selftest:selftest();sys.exit(0)
-    chunks,lab=load(a.dump,a.labels);print(report(run(chunks,lab),chunks,a.out))
+    chunks,lab=load(a.dump,a.labels)
+    if a.candidates:print(confirm(a.candidates,chunks,lab,a.out,a.prev,a.tag));sys.exit(0)
+    print(report(run(chunks,lab),chunks,a.out))
