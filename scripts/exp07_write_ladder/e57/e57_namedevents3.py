@@ -83,6 +83,9 @@ def analyze_all(a):
     matched={k:ND.match_titles(D['title'],v) for k,v in rx.items()};print({k:len(v) for k,v in matched.items()},flush=True)
     extra=extra_events(D,out,list(matched.values()),a.n_extra)
     for nm,mem,row in extra:matched[nm]=mem
+    if getattr(a,'keyword_events',None):                 # {name: [regex, ...]}: a title matches when ALL regexes match (case-insensitive); hand-chosen famous events
+        for nm,rxs in json.load(open(a.keyword_events)).items():
+            mem=ND.match_titles(D['title'],[re.compile(x,re.I) for x in rxs]);matched[nm]=mem;print('keyword event',nm,len(mem),'titles',flush=True)
     print('extra events from the job-219 list:',[(nm,len(mem)) for nm,mem,_ in extra],flush=True)
     tank=set(ND.match_titles(D['title'],[re.compile(x,re.I) for x in N2.TANKER]));mach=set(matched['Venezuela-Machado'])
     prng=random.Random(a.seed);tinfo={}
