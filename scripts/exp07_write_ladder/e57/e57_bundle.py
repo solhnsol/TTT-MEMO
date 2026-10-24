@@ -47,7 +47,7 @@ def run(a):
             rid=r['rids'][ai];bundle.append(dict(event=nm,rid=rid,host=r['arts'][ai]['host'],date=str(pub_date[rid]),title=D['title'][D['_ridx'][rid]],excerpt=excerpt(r['sents'][ai],kept[ai],a.excerpt_chars)))
         ft=fact_tables(r);cl=attr.get(nm,{});ft['PLACE (proxy)']=dict(label='single capitalised words / names by context proxy',items=[dict(surface=x['surface'],articles=None,lead_articles=round(x['share']*n),share_of_lead=x['share']) for c in('place','person','other name') for x in cl.get(c,[])[:8]])
         facts[nm]=dict(independent_articles=n,tables=ft)
-        index[nm]=dict(ok=True,n_before=row['n_before'],n_dedup=row['n_dedup'],selected=[dict(rid=r['rids'][ai],host=r['arts'][ai]['host'],date=str(pub_date[r['rids'][ai]])) for ai in sel],first=str(row['first']),last=str(row['last']))
+        index[nm]=dict(ok=True,eth_v1_event_level=row.get('eth_v1_event_level'),n_before=row['n_before'],n_dedup=row['n_dedup'],selected=[dict(rid=r['rids'][ai],host=r['arts'][ai]['host'],date=str(pub_date[r['rids'][ai]])) for ai in sel],first=str(row['first']),last=str(row['last']))
         store[nm]=dict(rids=r['rids'],hosts=[x['host'] for x in r['arts']],dates=[str(pub_date[x]) for x in r['rids']],sents=r['sents'],cum=[x['cum'] for x in r['arts']],kept=[kept[ai] for ai in range(n)],n_before=row['n_before'],n_dedup=row['n_dedup'])
     (fd/'reading_bundle.json').write_text(json.dumps(dict(note='publisher text: stays on the server',seed=SEED,per_event=a.per_event,excerpt_chars=a.excerpt_chars,articles=bundle),indent=1,ensure_ascii=False))
     nl=fd/'news-lite';nl.mkdir(exist_ok=True)
