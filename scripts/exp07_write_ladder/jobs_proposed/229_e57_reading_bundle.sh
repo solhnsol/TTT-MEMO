@@ -7,7 +7,7 @@ PY=$(realpath -s "$PY")
 case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
-COMMIT=e3185cdd9417228ecee4dab8399d62933131bcea
+COMMIT=5c835409e9a32b77829fdb20e4022a6547f06705
 FILES="$D/e56/e56_text.py $D/e57/e57_common.py $D/e57/e57_news.py $D/e57/e57_news96.py $D/e57/e57_news10.py $D/e57/e57_rope.py $D/e57/e57_freeze.py $D/e57/e57_bigclusters.py $D/e57/e57_events.py $D/e57/e57_namedevents.py $D/e57/e57_namedevents2.py $D/e57/e57_namedevents3.py $D/e57/e57_lite.py $D/e57/e57_bundle.py $D/e57/e57_verify.py"
 : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}/e57_news}"; mkdir -p "$OUT"; : "${RAW:=$OUT/news_raw}"; : "${WORKERS:=8}"
 if [ -z "$NO_INSTALL" ]; then
@@ -33,7 +33,7 @@ fe7309299152 e57/e57_namedevents.py
 38b621622a9b e57/e57_namedevents2.py
 485f5fb0f8c4 e57/e57_namedevents3.py
 f66cea288f61 e57/e57_lite.py
-b2e2b5332e65 e57/e57_bundle.py
+765c674da589 e57/e57_bundle.py
 4f6ad6e59e4a e57/e57_verify.py
 MANIFEST
   echo "installed code verified against the manifest"
