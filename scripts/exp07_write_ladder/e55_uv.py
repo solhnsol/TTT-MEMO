@@ -46,7 +46,7 @@ def vote_select(hidx,hval,qsid,wsid,wlen,p,kmin,score='sum'):
     V[:,wlen<MIN_TOK]=0;nc=int((wlen>=MIN_TOK).sum())
     if nc==0:return np.zeros(nW,bool),{'n_query_sents':nQ,'n_window_sents':nW,'sel_per_query':0}
     nsel=max(1,int(np.ceil(nc*p/100.0)));order=np.argsort(-V,axis=1,kind='stable')[:,:nsel];sel=np.zeros((nQ,nW),bool);np.put_along_axis(sel,order,True,axis=1);sel&=V>0
-    cnt=sel.sum(0);return cnt>=kmin,{'n_query_sents':nQ,'n_window_sents':nW,'sel_per_query':float(sel.sum(1).mean()),'votes_max':int(cnt.max()),'votes_vec':cnt.astype(np.int16)}
+    cnt=sel.sum(0);return cnt>=kmin,{'n_query_sents':nQ,'n_window_sents':nW,'sel_per_query':float(sel.sum(1).mean()),'votes_max':int(cnt.max())}
 def rands_hidden(wlen,target_tokens,k,seed=RS_SEED):
     """random window sentences (shuffle by (seed, k)) until the hidden-token count reaches target_tokens (overshoot < one sentence)"""
     nW=len(wlen);h=np.zeros(nW,bool);t=0
@@ -64,14 +64,9 @@ class UV:
     """one object per arm: .keep(k, m, Kc, Vc, ids_k, keep_all) -> (keep 1-D bool [WIN+CH], log dict); the GPU/att pass is in .votes (monkey-patchable for the CPU test)"""
     def __init__(self,arm,ends,chunks_meta=None,L=None,rt=None,s3=None,topm=8,group='g3',score='sum',rs_targets=None,CH=1024,nw=8,log=print):
         import e55_swap as E
-        self.vlog={};self.arm=arm;self.ends=np.asarray(ends);self.meta=chunks_meta;self.L=L;self.rt=rt;self.s3=s3;self.topm=topm;self.group=group;self.score=score;self.CH=CH;self.nw=nw;self.rs_targets=rs_targets;self.log=log
+        self.arm=arm;self.ends=np.asarray(ends);self.meta=chunks_meta;self.L=L;self.rt=rt;self.s3=s3;self.topm=topm;self.group=group;self.score=score;self.CH=CH;self.nw=nw;self.rs_targets=rs_targets;self.log=log
         if arm in E.UV:self.p,self.kmin=E.UV[arm]
         else:assert arm in E.RS and rs_targets is not None and len(rs_targets)>0,('random-sentence arm needs the per-chunk hidden-token counts of its UV arm',arm)
-    def save_votes(self,path):
-        """per-chunk vote vectors of the run (votes per window sentence, window sentence lengths and start offsets): npz keys v<k> / len<k> / start<k>, a few KB per chunk"""
-        d={}
-        for k,x in self.vlog.items():d[f'v{k}']=x['votes'];d[f'len{k}']=x['w_len'];d[f'start{k}']=x['w_start']
-        np.savez_compressed(path,**d);return len(self.vlog)
     def att_pass(self,k,m,Kc,Vc,ids_k,keep):
         """forward-only eager prefix pass with all chunk tokens as queries -> (hidx, hval) [nL,H,CH,topm]"""
         import jax,jax.numpy as jnp;L,rt,s3=self.L,self.rt,self.s3;CH=self.CH;lo=(self.nw-min(k,self.nw))*CH
@@ -92,8 +87,7 @@ class UV:
         elif self.arm in __import__('e55_swap').UV:
             hidx,hval=self.att_pass(k,m,Kc,Vc,ids_k,keep_all);qs=[];
             for i,(a,b) in enumerate(chunk_sents(self.ends,k,CH)):qs+= [i]*(b-a)
-            hid,vi=vote_select(hidx,hval,np.asarray(qs,np.int64),wsid,wlen,self.p,self.kmin,self.score);vv=vi.pop('votes_vec',None);info.update(vi)
-            if vv is not None:self.vlog[k]={'votes':vv,'w_len':np.asarray(wlen,np.int32),'w_start':np.asarray(window_sents(self.ends,k,CH,nw)[1],np.int32)}       # per-chunk vote vector (a few KB) for later diagnosis
+            hid,vi=vote_select(hidx,hval,np.asarray(qs,np.int64),wsid,wlen,self.p,self.kmin,self.score);info.update(vi)
         else:hid=rands_hidden(wlen,int(self.rs_targets[k]),k)
         hk=np.zeros(W,bool)
         if len(wlen):hk=(wsid>=0)&hid[np.clip(wsid,0,len(wlen)-1)]
