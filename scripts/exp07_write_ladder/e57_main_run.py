@@ -30,7 +30,7 @@ def oracle_masks(ends,ids_all,tk,items,nch,UVm):
     return out
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=None,help='unused (the canary limit was abolished by Hans, E57 section 50); kept for old command lines')
-    ap.add_argument('--stage',default=None);ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--pfx-chunks',type=int,default=560);ap.add_argument('--pfx-seg',type=int,default=140);ap.add_argument('--pfx-seg2',type=int,default=70);ap.add_argument('--ctx-chunks',type=int,default=192);ap.add_argument('--seg-chunks',type=int,default=280);ap.add_argument('--pfx-tol',type=float,default=0.02);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap.add_argument('--stage',default=None);ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--pfx-chunks',type=int,default=560);ap.add_argument('--pfx-seg',type=int,default=140);ap.add_argument('--pfx-seg2',type=int,default=70);ap.add_argument('--ctx-chunks',type=int,default=192);ap.add_argument('--seg-chunks',type=int,default=280);ap.add_argument('--pfx-tol',type=float,default=0.02);ap.add_argument('--noise-factor',type=float,default=2.0);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     ROOT=HERE.parents[1];import gen_world_ctl as G
     tfile=a.tokenizer or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.StubTok() if a.stub else G.load_enc(tfile)
@@ -56,13 +56,14 @@ def main():
             wp=RD.window_present(items,tk.decode([int(x) for x in ids_all[gwin(n+kk)[0]:gwin(n+kk)[1]]]));print(f'  read chunk {kk} (cycle 2 window): gold of {sum(wp.values())} of {len(items)} questions in the window',flush=True)
     if a.check_only:print('main run check-only OK');return
     out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True)
-    assert a.stage in ('pfx','pair','arms','reads'),'--stage pair | arms | reads (separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
+    assert a.stage in ('pfx','noise','pair','arms','reads'),'--stage pair | arms | reads (separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
     import e55_swap as E
     E.ADAM['NATADAMH']=('NAT',0.5,False);E.ARMS.append('NATADAMH')               # BEFORE e55_core is imported (lab() below): IMPLEMENTED / CHUNK_META_ARMS are built from E.ADAM at import
     import e55_run as R,e55_selmask as SM
     LD,s3,C=R.lab();rt=LD.Runtime();can=R.Canary55(LD,rt);lg=lambda *x:print(*x,flush=True)
     cw0=can(rt.base);print('canary W0',cw0,flush=True)
     if a.stage=='pfx':stage_pfx(a,out,items,bsrc,iv,hits,shtab,ids,ids_all,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
+    elif a.stage=='noise':stage_noise(a,out,items,bsrc,iv,hits,shtab,ids,ids_all,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
     elif a.stage=='pair':stage_pair(a,out,items,bsrc,iv,hits,shtab,ids,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
     elif a.stage=='arms':stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM)
     else:stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,cw0,lg,can)
@@ -73,6 +74,10 @@ def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,
     ntg=None;ends=UVm.sentence_ends(UVm.tokenizer(tfile),ids_all)
     mfile=out/'e57_main_oracle_masks.npz';ms=oracle_masks(ends,ids_all,tk,items,nch,UVm);np.savez_compressed(mfile,**ms)
     rs_t=None;dummy_meta=[{'sents':[]} for _ in range(nch)];rc={}                                  # rc: ONE record of the natural K,V of the stream (about 400 GiB host for 6 cycles) shared by all arms
+    # the natural K,V record of the whole stream needs a 44 GiB working array on the GPU; run_stream records AFTER it has computed the prefix, and the (cached) prefix output of 8 GiB plus the compiled segment programs left too little room (job 261, 08:57Z): record FIRST, while only the model is on the GPU, and hand the result to run_stream through its record cache (same key as run_stream builds)
+    L0=C.Ladder55(rt,save_dir=out/'states'/'E57_main_rec',canary=None);t0=time.monotonic()
+    with rt.mesh:Kh0,Vh0,_h=L0.record(ids_all[:nch*CH])
+    rc[(hashlib.sha256(np.asarray(ids_all[:nch*CH],np.int64).tobytes()).hexdigest(),nch)]=(Kh0,Vh0);lg(f'  natural K,V of the stream recorded before the arms ({Kh0.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s');del L0,_h;gc.collect();LD.jax.clear_caches()
     for arm in arms:
         fnA=out/f'E57_main_{arm}.arms.json'
         if fnA.exists() and not a.rerun:
@@ -153,6 +158,36 @@ def stage_pfx(a,out,items,bsrc,iv,hits,shtab,ids,ids_all,n,kks,tk,LD,s3,C,rt,can
     rep['ok']=bool(ok1 and ok2);rep['sec']=time.monotonic()-t0
     (out/'E57_pfx_check.json').write_text(json.dumps(rep,indent=1,default=float));print('PFX CHECK',json.dumps({k:(v if k!='part2_nat_one_cycle' else {kk:vv for kk,vv in v.items() if not kk.startswith('canary_')}) for k,v in rep.items()},default=float),flush=True)
     if not rep['ok']:print('segmented prefix check FAILED (exit 9): the differences are reported above; the long run is not started and Hans decides (the criteria are not relaxed)',flush=True);sys.exit(9)
+class StopRun(Exception):pass
+def stage_noise(a,out,items,bsrc,iv,hits,shtab,ids,ids_all,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R):
+    """NOISE-FLOOR CONTROL for the segmented prefix (amended criterion, decided by Hans after seeing the first check, recorded as a post-hoc change): the SAME NAT arm over one cycle (280 chunks) with the prefix of a 560-chunk stream computed in one call (the first 280 chunks of the update use hidden states computed in a call of another shape; mathematically the same computation). Compared with the one-call 280-chunk run of job 256 (rows of E57_trial_NAT.json cycle 1, reproduced bit for bit in job 259) this gives the numerical noise floor of 'another call shape'. The segmented run of E57_pfx_check.json (job 259) PASSES the amended criterion when: no rank changed, canary gen and tail differences <= --pair-tol (1e-3), and its max and mean |delta cand_lp| are <= --noise-factor (2.0) x the noise floor max and mean."""
+    import e55_gpu as RG
+    pf=json.load(open(out/'E57_pfx_check.json'));seg=pf['part2_nat_one_cycle'];trial=json.load(open(out/'..'/'E57_trial_NAT.json')) if False else None
+    tf=pathlib.Path(a.bundle).parent/'E57_trial_NAT.json';trial=json.load(open(tf));A=[r for r in trial['rows'] if r['cycle']==1]
+    rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
+    raw,ntok,bad=RD.build_rows(rt.tok,items);assert not bad,bad
+    forbid=sorted({s for it in items for s in it['variants']+[it['cands'][0]] if len(s)>=4 and not any(ch.isdigit() for ch in s)})
+    out_tail=R.out_tail_8192(LD,rt.tok,rt.bos,forbid);P_out=rd.packed(raw,out_tail)
+    s_,e_=max(0,n*CH-8192),n*CH;P_in=rd.packed(raw,[int(x) for x in ids[s_:e_]]);wp=RD.window_present(items,tk.decode([int(x) for x in ids[s_:e_]]));csa={it['id']:it['q'].get('c_SA') for it in items}
+    def score(P,m):
+        m32=rd.to_fp32(m)
+        with LD.jax.default_matmul_precision('highest'):return RD.split_scores(np.asarray(P.r1(m32)),items)
+    def read(arm,m):
+        rows=RD.log_rows(items,score(P_out,m),ntok,cycle=1,read_chunk=n-1,pos_tokens=n*CH,win=None,arm=arm,condition='OUT',iv=iv,hits=hits,csa=csa,shadow=shtab)
+        rows+=RD.log_rows(items,score(P_in,m),ntok,cycle=1,read_chunk=n-1,pos_tokens=n*CH,win=(s_,e_),arm=arm,condition='IN',iv=iv,hits=hits,winpresent=wp,csa=csa,shadow=shtab);return rows
+    got={}
+    def hook(k,m):got['rows']=read('NAT_prefix560',m);got['canary']=can(m);raise StopRun()
+    L=C.Ladder55(rt,save_dir=out/'states'/'E57_noise',canary=None);t0=time.monotonic()
+    try:L.run_stream('NAT',1,ids_all[:2*n*CH],nch=2*n,tag='noise',log=lg,read_hook=hook,hook_chunks={n-1})
+    except StopRun:pass
+    Bc=got['rows'];key=lambda r:(r['condition'],r['question'])
+    amap={key(r):r for r in A};dl=[abs(x-y) for r in Bc for x,y in zip(r['cand_lp'],amap[key(r)]['cand_lp'])];rk=sum(1 for r in Bc if (r['rank_all'],r['rank_hard'],r['rank_pool'])!=(amap[key(r)]['rank_all'],amap[key(r)]['rank_hard'],amap[key(r)]['rank_pool']))
+    cd=dict(gen=got['canary']['_gen_nll']-trial['trajectory'][-1]['canary']['_gen_nll'],tail=got['canary']['_tail_nll']-trial['trajectory'][-1]['canary']['_tail_nll'])
+    floor=dict(rows=len(Bc),max_abs_diff_cand_lp=max(dl),mean_abs_diff_cand_lp=float(np.mean(dl)),rows_with_changed_rank=rk,canary_diff=cd)
+    f=a.noise_factor;ok=(seg['rows_with_changed_rank']==0 and abs(seg['canary_diff']['gen'])<=a.pair_tol and abs(seg['canary_diff']['tail'])<=a.pair_tol and seg['max_abs_diff_cand_lp']<=f*floor['max_abs_diff_cand_lp'] and seg['mean_abs_diff_cand_lp']<=f*floor['mean_abs_diff_cand_lp'])
+    rep=dict(noise_floor=floor,segmented_vs_full=dict(max_abs_diff_cand_lp=seg['max_abs_diff_cand_lp'],mean_abs_diff_cand_lp=seg['mean_abs_diff_cand_lp'],rows_with_changed_rank=seg['rows_with_changed_rank'],canary_diff=seg['canary_diff']),noise_factor=f,pair_tol=a.pair_tol,ok=bool(ok),note='amended criterion, decided after seeing the first check of job 259 (post-hoc change)',sec=time.monotonic()-t0)
+    (out/'E57_noise_floor.json').write_text(json.dumps(rep,indent=1,default=float));print('NOISE FLOOR',json.dumps(rep,default=float),flush=True)
+    if not ok:print('amended segmented-prefix criterion FAILED (exit 9)',flush=True);sys.exit(9)
 def inner_dtypes(LD,rd,m):
     """precision of the inner (written) parameters: {dtype: number of leaves} -> the saved weights must have the precision of the training state"""
     import collections as _c
