@@ -113,4 +113,4 @@ def selftest():
     q=dict(type='NUMBER',canonical='112th',variants=[],S='x');rx=partial_rxs(q);assert rx[0].search('the 112th mayor') and not rx[0].search('1120')
     q=dict(type='PLACE',canonical='Jammu and Kashmir',variants=[],S='x');rx=partial_rxs(q);assert len(rx)==2
     print('e57_orc2 selftest ok')
-if __name__=='__main__' and 'selftest' in sys.argv:selftest()
+if __name__=='__main__' and '--selftest' in sys.argv:selftest()
