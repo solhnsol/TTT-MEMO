@@ -8,7 +8,7 @@ Type rules (E57 21 / 22.9 item 5; NO dictionary is used for answer judgment): PL
 import argparse,json,sys,re,hashlib,random,pickle,pathlib,collections,datetime
 HERE=pathlib.Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import e57_common as C
-SEED=57251;NPACK=12;C_MIN=10;CSA_MIN=0.5;COMP_MAX=0.5;WIN=64;EASY_MIN=8;NHARD=8;TYPES=('PLACE','DATE','PERSON','NUMBER')
+SEED=57251;NPACK=12;C_MIN=10;CSA_MIN=0.5;COMP_MAX=0.5;WIN=64;EASY_MIN=15;NHARD=8;TYPES=('PLACE','DATE','PERSON','NUMBER')
 PLACE_CTX=re.compile(r"(?:\b(?:in|at|near|from|across|outside|inside|around|to|into)\s)$",re.I)
 PERSON_BEFORE=re.compile(r"(?:\b(?:Mr|Mrs|Ms|Dr|President|Minister|Mayor|Governor|Senator|Coach|Judge|Chairman|Actor|Actress|Director|Prime Minister|Chief|Captain)\.?\s)$")
 PERSON_AFTER=re.compile(r"^\s*(?:,\s*[^,]{0,60},)?\s*(?:said|says|told|added|stated|announced|confirmed|has|was|is|will|had)\b")
@@ -176,6 +176,21 @@ def support_for(E,ex,pk,n=3):
     return out
 def distract(out,validated,log=print):
     st,idx=load(out);Q=[json.loads(l) for l in open(validated) if l.strip()];res=[];bytype=collections.defaultdict(list)
+    occ=collections.defaultdict(lambda:collections.defaultdict(lambda:collections.defaultdict(set)));gsurf={}      # event -> type -> key -> articles; (type, key) -> first surface (whole stream, all events)
+    for nm_,E_ in st.items():
+        for ai_,sents_,cum_ in lead_stream(E_):
+            for t_ in sents_:
+                for ty_,key_,sf_,a_,b_ in type_strings(t_):
+                    if ty_ in TYPES:
+                        k_=key_ if ty_ in('DATE','NUMBER') else norm(sf_);occ[nm_][ty_][k_].add(ai_);gsurf.setdefault((ty_,k_),sf_)
+    gcount=collections.defaultdict(collections.Counter)
+    for nm_ in occ:
+        for ty_ in occ[nm_]:
+            for k_,v_ in occ[nm_][ty_].items():gcount[ty_][k_]+=len(v_)
+    def surf_of(ty_,k_):
+        if ty_=='DATE':
+            import calendar;mo_,d_=k_.split('-');return f"{calendar.month_name[int(mo_)]} {int(d_)}"
+        return gsurf[(ty_,k_)]
     for q in Q:bytype[q['type']].append(q)
     for q in Q:
         E=st[q['event']];holds,keys=ans_matcher(q);cs=core(q['S']);vs=[q['canonical']]+list(q['variants']);lead=collections.defaultdict(set);win=collections.defaultdict(set);surf={};exw=collections.defaultdict(list);exn=collections.defaultdict(list)
@@ -200,9 +215,21 @@ def distract(out,validated,log=print):
             if o['event']!=q['event'] and not related(o['canonical'],q['canonical']):
                 f=easy_form(o);cnt=sum(1 for ai,sents,cum in lead_stream(E) if any(related(f,sf) for t in sents for ty,key,sf,a,b in type_strings(t) if ty==q['type']))
                 easy.append(dict(surface=f,from_event=o['event'],c_prime=cnt))
-        res.append(dict(id=q['id'],event=q['event'],type=q['type'],easy=easy,hard=hard,rank_analysis=len(easy)>=EASY_MIN))
+        # easy candidates up to >= EASY_MIN (cap EASY_MIN + 5) from the WHOLE stream: most frequent same-type strings (articles over all events); not the gold / an alias, not a string of the frame or S, not the same entity as another question's gold in this event (those are hard candidates)
+        selftxt_=' '+norm(q['frame'].replace('{S}',' ')+' '+q['S'])+' ';others_=[o for o in Q if o['event']==q['event'] and o['id']!=q['id']];have_=[norm(e['surface']) for e in easy]
+        for k_,n_ in sorted(gcount[q['type']].items(),key=lambda kv:(-kv[1],kv[0])):
+            if len(easy)>=EASY_MIN+5:break
+            sf_=surf_of(q['type'],k_)
+            if norm(sf_) in have_:continue
+            if norm(sf_) in {norm(h['surface']) for h in hard}:continue                         # hard candidates of this question are not easy ones
+            if any(related(sf_,v) for v in vs) or (q['type'] in('DATE','NUMBER') and k_ in keys):continue
+            if ' '+norm(sf_)+' ' in selftxt_ or (norm(q['S']) and norm(q['S']) in norm(sf_)):continue
+            if any(related(sf_,o['canonical']) or (q['type'] in('DATE','NUMBER') and k_ in ans_matcher(o)[1]) for o in others_):continue
+            if q['type'] in('PLACE','PERSON') and core(sf_)&(cs|core(q['event'])):continue
+            easy.append(dict(surface=sf_,from_event=None,c_prime=len(occ[q['event']][q['type']].get(k_,())),source='frequent same-type string in the whole stream'));have_.append(norm(sf_))
+        res.append(dict(id=q['id'],event=q['event'],type=q['type'],easy=easy,n_easy=len(easy),hard=hard,rank_analysis=len(easy)>=EASY_MIN))
     fd=pathlib.Path(out)/'e57_bank';(fd/'distractors.json').write_text(json.dumps(res,indent=1,ensure_ascii=False))
-    nt=collections.Counter(q['type'] for q in Q);log('distractors:',len(res),'questions;',{t:sum(1 for r in res if r['type']==t and r['rank_analysis']) for t in nt},'with >= 8 easy candidates');return res
+    nt=collections.Counter(q['type'] for q in Q);log('distractors:',len(res),'questions;',{t:sum(1 for r in res if r['type']==t and r['rank_analysis']) for t in nt},f'with >= {EASY_MIN} easy candidates; easy candidates per question: min',min((r['n_easy'] for r in res),default=0),'max',max((r['n_easy'] for r in res),default=0));return res
 # ---------- F freeze ----------
 def freeze(out,validated,distractors,nominations,version,log=print):
     fd=pathlib.Path(out)/'e57_bank';bf=fd/f'bank_{version}.json'
