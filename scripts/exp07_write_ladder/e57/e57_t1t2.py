@@ -130,7 +130,7 @@ def person_easy(pool,q,hard,golds,n=EASY_N):
     out=[];used=set();vs=q['variants']
     bad={w.lower() for v in vs for w in re.findall(r"[A-Za-z]+",v)[-1:]}|{B.norm(h['surface']).split()[-1] for h in hard if B.norm(h['surface'])}
     for g in golds:
-        if g['id']!=q['id'] and g['pool_type']=='PERSON' and not any(B.related(g['gold'],v) for v in vs):
+        if g['id']!=q['id'] and g['pool_type']=='PERSON' and g['event']!=q['event'] and not any(B.related(g['gold'],v) for v in vs):
             k=g['gold'].split()[-1].lower()
             if k not in used:out.append(dict(surface=g['gold'],from_event=g['event'],source='gold of another T2 item (person)'));used.add(k)
     for k,c in sorted(pool.items(),key=lambda kv:(-len(kv[1]['arts']),kv[0])):
@@ -140,6 +140,9 @@ def person_easy(pool,q,hard,golds,n=EASY_N):
         if any(B.related(sf,v) for v in vs) or any(B.related(sf,g['gold']) for g in golds if g['gold_class']!='PERSON') or any(B.related(sf,x) for x in nonp):continue
         out.append(dict(surface=sf,from_event=None,source='frequent person string in the whole stream (title / said-was context in >= 2 articles, one entry per last name)',c_prime=len(c['arts'])));used.add(k)
     return out
+def event_count(st,event,sf):
+    rx=re.compile(r'(?<![\w])'+re.escape(sf)+r'(?![\w])',re.I);E=st.get(event)
+    return 0 if E is None else sum(1 for ai,sents,cum in B.lead_stream(E) if any(rx.search(t) for t in sents))
 def other_easy(st,q,golds,hard,n=EASY_N):
     """TITLE / TEAM golds: the extractor has no type for them, so the auto list is NOT used. easy = the other T2 gold of the same class, then the hand-written pool e57_t1t2_easy_pools.json of the class (kept only if it occurs in the stream, is not an alias / container of the gold and not a same-event hard candidate); easy_extra of the nominations is added by verify"""
     pools=json.load(open(HERE/'e57_t1t2_easy_pools.json'));out=[];hn={B.norm(h['surface']) for h in hard};vs=q['variants']
@@ -147,7 +150,7 @@ def other_easy(st,q,golds,hard,n=EASY_N):
         if g['id']!=q['id'] and g['gold_class']==q['gold_class'] and not any(B.related(g['gold'],v) for v in vs):out.append(dict(surface=g['gold'],from_event=g['event'],source='gold of another T2 item (same class)'))
     for sf in pools.get(q['gold_class'],[]):
         if len(out)>=n:break
-        if B.norm(sf) in hn or any(B.related(sf,v) for v in vs) or any(B.related(sf,e['surface']) for e in out) or stream_count(st,sf)==0:continue
+        if B.norm(sf) in hn or any(B.related(sf,v) for v in vs) or any(B.related(sf,e['surface']) for e in out) or stream_count(st,sf)==0 or (q['gold_class']=='TITLE' and event_count(st,q['event'],sf)>0):continue      # a title of the item's own event is a hard candidate, not an easy one
         out.append(dict(surface=sf,from_event=None,source='hand-written pool '+q['gold_class']+' (e57_t1t2_easy_pools.json), present in the stream'))
     return out
 def stream_count(st,surface):
@@ -229,6 +232,10 @@ def add_easy_extras(st,d,q,extras,cap=EASY_N):
 # ---------- verify nominations ----------
 def verify(out,nomfile,log=print):
     out=pathlib.Path(out);fd=out/'e57_bank';st,idx=B.load(out);Q={q['id']:q for q in map(json.loads,[l for l in open(fd/'t2_validated.jsonl') if l.strip()])};D={d['id']:d for d in json.load(open(out/'e57_t1t2_t2_distractors.json'))}
+    GOLDS=json.load(open(out/'e57_t1t2_t2_golds.json'));_pool=[]
+    def POOL():
+        if not _pool:_pool.append(person_pool(st))
+        return _pool[0]
     EXALL=easy_extras_of(nomfile);N=json.load(open(nomfile))['nominations']
     if isinstance(N,dict):N=[dict(id=k,nominated_from_list=v.get('hard',[]),proposed_extra_needs_code_check=v.get('hard_proposed_need_stream_check',[]),easy_extra=EXALL.get(k,[])) for k,v in N.items()]
     rep=[];lines=[];prob=[]
@@ -240,6 +247,7 @@ def verify(out,nomfile,log=print):
         res=[NOM.check_extra(q,s,E,{}) for s in list(n.get('proposed_extra_needs_code_check',[]))+moved]
         for r in res:
             if r['accepted'] and B.norm(r['extra']) not in have:d['hard'].append(dict(surface=r['extra'],key=B.norm(r['extra']),c_prime=r['c_prime'],c_prime_win=r['c_prime_win'],source='nominated extra (news thread), verified in the stream',support=r['support'],c_prime_stream_articles=stream_count(st,r['extra'])));have.add(B.norm(r['extra']))
+        hn_=[x['surface'] for x in d['hard']];d['easy']=person_easy(POOL(),q,d['hard'],GOLDS) if q['gold_class']=='PERSON' else other_easy(st,q,GOLDS,d['hard'])      # the nominated hard candidates leave the easy list, the free places are back-filled
         easy_res=add_easy_extras(st,d,q,n.get('easy_extra',[]))
         d['n_easy']=len(d['easy']);nominated=picks+[r['extra'] for r in res if r['accepted']]
         if len(nominated)>MAXN:prob.append(f'{qid}: {len(nominated)} nominated (> {MAXN})')
@@ -263,7 +271,10 @@ def freeze(out,version,draft_path,bankdir,log=print):
             if q is None:prob.append(f"{it['id']}: source {it['source']} not in bank_v1");continue
             t1[it['source']]={k:q[k] for k in('id','event','S','type','canonical','variants','fixed_surface','easy','hard_all','hard_nominated','stratum')}
     for qid,d in D.items():
-        nm=[x for x in d['hard'] if B.norm(x['surface']) in {B.norm(s) for s in N.get(qid,{}).get('nominated',[])}]
+        want={B.norm(s) for s in N.get(qid,{}).get('nominated',[])};nm=[];seen_=set()
+        for x in d['hard']:                                                       # one entry per nominated surface (the hard list can hold the same surface from two sources, as bank freeze does)
+            k_=B.norm(x['surface'])
+            if k_ in want and k_ not in seen_:nm.append(x);seen_.add(k_)
         if len(nm)>MAXN or not nm:prob.append(f'{qid}: {len(nm)} nominated hard candidates (0 or > {MAXN})')
         t2[qid]=dict(id=qid,event=d['event'],gold=G[qid]['gold'],gold_class=d['gold_class'],type=d['type'],variants=G[qid]['variants'],fixed_surface=G[qid]['fixed_surface'],c_prime_stream_articles=G[qid]['c_prime_stream_articles'],easy=d['easy'],hard_all=d['hard'],hard_nominated=nm)
     if prob:print('freeze refused:',prob);sys.exit(7)
@@ -294,7 +305,7 @@ def _selftest():
     st_={'Ev':dict(rids=['r1','r2','r3'],hosts=['h']*3,dates=[1,2,3],cum=[[0,10,20]]*3,kept=[2,2,2],sents=[['Mayor Jane Roe said it. New York City said nothing today.','Dr Jane Roe told us. Mayor Tom Hill said no.']]*3)}
     pool=person_pool(st_);assert 'roe' in pool and 'york' not in pool and len(pool['roe']['ctx'])>=2,sorted(pool)
     golds=[dict(id='a',gold='Zed Gold',gold_class='PERSON',pool_type='PERSON',event='Ev'),dict(id='b',gold='Amy Other',gold_class='PERSON',pool_type='PERSON',event='Ev2'),dict(id='c',gold='Big Title',gold_class='TITLE',pool_type='OTHER',event='Ev3')]
-    qa=dict(id='a',variants=['Zed Gold','Gold'],gold_class='PERSON');e=person_easy(pool,qa,[dict(surface='Tom Hill')],golds);sf=[x['surface'] for x in e];assert sf[0]=='Amy Other' and 'Jane Roe' in sf and 'Tom Hill' not in sf and 'Big Title' not in sf,sf
+    qa=dict(id='a',event='Ev',variants=['Zed Gold','Gold'],gold_class='PERSON');e=person_easy(pool,qa,[dict(surface='Tom Hill')],golds);sf=[x['surface'] for x in e];assert sf[0]=='Amy Other' and 'Jane Roe' in sf and 'Tom Hill' not in sf and 'Big Title' not in sf,sf
     assert other_easy({},dict(id='c',gold_class='TEAM',variants=['Big Title']),golds+[dict(id='d',gold='Some Team',gold_class='TEAM',pool_type='OTHER',event='Ev4')],[])[0]['surface']=='Some Team'
     d_=dict(hard=[dict(surface='Hardone Name')],easy=[]);r_=add_easy_extras(st_,d_,dict(variants=['Zed Gold']),['Jane Roe','Zed Gold','Hardone Name','Nobody Atall','Jane Roe']);assert [x['accepted'] for x in r_]==[True,False,False,False,False] and d_['n_easy']==1,r_
     import tempfile as _t;f_=pathlib.Path(_t.mkdtemp())/'n.json';f_.write_text(json.dumps({'nominations':{'rev-a':{'hard':['X']}},'easy_extra_proposed':{'titles (shared by rev-a and rev-b; need check)':['T1','T2'],'teams (rev-c)':['K']}}));ex_=easy_extras_of(f_);assert ex_=={'rev-a':['T1','T2'],'rev-b':['T1','T2'],'rev-c':['K']},ex_
@@ -314,9 +325,13 @@ def _selftest_e2e():
         dp=td/'draft.json';dp.write_text(json.dumps(dict(version='t',items=items)));nf=td/'nom.json'
         nf.write_text(json.dumps({'nominations':{'rev-a':{'hard':['Tom Hill'],'easy_extra':[]},'rev-b':{'hard':[],'hard_proposed_need_stream_check':['Kim Park']}},'easy_extra_proposed':{'persons (rev-a and rev-b)':['Kim Park','Nobody Atall']}}))
         out=td/'o';(out/'e57_bank').mkdir(parents=True)
-        key=check(str(dp),str(td),out,log=lambda *x:None,nomfile=str(nf));assert 'pass_k3_zero_overlap' in key and len(key['t2'])==2,key
+        key=check(str(dp),str(td),out,log=lambda *x:None,nomfile=str(nf))
+        dd=json.load(open(out/'e57_t1t2_t2_distractors.json'));assert 'pass_k3_zero_overlap' in key and len(key['t2'])==2,key
         rep,prob=verify(out,nf,log=lambda *x:None);assert any(x['id']=='rev-a' for x in rep),rep
-        b=freeze(out,'v1',str(dp),str(td),log=lambda *x:None);assert b['n_t2_questions']==2 and (out/'t1t2_v1.sha256').exists()
+        e_=json.load(open(out/'e57_t1t2_t2_distractors_ext.json'))
+        for d_ in e_:d_['hard']=d_['hard']+[dict(h) for h in d_['hard']]       # every hard surface twice, as in the real lists
+        (out/'e57_t1t2_t2_distractors_ext.json').write_text(json.dumps(e_))
+        b=freeze(out,'v1',str(dp),str(td),log=lambda *x:None);assert b['n_t2_questions']==2 and all(len(v['hard_nominated'])==len({B.norm(h['surface']) for h in v['hard_nominated']}) for v in b['t2_candidates'].values()) and (out/'t1t2_v1.sha256').exists()
         try:freeze(out,'v1',str(dp),str(td),log=lambda *x:None);assert False
         except SystemExit as e:assert e.code==8
     finally:
