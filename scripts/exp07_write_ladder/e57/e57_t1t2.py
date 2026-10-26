@@ -271,7 +271,10 @@ def freeze(out,version,draft_path,bankdir,log=print):
             if q is None:prob.append(f"{it['id']}: source {it['source']} not in bank_v1");continue
             t1[it['source']]={k:q[k] for k in('id','event','S','type','canonical','variants','fixed_surface','easy','hard_all','hard_nominated','stratum')}
     for qid,d in D.items():
-        nm=[x for x in d['hard'] if B.norm(x['surface']) in {B.norm(s) for s in N.get(qid,{}).get('nominated',[])}]
+        want={B.norm(s) for s in N.get(qid,{}).get('nominated',[])};nm=[];seen_=set()
+        for x in d['hard']:                                                       # one entry per nominated surface (the hard list can hold the same surface from two sources, as bank freeze does)
+            k_=B.norm(x['surface'])
+            if k_ in want and k_ not in seen_:nm.append(x);seen_.add(k_)
         if len(nm)>MAXN or not nm:prob.append(f'{qid}: {len(nm)} nominated hard candidates (0 or > {MAXN})')
         t2[qid]=dict(id=qid,event=d['event'],gold=G[qid]['gold'],gold_class=d['gold_class'],type=d['type'],variants=G[qid]['variants'],fixed_surface=G[qid]['fixed_surface'],c_prime_stream_articles=G[qid]['c_prime_stream_articles'],easy=d['easy'],hard_all=d['hard'],hard_nominated=nm)
     if prob:print('freeze refused:',prob);sys.exit(7)
@@ -322,9 +325,13 @@ def _selftest_e2e():
         dp=td/'draft.json';dp.write_text(json.dumps(dict(version='t',items=items)));nf=td/'nom.json'
         nf.write_text(json.dumps({'nominations':{'rev-a':{'hard':['Tom Hill'],'easy_extra':[]},'rev-b':{'hard':[],'hard_proposed_need_stream_check':['Kim Park']}},'easy_extra_proposed':{'persons (rev-a and rev-b)':['Kim Park','Nobody Atall']}}))
         out=td/'o';(out/'e57_bank').mkdir(parents=True)
-        key=check(str(dp),str(td),out,log=lambda *x:None,nomfile=str(nf));assert 'pass_k3_zero_overlap' in key and len(key['t2'])==2,key
+        key=check(str(dp),str(td),out,log=lambda *x:None,nomfile=str(nf))
+        dd=json.load(open(out/'e57_t1t2_t2_distractors.json'));assert 'pass_k3_zero_overlap' in key and len(key['t2'])==2,key
         rep,prob=verify(out,nf,log=lambda *x:None);assert any(x['id']=='rev-a' for x in rep),rep
-        b=freeze(out,'v1',str(dp),str(td),log=lambda *x:None);assert b['n_t2_questions']==2 and (out/'t1t2_v1.sha256').exists()
+        e_=json.load(open(out/'e57_t1t2_t2_distractors_ext.json'))
+        for d_ in e_:d_['hard']=d_['hard']+[dict(h) for h in d_['hard']]       # every hard surface twice, as in the real lists
+        (out/'e57_t1t2_t2_distractors_ext.json').write_text(json.dumps(e_))
+        b=freeze(out,'v1',str(dp),str(td),log=lambda *x:None);assert b['n_t2_questions']==2 and all(len(v['hard_nominated'])==len({B.norm(h['surface']) for h in v['hard_nominated']}) for v in b['t2_candidates'].values()) and (out/'t1t2_v1.sha256').exists()
         try:freeze(out,'v1',str(dp),str(td),log=lambda *x:None);assert False
         except SystemExit as e:assert e.code==8
     finally:
