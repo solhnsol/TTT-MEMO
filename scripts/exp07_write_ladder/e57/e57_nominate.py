@@ -23,7 +23,7 @@ def check_extra(q,s,E,pk):
     return dict(extra=s,accepted=True,reason='occurs in the stream'+(' (weak: c_prime < %d)'%WEAK if len(arts)<WEAK else ''),c_prime=len(arts),c_prime_win=len(win),support=B.support_for(E,ex_w+ex_n,pk))
 def run(out,nomfile,log=print):
     out=pathlib.Path(out);fd=out/'e57_bank';st,idx=B.load(out);Q={json.loads(l)['id']:json.loads(l) for l in open(fd/'validated.jsonl') if l.strip()};D={d['id']:d for d in json.load(open(fd/'distractors.json'))}
-    N=json.load(open(nomfile))['nominations'];rep=[];lines=[];prob=[]
+    N=json.load(open(nomfile))['nominations'];rep=[];lines=[];prob=[];sup=[]
     for n in N:
         qid=n['id']
         if qid not in Q:prob.append(f'{qid}: not a validated question');continue
@@ -38,7 +38,7 @@ def run(out,nomfile,log=print):
         nominated=(picks+[r['extra'] for r in acc])
         if len(nominated)>MAXN:prob.append(f'{qid}: {len(nominated)} nominated (> {MAXN}): the news thread must reduce (freeze refuses more than {MAXN})')
         lines.append(dict(id=qid,nominated=nominated,evidence=[]))
-        rep.append(dict(id=qid,event=q['event'],type=q['type'],list_picks=picks,extras=[{k:v for k,v in r.items() if k!='support'} for r in res],n_nominated=len(nominated)))
+        rep.append(dict(id=qid,event=q['event'],type=q['type'],list_picks=picks,extras=[{k:v for k,v in r.items() if k!='support'} for r in res],n_nominated=len(nominated)));sup.extend((qid,r['extra'],r['c_prime'],r['support']) for r in res if re.fullmatch(r'\d{1,4}',r['extra'].strip()))
     (fd/'distractors_ext.json').write_text(json.dumps([D[i] for i in D],indent=1,ensure_ascii=False))
     (fd/'nominations_freeze.jsonl').write_text('\n'.join(json.dumps(x,ensure_ascii=False) for x in lines)+'\n');(fd/'extras_check.json').write_text(json.dumps(dict(problems=prob,questions=rep),indent=1,ensure_ascii=False))
     ne=sum(len(r['extras']) for r in rep);na=sum(1 for r in rep for e in r['extras'] if e['accepted']);log(f'extras: {ne} checked, {na} accepted, {ne-na} rejected; problems: {prob or "none"}')
@@ -46,6 +46,10 @@ def run(out,nomfile,log=print):
     for r in rep:
         for e in r['extras']:L.append(f"| {r['id']} | {r['type']} | {e['extra']} | {'yes' if e['accepted'] else 'NO'} | {e['c_prime']} | {e['c_prime_win']} | {e['reason']} |")
     L+=['','Questions with fewer than 2 nominated distractors after the check: '+(', '.join(f"{r['id']} ({r['n_nominated']})" for r in rep if r['n_nominated']<2) or 'none')]
+    if sup:
+        L+=['','## Supporting sentences of the small-number extras (private research material; the news thread judges whether the number is used in the same sense as the gold answer)','']
+        for qid,ex,cp,ss in sup:
+            L+=[f'### {qid}: extra {ex} (c_prime {cp})','']+[f"- {x['packet_ref'] or 'article '+x['rid'][-12:]} s{x['sentence_index']}: {x['text']}" for x in ss]+['']
     (fd/'extras_check.md').write_text('\n'.join(L)+'\n');return rep,prob
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--out',default='e57_news');ap.add_argument('--nominations');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
