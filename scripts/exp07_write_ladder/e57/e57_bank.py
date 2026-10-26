@@ -8,13 +8,13 @@ Type rules (E57 21 / 22.9 item 5; NO dictionary is used for answer judgment): PL
 import argparse,json,sys,re,hashlib,random,pickle,pathlib,collections,datetime
 HERE=pathlib.Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import e57_common as C
-SEED=57251;NPACK=12;C_MIN=10;CSA_MIN=0.5;COMP_MAX=0.5;WIN=64;EASY_MIN=8;NHARD=8;TYPES=('PLACE','DATE','PERSON','NUMBER')
+SEED=57251;NPACK=12;C_MIN=10;CSA_MIN=0.5;COMP_MAX=0.5;WIN=64;EASY_MIN=15;NHARD=8;TYPES=('PLACE','DATE','PERSON','NUMBER')
 PLACE_CTX=re.compile(r"(?:\b(?:in|at|near|from|across|outside|inside|around|to|into)\s)$",re.I)
 PERSON_BEFORE=re.compile(r"(?:\b(?:Mr|Mrs|Ms|Dr|President|Minister|Mayor|Governor|Senator|Coach|Judge|Chairman|Actor|Actress|Director|Prime Minister|Chief|Captain)\.?\s)$")
 PERSON_AFTER=re.compile(r"^\s*(?:,\s*[^,]{0,60},)?\s*(?:said|says|told|added|stated|announced|confirmed|has|was|is|will|had)\b")
 PLACE_WORDS={'city','county','jail','airport','park','palace','fort','hotel','stadium','island','valley','beach','river','lake'}
 PLACE_SUF=('pur','abad','nagar','garh','ganj','ville','burg','burgh','shire','stan','polis','grad')
-ORG_WORDS={'bank','ministry','court','university','party','council','association','company','corp','inc','ltd','department','committee','commission','group','police','government','agency','league','club','news','times','post'}
+ORG_WORDS={'bank','ministry','court','university','party','council','association','company','corp','inc','ltd','department','committee','commission','group','police','government','agency','league','club','news','times','post','hall','justice','administration','prize','prizes','award','awards','hotels','authority','board','service','services','house','office','bureau','forces','army','navy','institute','foundation','federation','union','corporation','festival','cup','trophy','series','tournament','conference','summit','treaty','fund','trust','network','studios','pictures','productions','entertainment','airlines','airways','airspace','commissioner','secretary','channel','security','research','educational','homeland','president','minister','home','national','international','states','nations','chief'}      # extended 2026-10-26: titles / organisations / prizes typed as PERSON were competitors (city hall, chief justice, federal aviation administration, nobel peace prize, itc hotels)
 CAPSEQ=re.compile(r"\b[A-Z][A-Za-z'’\-]{2,}(?:\s+[A-Z][A-Za-z'’\-]{2,}){0,3}\b")
 RELTIME=re.compile(r"^(?:yesterday|today|tomorrow|tonight|last\s+\w+|next\s+\w+|this\s+\w+|(?:mon|tues|wednes|thurs|fri|satur|sun)day)$",re.I)
 STOP={'the','and','for','from','with','said','news','city','state','court','police','government','minister','president','bank','new','group','company','national','international','university','united'}
@@ -38,7 +38,7 @@ def type_strings(sent):
         if any(a<y and b>x for x,y in spans):continue
         low=[x.lower() for x in w];pre=sent[max(0,a-16):a];post=sent[b:b+80]
         place=bool(PLACE_CTX.search(sent[max(0,a-12):a])) or low[-1] in PLACE_WORDS or low[-1].endswith(PLACE_SUF)
-        person=bool(PERSON_BEFORE.search(pre) or PERSON_AFTER.search(post)) or (2<=len(w)<=3 and not place and not set(low)&ORG_WORDS)
+        person=(bool(PERSON_BEFORE.search(pre) or PERSON_AFTER.search(post)) or (2<=len(w)<=3 and not place)) and not set(low)&ORG_WORDS       # organisation / title words veto the person type even before 'said' (fix 2026-10-26)
         ty='PLACE' if place and not PERSON_BEFORE.search(pre) else 'PERSON' if person else 'OTHER'
         out.append((ty,norm(t),t,a,b))
     return out
@@ -50,7 +50,11 @@ def ans_matcher(q):
             for f in C.facts_in_sentence(' '+s+' '):
                 if f[0]==('DATE' if ty=='DATE' else 'NUM'):keys.add(f[1])
     vs=[v for v in [q['canonical']]+list(q.get('variants',[])) if v]
-    rx=re.compile('|'.join(r'(?<![\w])'+re.escape(v)+r'(?![\w])' for v in vs),re.I) if vs else None
+    def _pat(v):
+        if ty=='NUMBER' and re.fullmatch(r'\d{1,4}',v.strip()):                           # bare integer (34, 112, 2025): key = its value; not inside 4.5 / 34% / $34 million / 34,000 (fix 2026-10-26)
+            keys.add('%g'%float(v.strip()));return r'(?<![\w$.,])'+re.escape(v.strip())+r'(?![\w%]|[.,]\d|\s?(?:million|billion|trillion|thousand|percent|per cent)\b)'
+        return r'(?<![\w])'+re.escape(v)+r'(?![\w])'
+    rx=re.compile('|'.join(_pat(v) for v in vs),re.I) if vs else None
     def holds(sent):
         if rx and rx.search(sent):return True
         if keys:return any(f[0]==('DATE' if ty=='DATE' else 'NUM') and f[1] in keys for f in C.facts_in_sentence(sent))
@@ -88,7 +92,7 @@ def lead_stream(E):
 def near_idx(cum,i0,n):
     lo=cum[i0]-WIN;hi=cum[i0+1]+WIN;return [j for j in range(n) if cum[j+1]>lo and cum[j]<hi]
 def question_stats(q,E):
-    holds,keys=ans_matcher(q);cs=core(q['S']);selfw=cs|core(q.get('event',''));arts=[];near=[];sent_only=[];comp=collections.defaultdict(set);cwin=set();vs=[q['canonical']]+list(q.get('variants',[]))
+    holds,keys=ans_matcher(q);cs=core(q['S']);selfw=cs|core(q.get('event',''));selftxt=' '+norm(q.get('frame','').replace('{S}',' ')+' '+q['S'])+' ';arts=[];near=[];sent_only=[];comp=collections.defaultdict(set);cwin=set();vs=[q['canonical']]+list(q.get('variants',[]))
     for ai,sents,cum in lead_stream(E):
         n=len(sents);ia=[i for i,t in enumerate(sents) if holds(t)]
         if ia:
@@ -103,7 +107,7 @@ def question_stats(q,E):
             for ty,key,sf,a,b in type_strings(sents[j]):
                 if ty!=q['type']:continue
                 if any(related(sf,v) for v in vs) or (q['type'] in('DATE','NUMBER') and key in keys):continue
-                if q['type'] in('PLACE','PERSON') and core(sf)&selfw:continue          # a string made of S / event-name words is the topic itself, not a competitor (fix 2026-10-26)
+                if q['type'] in('PLACE','PERSON') and (core(sf)&selfw or ' '+norm(sf)+' ' in selftxt or (norm(q['S']) and norm(q['S']) in norm(sf))):continue          # a string made of S / event-name words is the topic itself, not a competitor (fix 2026-10-26)
                 comp[key if q['type'] in('DATE','NUMBER') else norm(sf)].add(ai)
     top=sorted(((k,v&cwin) for k,v in comp.items()),key=lambda kv:(-len(kv[1]),kv[0]))[:3]      # numerator and denominator on the same population: window articles that hold the answer (fix 2026-10-26)
     return dict(c=len(arts),c_SA=len(near)/max(1,len(arts)),c_SA_sentence=len(sent_only)/max(1,len(arts)),c_window=len(cwin),comp_top=[(k,len(v)) for k,v in top],comp_max=len(top[0][1]) if top else 0,answer_rids=[E['rids'][ai] for ai in arts])
@@ -129,11 +133,11 @@ def check_question(q,E,P):
     fw=C.ngr(C.words(q['frame'].replace('{S}','')),5);ng=set()
     for ai,sents,cum in lead_stream(E):
         for t in sents:ng|=C.ngr(C.words(t),5)
-    if fw&ng:why.append('frame 5-gram overlap with the lead sentences')
+    if fw&ng:why.append('frame 5-gram overlap with the lead sentences: '+' | '.join(' '.join(g) for g in sorted(fw&ng)[:3]))
     stt=question_stats(q,E)
     if stt['c']<C_MIN:why.append(f"c = {stt['c']} < {C_MIN}")
     if stt['c_SA']<CSA_MIN:why.append(f"c_SA = {stt['c_SA']:.2f} < {CSA_MIN}")
-    if stt['comp_max']>COMP_MAX*max(1,stt['c_window']):why.append(f"same-type competitor {stt['comp_top'][0] if stt['comp_top'] else ''} in {stt['comp_max']} of {stt['c_window']} window articles (> {COMP_MAX})")
+    if q.get('stratum')!='hard_confusable' and stt['comp_max']>COMP_MAX*max(1,stt['c_window']):why.append(f"same-type competitor {stt['comp_top'][0] if stt['comp_top'] else ''} in {stt['comp_max']} of {stt['c_window']} window articles (> {COMP_MAX})")
     return why,stt
 def validate(out,bankfile,log=print):
     st,idx=load(out);pd=pathlib.Path(out)/'e57_bank'/'packets';Q=[json.loads(l) for l in open(bankfile) if l.strip()];res=[];ok=[]
@@ -149,21 +153,47 @@ def validate(out,bankfile,log=print):
         if r['id'] in coll:r['reasons'].append('same answer is the answer of another event (same type)')
     ok=[q for q in ok if q['id'] not in coll];fd=pathlib.Path(out)/'e57_bank';fd.mkdir(exist_ok=True)
     (fd/'validated.jsonl').write_text('\n'.join(json.dumps(q,ensure_ascii=False) for q in ok)+('\n' if ok else ''));(fd/'validation.json').write_text(json.dumps(dict(thresholds=dict(c_min=C_MIN,c_sa_min=CSA_MIN,comp_max=COMP_MAX,win=WIN),results=res),indent=1,default=str))
-    L=['# E57 question validation (counts and values only)','',f'{len(Q)} questions, {len(ok)} survive. Thresholds fixed before any result: c >= {C_MIN} lead articles, c_SA >= {CSA_MIN}, same-type competitor <= {COMP_MAX} of the window articles holding the answer.','','| id | event | type | c | c_SA (sentence only) | window articles | top competitor | verdict |','|---|---|---|---|---|---|---|---|']
+    L=['# E57 question validation (counts and values only)','','**Validator version note: this validator was changed AFTER seeing the results of jobs 230 and 243 (fixes: S / event-name / frame strings and titles / organisations are not competitors, competitor and denominator on the same window-article population, bare-integer answers readable, overlapping 5-grams printed). Thresholds are unchanged.**','',f'{len(Q)} questions, {len(ok)} survive. Thresholds fixed before any result: c >= {C_MIN} lead articles, c_SA >= {CSA_MIN}, same-type competitor <= {COMP_MAX} of the window articles holding the answer.','','| id | event | type | c | c_SA (sentence only) | window articles | top competitor | verdict |','|---|---|---|---|---|---|---|---|']
     for r in res:
         s=r['stats'];L.append(f"| {r['id']} | {r['event']} | {r['type']} | {s['c'] if s else ''} | {('%.2f (%.2f)'%(s['c_SA'],s['c_SA_sentence'])) if s else ''} | {s['c_window'] if s else ''} | {s['comp_top'][0] if s and s['comp_top'] else ''} | {'ok' if not r['reasons'] else '; '.join(r['reasons'])} |")
     ev=collections.Counter(r['event'] for r in res if not r['reasons']);L+=['','survivors per event: '+', '.join(f'{k}: {v}' for k,v in ev.items())]
+    strat={q.get('id'):q.get('stratum','main') for q in Q};sv=collections.Counter(strat[r['id']] for r in res if not r['reasons']);tot=collections.Counter(strat[r['id']] for r in res);L+=['','survivors per stratum (hard_confusable = cast / character confusion kept as hard items: ONLY the same-type competitor rule is not applied there; its top competitor is shown in the table): '+', '.join(f'{k}: {sv.get(k,0)} of {n}' for k,n in tot.items())]
     (fd/'validation_report.md').write_text('\n'.join(L)+'\n');log('\n'.join(L)[:4000]);return ok,res
 # ---------- D distract ----------
 def easy_form(q):
     if q['type']=='DATE':
         k=sorted(ans_matcher(q)[1])[0];mo,d=k.split('-');import calendar;return f"{calendar.month_name[int(mo)]} {int(d)}"
     return q['canonical']
+def packet_refs(out,event):
+    """-> {(article rid, sentence text): 'a##-s###'} of the packet of the event (the sentence ids the question writers see); {} if there is no packet"""
+    pf=pathlib.Path(out)/'e57_bank'/'packets'/(slug(event)+'.packet.json')
+    if not pf.exists():return {}
+    P=json.load(open(pf));return {(a['rid'],s['text']):a['a']+'-'+s['s'] for a in P['articles'] for s in a['sentences']}
+def support_for(E,ex,pk,n=3):
+    """up to n supporting lead sentences of a hard candidate (window sentences first): article id, sentence index, text (<= 240 chars), packet_ref a##-s### when the sentence is in the packet; private research material, same note as the packets"""
+    out=[]
+    for ai,j,t in ex[:n]:rid=E['rids'][ai];out.append(dict(rid=rid,sentence_index=j,text=t[:240],packet_ref=pk.get((rid,t))))
+    return out
 def distract(out,validated,log=print):
     st,idx=load(out);Q=[json.loads(l) for l in open(validated) if l.strip()];res=[];bytype=collections.defaultdict(list)
+    occ=collections.defaultdict(lambda:collections.defaultdict(lambda:collections.defaultdict(set)));gsurf={}      # event -> type -> key -> articles; (type, key) -> first surface (whole stream, all events)
+    for nm_,E_ in st.items():
+        for ai_,sents_,cum_ in lead_stream(E_):
+            for t_ in sents_:
+                for ty_,key_,sf_,a_,b_ in type_strings(t_):
+                    if ty_ in TYPES:
+                        k_=key_ if ty_ in('DATE','NUMBER') else norm(sf_);occ[nm_][ty_][k_].add(ai_);gsurf.setdefault((ty_,k_),sf_)
+    gcount=collections.defaultdict(collections.Counter)
+    for nm_ in occ:
+        for ty_ in occ[nm_]:
+            for k_,v_ in occ[nm_][ty_].items():gcount[ty_][k_]+=len(v_)
+    def surf_of(ty_,k_):
+        if ty_=='DATE':
+            import calendar;mo_,d_=k_.split('-');return f"{calendar.month_name[int(mo_)]} {int(d_)}"
+        return gsurf[(ty_,k_)]
     for q in Q:bytype[q['type']].append(q)
     for q in Q:
-        E=st[q['event']];holds,keys=ans_matcher(q);cs=core(q['S']);vs=[q['canonical']]+list(q['variants']);lead=collections.defaultdict(set);win=collections.defaultdict(set);surf={}
+        E=st[q['event']];holds,keys=ans_matcher(q);cs=core(q['S']);vs=[q['canonical']]+list(q['variants']);lead=collections.defaultdict(set);win=collections.defaultdict(set);surf={};exw=collections.defaultdict(list);exn=collections.defaultdict(list)
         for ai,sents,cum in lead_stream(E):
             n=len(sents);ww=[words_of(t) for t in sents];sw={j for i in range(n) if cs&ww[i] for j in near_idx(cum,i,n)}
             for j,t in enumerate(sents):
@@ -173,20 +203,33 @@ def distract(out,validated,log=print):
                     if any(related(sf,v) for v in vs) or (q['type'] in('DATE','NUMBER') and key in keys):continue
                     lead[k].add(ai);surf.setdefault(k,sf)
                     if j in sw:win[k].add(ai)
-        hard=[dict(surface=surf[k],key=k,c_prime=len(v),c_prime_win=len(win.get(k,())),source='frequent in the event lead') for k,v in sorted(lead.items(),key=lambda kv:(-len(kv[1]),kv[0]))[:NHARD]]
+                    (exw if j in sw else exn)[k].append((ai,j,t))
+        pk=packet_refs(out,q['event']);hard=[dict(surface=surf[k],key=k,c_prime=len(v),c_prime_win=len(win.get(k,())),source='frequent in the event lead',support=support_for(E,(exw[k]+exn[k]),pk)) for k,v in sorted(lead.items(),key=lambda kv:(-len(kv[1]),kv[0]))[:NHARD]]
         have={h['key'] for h in hard}
         for o in bytype[q['type']]:
             if o['event']==q['event'] and o['id']!=q['id'] and not related(o['canonical'],q['canonical']):
                 k=norm(o['canonical']) if q['type'] in('PLACE','PERSON') else easy_form(o)
-                hard.append(dict(surface=easy_form(o),key=k,c_prime=None,c_prime_win=None,source=f"answer of question {o['id']} of the same event"))
+                hard.append(dict(surface=easy_form(o),key=k,c_prime=None,c_prime_win=None,source=f"answer of question {o['id']} of the same event",support=[dict(packet_ref=e) for e in o.get('evidence',[])]))
         easy=[]
         for o in bytype[q['type']]:
             if o['event']!=q['event'] and not related(o['canonical'],q['canonical']):
                 f=easy_form(o);cnt=sum(1 for ai,sents,cum in lead_stream(E) if any(related(f,sf) for t in sents for ty,key,sf,a,b in type_strings(t) if ty==q['type']))
                 easy.append(dict(surface=f,from_event=o['event'],c_prime=cnt))
-        res.append(dict(id=q['id'],event=q['event'],type=q['type'],easy=easy,hard=hard,rank_analysis=len(easy)>=EASY_MIN))
+        # easy candidates up to >= EASY_MIN (cap EASY_MIN + 5) from the WHOLE stream: most frequent same-type strings (articles over all events); not the gold / an alias, not a string of the frame or S, not the same entity as another question's gold in this event (those are hard candidates)
+        selftxt_=' '+norm(q['frame'].replace('{S}',' ')+' '+q['S'])+' ';others_=[o for o in Q if o['event']==q['event'] and o['id']!=q['id']];have_=[norm(e['surface']) for e in easy]
+        for k_,n_ in sorted(gcount[q['type']].items(),key=lambda kv:(-kv[1],kv[0])):
+            if len(easy)>=EASY_MIN+5:break
+            sf_=surf_of(q['type'],k_)
+            if norm(sf_) in have_:continue
+            if norm(sf_) in {norm(h['surface']) for h in hard}:continue                         # hard candidates of this question are not easy ones
+            if any(related(sf_,v) for v in vs) or (q['type'] in('DATE','NUMBER') and k_ in keys):continue
+            if ' '+norm(sf_)+' ' in selftxt_ or (norm(q['S']) and norm(q['S']) in norm(sf_)):continue
+            if any(related(sf_,o['canonical']) or (q['type'] in('DATE','NUMBER') and k_ in ans_matcher(o)[1]) for o in others_):continue
+            if q['type'] in('PLACE','PERSON') and core(sf_)&(cs|core(q['event'])):continue
+            easy.append(dict(surface=sf_,from_event=None,c_prime=len(occ[q['event']][q['type']].get(k_,())),source='frequent same-type string in the whole stream'));have_.append(norm(sf_))
+        res.append(dict(id=q['id'],event=q['event'],type=q['type'],easy=easy,n_easy=len(easy),hard=hard,rank_analysis=len(easy)>=EASY_MIN))
     fd=pathlib.Path(out)/'e57_bank';(fd/'distractors.json').write_text(json.dumps(res,indent=1,ensure_ascii=False))
-    nt=collections.Counter(q['type'] for q in Q);log('distractors:',len(res),'questions;',{t:sum(1 for r in res if r['type']==t and r['rank_analysis']) for t in nt},'with >= 8 easy candidates');return res
+    nt=collections.Counter(q['type'] for q in Q);log('distractors:',len(res),'questions;',{t:sum(1 for r in res if r['type']==t and r['rank_analysis']) for t in nt},f'with >= {EASY_MIN} easy candidates; easy candidates per question: min',min((r['n_easy'] for r in res),default=0),'max',max((r['n_easy'] for r in res),default=0));return res
 # ---------- F freeze ----------
 def freeze(out,validated,distractors,nominations,version,log=print):
     fd=pathlib.Path(out)/'e57_bank';bf=fd/f'bank_{version}.json'
@@ -212,9 +255,9 @@ def freeze(out,validated,distractors,nominations,version,log=print):
                 for v in vs:
                     if re.search(r'(?<![\w])'+re.escape(v)+r'(?![\w])',t,re.I):cnt[v]+=1
         fixed=cnt.most_common(1)[0][0] if cnt else q['canonical']
-        items.append(dict(q,fixed_surface=fixed,easy=d['easy'],rank_analysis=d['rank_analysis'],hard_all=hard,hard_nominated=nom,nomination=nm))
+        items.append(dict(q,stratum=q.get('stratum','main'),fixed_surface=fixed,easy=d['easy'],rank_analysis=d['rank_analysis'],hard_all=hard,hard_nominated=nom,nomination=nm))
     if prob:print('freeze refused:',prob);sys.exit(7)
-    tz=datetime.timezone(datetime.timedelta(hours=9));body=dict(version=version,frozen_at=datetime.datetime.now(tz).isoformat(timespec='seconds'),n_questions=len(items),questions=items,authors=sorted({q['author'] for q in items}),packet_hashes={q['event']:q['packet_hash'] for q in items})
+    tz=datetime.timezone(datetime.timedelta(hours=9));body=dict(version=version,frozen_at=datetime.datetime.now(tz).isoformat(timespec='seconds'),n_questions=len(items),event_counts=dict(collections.Counter(i['event'] for i in items)),type_counts=dict(collections.Counter(i['type'] for i in items)),stratum_counts=dict(collections.Counter(i['stratum'] for i in items)),questions=items,authors=sorted({q['author'] for q in items}),packet_hashes={q['event']:q['packet_hash'] for q in items})
     h=jhash(body);body['sha256']=h;bf.write_text(json.dumps(body,indent=1,ensure_ascii=False));(fd/f'bank_{version}.sha256').write_text(h+'\n');log(f'bank {version}: {len(items)} questions, sha256 {h[:16]}');return body
 def _selftest():
     import tempfile,e57_bundle as B,e57_namedevents3 as N3
@@ -247,6 +290,8 @@ def _selftest():
             except SystemExit as e:assert e.code==8
         # type rules without a dictionary
         ts={(t,s) for t,k,s,a,b in type_strings('He lives in Springfield. Dr Ivan Petrov said so at Central Park and in Rajpur.')};assert ('PLACE','Springfield') in ts and ('PERSON','Ivan Petrov') in ts and ('PLACE','Rajpur') in ts and ('PLACE','Central Park') in ts,ts
+        h_,k_=ans_matcher(dict(type='NUMBER',canonical='34',variants=['34','thirty-four'],S='x'));assert k_=={'34'} and h_('He is 34 years old.') and not h_('It cost $34 million.') and not h_('34% rose') and not h_('4.5 and 3.4'),'bare integer answer'
+        ts_={(t_,s_) for t_,k2_,s_,a_,b_ in type_strings('He met at City Hall. The Chief Justice said so. ITC Hotels announced it. Dr Ivan Petrov said so.')};assert ('PERSON','Ivan Petrov') in ts_ and not any(t_=='PERSON' and s_ in('Chief Justice','ITC Hotels','City Hall') for t_,s_ in ts_),ts_
         print('e57_bank selftest ok:',nm,'t1 survived' if 't1' in okids else 't1 rejected (reasons above)')
     N3._selftest(after)
 def main():
