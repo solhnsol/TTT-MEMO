@@ -140,6 +140,9 @@ def person_easy(pool,q,hard,golds,n=EASY_N):
         if any(B.related(sf,v) for v in vs) or any(B.related(sf,g['gold']) for g in golds if g['gold_class']!='PERSON') or any(B.related(sf,x) for x in nonp):continue
         out.append(dict(surface=sf,from_event=None,source='frequent person string in the whole stream (title / said-was context in >= 2 articles, one entry per last name)',c_prime=len(c['arts'])));used.add(k)
     return out
+def event_count(st,event,sf):
+    rx=re.compile(r'(?<![\w])'+re.escape(sf)+r'(?![\w])',re.I);E=st.get(event)
+    return 0 if E is None else sum(1 for ai,sents,cum in B.lead_stream(E) if any(rx.search(t) for t in sents))
 def other_easy(st,q,golds,hard,n=EASY_N):
     """TITLE / TEAM golds: the extractor has no type for them, so the auto list is NOT used. easy = the other T2 gold of the same class, then the hand-written pool e57_t1t2_easy_pools.json of the class (kept only if it occurs in the stream, is not an alias / container of the gold and not a same-event hard candidate); easy_extra of the nominations is added by verify"""
     pools=json.load(open(HERE/'e57_t1t2_easy_pools.json'));out=[];hn={B.norm(h['surface']) for h in hard};vs=q['variants']
@@ -147,7 +150,7 @@ def other_easy(st,q,golds,hard,n=EASY_N):
         if g['id']!=q['id'] and g['gold_class']==q['gold_class'] and not any(B.related(g['gold'],v) for v in vs):out.append(dict(surface=g['gold'],from_event=g['event'],source='gold of another T2 item (same class)'))
     for sf in pools.get(q['gold_class'],[]):
         if len(out)>=n:break
-        if B.norm(sf) in hn or any(B.related(sf,v) for v in vs) or any(B.related(sf,e['surface']) for e in out) or stream_count(st,sf)==0:continue
+        if B.norm(sf) in hn or any(B.related(sf,v) for v in vs) or any(B.related(sf,e['surface']) for e in out) or stream_count(st,sf)==0 or (q['gold_class']=='TITLE' and event_count(st,q['event'],sf)>0):continue      # a title of the item's own event is a hard candidate, not an easy one
         out.append(dict(surface=sf,from_event=None,source='hand-written pool '+q['gold_class']+' (e57_t1t2_easy_pools.json), present in the stream'))
     return out
 def stream_count(st,surface):
