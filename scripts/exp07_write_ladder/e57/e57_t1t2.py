@@ -105,6 +105,43 @@ def t2_questions(draft):
 def make_q(r):
     cls=T2_CLASS[r['gold']];var=[r['gold']]+T2_ALIAS.get(r['gold'],[])
     return dict(id=r['id'],event=r['event'],S=r['event'],type='PERSON' if cls=='PERSON' else 'OTHER',gold_class=cls,frame='{S}',canonical=r['gold'],variants=var,evidence=[],direction='A->S',author='claude-news-thread',status='draft')
+
+NONPERSON={'new','york','delhi','city','special','anniversary','day','trophy','republic','street','square','house','states','state','kingdom','india','china','america','american','indian','venezuelan','premiere','season','episode','series','film','movie','official','officials','sports','channel','prize','peace','days','world','times','news','capital','district'}
+LEAD_TITLES={'mayor','president','actor','actors','actress','actresses','dr','mr','mrs','ms','coach','minister','democratic','socialist','senator','governor','judge','chairman','director','captain','chief','prime','star','boxer','singer','pop','former','new','secretary','sen','rep','gov','justice','attorney','general','mayor-elect','mayoral','candidate','legend','veteran','skipper','duo','couple'}
+def person_pool(st):
+    """-> {cluster key (last token): dict(surfaces Counter, arts set, ctx_arts set)} for PERSON-typed strings of >= 2 words (possessive stripped) of the whole stream; ctx = the mention follows a title or precedes said / told / was ... (E57 bank person rule)"""
+    pool=collections.defaultdict(lambda:dict(surf=collections.Counter(),arts=set(),ctx=set()))
+    for nm,E in st.items():
+        for ai,sents,cum in B.lead_stream(E):
+            for t in sents:
+                for ty,key,sf,a,b in B.type_strings(t):
+                    if ty!='PERSON':continue
+                    sf=re.sub(r"['’]s$","",sf).strip();w=sf.split()
+                    while len(w)>2 and w[0].lower() in LEAD_TITLES:w=w[1:]
+                    if len(w)==2 and w[0].lower() in LEAD_TITLES:continue
+                    sf=' '.join(w)
+                    if len(w)<2 or {x.lower() for x in w}&NONPERSON:continue
+                    c=pool[w[-1].lower()];c['surf'][sf]+=1;c['arts'].add((nm,ai))
+                    if B.PERSON_BEFORE.search(t[max(0,a-16):a]) or B.PERSON_AFTER.search(t[b:b+80]):c['ctx'].add((nm,ai))
+    return pool
+def person_easy(pool,q,hard,golds,n=EASY_N):
+    """easy list of a PERSON gold (decision C): other T2 PERSON golds first, then frequent multi-word person strings of the whole stream; one entry per person (cluster by last name); not an alias / container of this gold or of a hard candidate; the mention must follow a title or precede said / told / was ... in >= 2 articles"""
+    out=[];used=set();vs=q['variants']
+    bad={w.lower() for v in vs for w in re.findall(r"[A-Za-z]+",v)[-1:]}|{B.norm(h['surface']).split()[-1] for h in hard if B.norm(h['surface'])}
+    for g in golds:
+        if g['id']!=q['id'] and g['pool_type']=='PERSON' and not any(B.related(g['gold'],v) for v in vs):
+            k=g['gold'].split()[-1].lower()
+            if k not in used:out.append(dict(surface=g['gold'],from_event=g['event'],source='gold of another T2 item (person)'));used.add(k)
+    for k,c in sorted(pool.items(),key=lambda kv:(-len(kv[1]['arts']),kv[0])):
+        if len(out)>=n:break
+        if k in used or k in bad or len(c['ctx'])<2:continue
+        sf=c['surf'].most_common(1)[0][0]
+        if any(B.related(sf,v) for v in vs):continue
+        out.append(dict(surface=sf,from_event=None,source='frequent person string in the whole stream (title / said-was context in >= 2 articles, one entry per last name)',c_prime=len(c['arts'])));used.add(k)
+    return out
+def other_easy(q,golds):
+    """TITLE / TEAM golds: the extractor has no type for them, so the auto list is NOT used; easy = the other TITLE / TEAM T2 golds, the rest comes from the nominations (easy_extra, checked in the stream)"""
+    return [dict(surface=g['gold'],from_event=g['event'],source='gold of another T2 item (title / team)') for g in golds if g['id']!=q['id'] and g['gold_class'] in('TITLE','TEAM') and not any(B.related(g['gold'],v) for v in q['variants'])]
 def stream_count(st,surface):
     return count_variant(st,[surface])[0]
 def check(draft_path,bankdir,out,log=print):
@@ -135,17 +172,19 @@ def check(draft_path,bankdir,out,log=print):
     Q=[make_q(r) for r in t2q.values()];gold=[]
     for q in Q:
         na,per=count_variant(st,q['variants']);ev_arts=sum(1 for ai,sents,cum in B.lead_stream(st[q['event']]) if any(re.search(r'(?<![\w])'+re.escape(v)+r'(?![\w])',t,re.I) for t in sents for v in q['variants']))
-        fixed=per.most_common(1)[0][0] if per else q['canonical']
-        gold.append(dict(id=q['id'],event=q['event'],gold=q['canonical'],gold_class=q['gold_class'],pool_type=q['type'],variants=q['variants'],sentence_count_per_variant=dict(per),fixed_surface=fixed,c_prime_stream_articles=na,c_prime_event_articles=ev_arts,event_articles=len(st[q['event']]['rids']),alias_scan_top=alias_scan(st,q['canonical']),in_stream=na>0))
+        fixed=q['canonical'];most_freq=per.most_common(1)[0][0] if per else None
+        gold.append(dict(id=q['id'],event=q['event'],gold=q['canonical'],gold_class=q['gold_class'],pool_type=q['type'],variants=q['variants'],sentence_count_per_variant=dict(per),fixed_surface=fixed,most_frequent_variant=most_freq,c_prime_stream_articles=na,c_prime_event_articles=ev_arts,event_articles=len(st[q['event']]['rids']),alias_scan_top=alias_scan(st,q['canonical']),in_stream=na>0))
     (out/'e57_t1t2_t2_golds.json').write_text(json.dumps(gold,indent=1,ensure_ascii=False))
     vf=fd/'t2_validated.jsonl';vf.write_text('\n'.join(json.dumps(q,ensure_ascii=False) for q in Q)+'\n')
     # ---- (3) T2 candidates (e57_bank.distract with the pool type OTHER enabled for TITLE / TEAM golds) ----
     old=B.TYPES;B.TYPES=tuple(old)+('OTHER',)
     try:D=B.distract(out,vf,log=lambda *x:None)
     finally:B.TYPES=old
-    nstream=lambda s:stream_count(st,s)
+    nstream=lambda s:stream_count(st,s);pool=person_pool(st)
     for d in D:
-        q=next(x for x in Q if x['id']==d['id']);d['gold_class']=q['gold_class']
+        q=next(x for x in Q if x['id']==d['id']);d['gold_class']=q['gold_class'];d['easy_auto_unfiltered']=d['easy']
+        d['easy']=person_easy(pool,q,d['hard'],gold) if q['gold_class']=='PERSON' else other_easy(q,gold)
+        d.pop('easy_auto_unfiltered')
         for lst in('easy','hard'):
             for c in d[lst]:c['c_prime_stream_articles']=nstream(c['surface'])
         d['n_easy']=len(d['easy'])
@@ -153,12 +192,18 @@ def check(draft_path,bankdir,out,log=print):
     # ---- T1 candidates from bank_v1 ----
     t1=[dict(id=q['id'],event=q['event'],type=q['type'],fixed_surface=q['fixed_surface'],n_easy=len(q['easy']),n_hard_all=len({B.norm(h['surface']) for h in q['hard_all']}),n_nominated=len(q['hard_nominated'])) for q in bank['questions'] if q['id'] in {it['source'] for it in items if it['kind']=='T1'}]
     miss=sorted({it['source'] for it in items if it['kind']=='T1'}-set(BQ))
-    key=dict(created=kst(),draft_sha256=sha_file(draft_path),draft_version=draft.get('version'),bank_v1=bchk,stream_articles=narts,stream_sentences=len(S),n_items=len(items),counts=dict(collections.Counter(f"{i['kind']}-{i['form']}" for i in items)),overlap_items_with_hit={k:{a:len(b) for a,b in v.items()} for k,v in summ.items()},overlap_hit_ids={k:v['stream_items_with_overlap'] for k,v in summ.items()},t1_sources=len(t1),t1_sources_missing_in_bank=miss,t2=[dict(id=g['id'],gold=g['gold'],cls=g['gold_class'],fixed=g['fixed_surface'],c_prime_stream=g['c_prime_stream_articles'],c_prime_event=g['c_prime_event_articles'],n_easy=next(d['n_easy'] for d in D if d['id']==g['id']),n_hard=len(next(d['hard'] for d in D if d['id']==g['id']))) for g in gold])
+    p3=summ['3'];pass3=not(p3['stream_items_with_overlap'] or p3['orig_items_with_overlap'] or p3['sibling_items_with_overlap'])
+    key=dict(pass_k3_zero_overlap=pass3,created=kst(),draft_sha256=sha_file(draft_path),draft_version=draft.get('version'),bank_v1=bchk,stream_articles=narts,stream_sentences=len(S),n_items=len(items),counts=dict(collections.Counter(f"{i['kind']}-{i['form']}" for i in items)),overlap_items_with_hit={k:{a:len(b) for a,b in v.items()} for k,v in summ.items()},overlap_hit_ids={k:v['stream_items_with_overlap'] for k,v in summ.items()},t1_sources=len(t1),t1_sources_missing_in_bank=miss,t2=[dict(id=g['id'],gold=g['gold'],cls=g['gold_class'],fixed=g['fixed_surface'],c_prime_stream=g['c_prime_stream_articles'],c_prime_event=g['c_prime_event_articles'],n_easy=next(d['n_easy'] for d in D if d['id']==g['id']),n_hard=len(next(d['hard'] for d in D if d['id']==g['id']))) for g in gold])
     (out/'e57_t1t2_key_numbers.json').write_text(json.dumps(key,indent=1,ensure_ascii=False));log(json.dumps(key['t2'],ensure_ascii=False)[:1500]);return key
 # ---------- verify nominations ----------
 def verify(out,nomfile,log=print):
     out=pathlib.Path(out);fd=out/'e57_bank';st,idx=B.load(out);Q={q['id']:q for q in map(json.loads,[l for l in open(fd/'t2_validated.jsonl') if l.strip()])};D={d['id']:d for d in json.load(open(out/'e57_t1t2_t2_distractors.json'))}
-    N=json.load(open(nomfile))['nominations'];rep=[];lines=[];prob=[]
+    N=json.load(open(nomfile));EX={}
+    for k,v in N.get('easy_extra_proposed',{}).items():
+        m=re.search(r'\((rev-[\w-]+)\)',k);EX[m.group(1) if m else k]=v
+    N=N['nominations']
+    if isinstance(N,dict):N=[dict(id=k,nominated_from_list=v.get('hard',[]),proposed_extra_needs_code_check=v.get('hard_proposed_need_stream_check',[]),easy_extra=v.get('easy_extra',EX.get(k,[]))) for k,v in N.items()]
+    rep=[];lines=[];prob=[]
     for n in N:
         qid=n['id']
         if qid not in Q:prob.append(f'{qid}: not a T2 gold');continue
@@ -224,6 +269,12 @@ def _selftest():
     d=json.load(open(DEFAULT_DRAFT)) if pathlib.Path(DEFAULT_DRAFT).exists() else None
     if d:
         t2=t2_questions(d);assert len(t2)==12 and {r['gold'] for r in t2}==set(T2_CLASS),(len(t2),sorted(r['gold'] for r in t2))
+    # decision C helpers on a synthetic stream
+    st_={'Ev':dict(rids=['r1','r2','r3'],hosts=['h']*3,dates=[1,2,3],cum=[[0,10,20]]*3,kept=[2,2,2],sents=[['Mayor Jane Roe said it. New York City said nothing today.','Dr Jane Roe told us. Mayor Tom Hill said no.']]*3)}
+    pool=person_pool(st_);assert 'roe' in pool and 'york' not in pool and len(pool['roe']['ctx'])>=2,sorted(pool)
+    golds=[dict(id='a',gold='Zed Gold',gold_class='PERSON',pool_type='PERSON',event='Ev'),dict(id='b',gold='Amy Other',gold_class='PERSON',pool_type='PERSON',event='Ev2'),dict(id='c',gold='Big Title',gold_class='TITLE',pool_type='OTHER',event='Ev3')]
+    qa=dict(id='a',variants=['Zed Gold','Gold'],gold_class='PERSON');e=person_easy(pool,qa,[dict(surface='Tom Hill')],golds);sf=[x['surface'] for x in e];assert sf[0]=='Amy Other' and 'Jane Roe' in sf and 'Tom Hill' not in sf and 'Big Title' not in sf,sf
+    assert [x['surface'] for x in other_easy(dict(id='c',variants=['Big Title']),golds+[dict(id='d',gold='Some Team',gold_class='TEAM',pool_type='OTHER',event='Ev4')])]==['Some Team']
     print('e57_t1t2 selftest ok')
 DEFAULT_DRAFT='data/news-lite/t1t2_draft_v1.json'
 def main():
