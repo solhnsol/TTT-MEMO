@@ -164,11 +164,21 @@ def easy_form(q):
     if q['type']=='DATE':
         k=sorted(ans_matcher(q)[1])[0];mo,d=k.split('-');import calendar;return f"{calendar.month_name[int(mo)]} {int(d)}"
     return q['canonical']
+def packet_refs(out,event):
+    """-> {(article rid, sentence text): 'a##-s###'} of the packet of the event (the sentence ids the question writers see); {} if there is no packet"""
+    pf=pathlib.Path(out)/'e57_bank'/'packets'/(slug(event)+'.packet.json')
+    if not pf.exists():return {}
+    P=json.load(open(pf));return {(a['rid'],s['text']):a['a']+'-'+s['s'] for a in P['articles'] for s in a['sentences']}
+def support_for(E,ex,pk,n=3):
+    """up to n supporting lead sentences of a hard candidate (window sentences first): article id, sentence index, text (<= 240 chars), packet_ref a##-s### when the sentence is in the packet; private research material, same note as the packets"""
+    out=[]
+    for ai,j,t in ex[:n]:rid=E['rids'][ai];out.append(dict(rid=rid,sentence_index=j,text=t[:240],packet_ref=pk.get((rid,t))))
+    return out
 def distract(out,validated,log=print):
     st,idx=load(out);Q=[json.loads(l) for l in open(validated) if l.strip()];res=[];bytype=collections.defaultdict(list)
     for q in Q:bytype[q['type']].append(q)
     for q in Q:
-        E=st[q['event']];holds,keys=ans_matcher(q);cs=core(q['S']);vs=[q['canonical']]+list(q['variants']);lead=collections.defaultdict(set);win=collections.defaultdict(set);surf={}
+        E=st[q['event']];holds,keys=ans_matcher(q);cs=core(q['S']);vs=[q['canonical']]+list(q['variants']);lead=collections.defaultdict(set);win=collections.defaultdict(set);surf={};exw=collections.defaultdict(list);exn=collections.defaultdict(list)
         for ai,sents,cum in lead_stream(E):
             n=len(sents);ww=[words_of(t) for t in sents];sw={j for i in range(n) if cs&ww[i] for j in near_idx(cum,i,n)}
             for j,t in enumerate(sents):
@@ -178,12 +188,13 @@ def distract(out,validated,log=print):
                     if any(related(sf,v) for v in vs) or (q['type'] in('DATE','NUMBER') and key in keys):continue
                     lead[k].add(ai);surf.setdefault(k,sf)
                     if j in sw:win[k].add(ai)
-        hard=[dict(surface=surf[k],key=k,c_prime=len(v),c_prime_win=len(win.get(k,())),source='frequent in the event lead') for k,v in sorted(lead.items(),key=lambda kv:(-len(kv[1]),kv[0]))[:NHARD]]
+                    (exw if j in sw else exn)[k].append((ai,j,t))
+        pk=packet_refs(out,q['event']);hard=[dict(surface=surf[k],key=k,c_prime=len(v),c_prime_win=len(win.get(k,())),source='frequent in the event lead',support=support_for(E,(exw[k]+exn[k]),pk)) for k,v in sorted(lead.items(),key=lambda kv:(-len(kv[1]),kv[0]))[:NHARD]]
         have={h['key'] for h in hard}
         for o in bytype[q['type']]:
             if o['event']==q['event'] and o['id']!=q['id'] and not related(o['canonical'],q['canonical']):
                 k=norm(o['canonical']) if q['type'] in('PLACE','PERSON') else easy_form(o)
-                hard.append(dict(surface=easy_form(o),key=k,c_prime=None,c_prime_win=None,source=f"answer of question {o['id']} of the same event"))
+                hard.append(dict(surface=easy_form(o),key=k,c_prime=None,c_prime_win=None,source=f"answer of question {o['id']} of the same event",support=[dict(packet_ref=e) for e in o.get('evidence',[])]))
         easy=[]
         for o in bytype[q['type']]:
             if o['event']!=q['event'] and not related(o['canonical'],q['canonical']):
