@@ -5,6 +5,7 @@ set -u
 mkdir -p /home/solhnsol/workspace && ln -sfn /workspace/TTT-MEMO /home/solhnsol/workspace/TTT-MEMO
 source /workspace/rp_env.sh
 export PYTHONUNBUFFERED=1
+I=/workspace/t1t2_in
 cd /workspace/TTT-MEMO
 cp -n $I/TTT-MEMO/scripts/exp07_write_ladder/e57_t1t2_run.py scripts/exp07_write_ladder/ ; cp -n $I/TTT-MEMO/scripts/exp07_write_ladder/jobs_proposed/276_e57_t1t2_score_oracle_cycle1.sh scripts/exp07_write_ladder/jobs_proposed/   # CODE: only NEW files are added to the tree (cp -n never overwrites)
 I=/workspace/t1t2_in; X=/workspace/exp07_out; L=$I/pod_logs; mkdir -p "$L"
