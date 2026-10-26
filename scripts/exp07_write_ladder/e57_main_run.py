@@ -30,7 +30,7 @@ def oracle_masks(ends,ids_all,tk,items,nch,UVm):
     return out
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=None,help='unused (the canary limit was abolished by Hans, E57 section 50); kept for old command lines')
-    ap.add_argument('--stage',default=None);ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--pfx-chunks',type=int,default=560);ap.add_argument('--pfx-seg',type=int,default=140);ap.add_argument('--pfx-seg2',type=int,default=70);ap.add_argument('--ctx-chunks',type=int,default=192);ap.add_argument('--seg-chunks',type=int,default=280);ap.add_argument('--pfx-tol',type=float,default=0.02);ap.add_argument('--noise-factor',type=float,default=2.0);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap.add_argument('--stage',default=None);ap.add_argument('--smoke',type=int,default=12,help='stage arms: chunks of the inline smoke run of every arm engine before the real arms (0 = none)');ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--pfx-chunks',type=int,default=560);ap.add_argument('--pfx-seg',type=int,default=140);ap.add_argument('--pfx-seg2',type=int,default=70);ap.add_argument('--ctx-chunks',type=int,default=192);ap.add_argument('--seg-chunks',type=int,default=280);ap.add_argument('--pfx-tol',type=float,default=0.02);ap.add_argument('--noise-factor',type=float,default=2.0);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     ROOT=HERE.parents[1];import gen_world_ctl as G
     tfile=a.tokenizer or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.StubTok() if a.stub else G.load_enc(tfile)
@@ -75,9 +75,26 @@ def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,
     mfile=out/'e57_main_oracle_masks.npz';ms=oracle_masks(ends,ids_all,tk,items,nch,UVm);np.savez_compressed(mfile,**ms)
     rs_t=None;dummy_meta=[{'sents':[]} for _ in range(nch)];rc={}                                  # rc: ONE record of the natural K,V of the stream (about 400 GiB host for 6 cycles) shared by all arms
     # the natural K,V record of the whole stream needs a 44 GiB working array on the GPU; run_stream records AFTER it has computed the prefix, and the (cached) prefix output of 8 GiB plus the compiled segment programs left too little room (job 261, 08:57Z): record FIRST, while only the model is on the GPU, and hand the result to run_stream through its record cache (same key as run_stream builds)
+    # SAFETY ASSERTION of the new segmented record (not a result check): on the first 420 chunks the one-call record fits; the keys of the later segments must carry the same absolute RoPE rotation. A wrong position handling would give an error of order 1; abort above 5 % relative L2 error.
+    Lg=C.Ladder55(rt,save_dir=out/'states'/'E57_main_recguard',canary=None);ng=420*CH;t0=time.monotonic()
+    with rt.mesh:
+        Kf,Vf,_hg=Lg.record(ids_all[:ng]);del _hg;Ks,Vs=record_segmented(Lg,rt,s3,LD,ids_all[:ng],seg_chunks=140,ctx_chunks=a.ctx_chunks,log=lambda *x:None)
+    relK=float(np.linalg.norm((Kf[:,140*CH:]-Ks[:,140*CH:]).astype(np.float32))/np.linalg.norm(Kf[:,140*CH:].astype(np.float32)));relV=float(np.linalg.norm((Vf[:,140*CH:]-Vs[:,140*CH:]).astype(np.float32))/np.linalg.norm(Vf[:,140*CH:].astype(np.float32)))
+    lg(f'  segmented record guard (420 chunks, 140-chunk segments, later segments only): relative L2 K {relK:.4f} V {relV:.4f} ({time.monotonic()-t0:.0f}s)');del Kf,Vf,Ks,Vs,Lg;gc.collect()
+    if relK>0.05 or relV>0.05:raise RuntimeError(f'segmented record differs from the one-call record (K {relK:.3f}, V {relV:.3f}): position handling wrong, aborting before the long run')
     L0=C.Ladder55(rt,save_dir=out/'states'/'E57_main_rec',canary=None);t0=time.monotonic()
-    with rt.mesh:Kh0,Vh0,_h=L0.record(ids_all[:nch*CH])
-    rc[(hashlib.sha256(np.asarray(ids_all[:nch*CH],np.int64).tobytes()).hexdigest(),nch)]=(Kh0,Vh0);lg(f'  natural K,V of the stream recorded before the arms ({Kh0.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s');del L0,_h;gc.collect();LD.jax.clear_caches()
+    with rt.mesh:Kh0,Vh0=record_segmented(L0,rt,s3,LD,ids_all[:nch*CH],seg_chunks=a.seg_chunks,ctx_chunks=a.ctx_chunks,log=lg)
+    rc[(hashlib.sha256(np.asarray(ids_all[:nch*CH],np.int64).tobytes()).hexdigest(),nch)]=(Kh0,Vh0);lg(f'  natural K,V of the stream recorded before the arms ({Kh0.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s');del L0;gc.collect();LD.jax.clear_caches()
+    if a.smoke>0:                                                  # SMOKE (12 chunks of each arm engine, results discarded) so that an engine that cannot run on the news stream fails in minutes, not after hours
+        sm_n=a.smoke;sm_norm=None;sm_rs=None
+        for arm in arms:
+            Ls=C.Ladder55(rt,save_dir=out/'states'/f'E57_smoke_{arm}',canary=None);Ls.rec_cache=rc;eng={'NAT':'NAT','NATADAMH':'NATADAMH','ORC':'SELC1','RAND':'RSELC1'}[arm];uv_s=None
+            if arm=='ORC':uv_s=SM.SelMask('SELC1',1,{k:v for k,v in np.load(mfile).items()},ends,None,log=lambda *x:None)
+            if arm=='RAND':uv_s=UVm.UV('RSELC1',ends,None,L=Ls,rt=rt,s3=s3,rs_targets=sm_rs,log=lambda *x:None)
+            rs=Ls.run_stream(eng,1,ids_all,nch=sm_n,tag=f'smoke{arm}',log=lambda *x:None,chunks_meta=dummy_meta,norm_targets=sm_norm,uv=uv_s)
+            if arm=='NAT':sm_norm=[e['update_norm'] for e in rs['log']]
+            if arm=='ORC':sm_rs=[e.get('n_masked_keys',0) for e in rs['log']]
+            lg(f'  smoke {arm}: {sm_n} chunks ok, mean update norm {np.mean([e["update_norm"] for e in rs["log"]]):.3g}, mean ce {np.mean([e["ce"] for e in rs["log"]]):.3f}');del Ls,rs;gc.collect()
     for arm in arms:
         fnA=out/f'E57_main_{arm}.arms.json'
         if fnA.exists() and not a.rerun:
@@ -118,6 +135,26 @@ def install_segmented_prefix(rt,seg_chunks=280,ctx_chunks=192,log=print):
             sub=type(seq)(input_ids=seq.input_ids[lo:b],target_tokens=seq.target_tokens[lo:b],loss_masks=seq.loss_masks[lo:b]);h=orig(m,sub);outs.append(h[a-lo:b-lo]);del h
         res=jnp.concatenate(outs,axis=0);del outs;cache.clear();cache[key]=res;log(f'  prefix output of the stream computed in segments of {seg_chunks} chunks (+{ctx_chunks} context): {T//CH} chunks, {time.monotonic()-t0:.0f}s');return res
     rt.prefix=seg_prefix;rt._orig_prefix=orig;return seg_prefix
+def record_segmented(L,rt,s3,LD,ids,seg_chunks=280,ctx_chunks=192,log=print):
+    """natural per-layer post-RoPE K,V of the whole stream (host [layers, T, nh, d], as e55_core.record) computed in segments: the one-call record of 1680 chunks needs an 87 GiB working array (job 261, 09:06Z). Each segment is run with ctx_chunks of preceding context (24 prefix layers x window 8192 = 192 chunks) and with the GLOBAL position ids (Batch.position_ids), so that the stored keys carry their absolute RoPE rotation exactly as in the one-call record; only the segment part is kept."""
+    jnp,eqx,jax=LD.jnp,LD.eqx,LD.jax;Batch=L.Batch;S3=s3.S3
+    @eqx.filter_jit
+    def layer_rec_pos(blk,h,ids_,pos_):
+        S3['mode']='rec'
+        try:
+            seq=Batch(input_ids=ids_,target_tokens=ids_,loss_masks=jnp.ones_like(ids_,dtype=bool),position_ids=pos_)
+            out,_=blk(h,None,seq,is_prefix=True);K,V=S3['rec']
+        finally:S3.clear()
+        return out,K,V
+    m=rt.base;blocks=m.language_model.model.h.prefix_blocks;nl=jax.tree_util.tree_leaves(blocks)[0].shape[0];T=len(ids);Kh=Vh=None;t0=time.monotonic()
+    for a in range(0,T,seg_chunks*CH):
+        b=min(T,a+seg_chunks*CH);lo=max(0,a-ctx_chunks*CH);ids_=jnp.asarray(ids[lo:b],dtype=jnp.int32);pos_=jnp.arange(lo,b,dtype=jnp.int32);h=L.embed(m,ids_)
+        for l in range(nl):
+            blk=jax.tree.map(lambda x:x[l] if eqx.is_array(x) else x,blocks);h,K,V=layer_rec_pos(blk,h,ids_,pos_);K=np.asarray(jax.device_get(K))[a-lo:b-lo];V=np.asarray(jax.device_get(V))[a-lo:b-lo]
+            if Kh is None:Kh=np.empty((nl,T)+K.shape[1:],K.dtype);Vh=np.empty((nl,T)+V.shape[1:],V.dtype)
+            Kh[l,a:b]=K;Vh[l,a:b]=V;del K,V
+        del h;log(f'    record segment {a//CH}-{b//CH} of {T//CH} chunks: {time.monotonic()-t0:.0f}s')
+    return Kh,Vh
 def stage_pfx(a,out,items,bsrc,iv,hits,shtab,ids,ids_all,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R):
     """EQUIVALENCE CHECK of the segmented prefix (before the long run), two parts, exit 9 if either fails (the criteria are fixed and are not relaxed after seeing the numbers):
     (1) the prefix output of the first --pfx-chunks (560) chunks in ONE call against the segmented computation with --pfx-seg (140) chunk segments: relative L2 error <= --pfx-tol (0.02);
