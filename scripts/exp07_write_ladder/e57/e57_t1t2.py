@@ -206,6 +206,29 @@ def check(draft_path,bankdir,out,log=print,nomfile=None):
     (out/'e57_t1t2_key_numbers.json').write_text(json.dumps(key,indent=1,ensure_ascii=False));log(json.dumps(key['t2'],ensure_ascii=False)[:1500]);return key
 def easy_extras_of(nomfile):
     """-> {item id: [easy_extra strings]} from the nominations file of the news thread (keys of easy_extra_proposed may name several items: every rev-... id in the key gets the list)"""
+    N=json.load(open(nomfile));EX={}
+    for k,v in N.get('easy_extra_proposed',{}).items():
+        for i in re.findall(r'rev-[\w-]+',k):EX[i]=list(v)
+    nom=N['nominations']
+    if isinstance(nom,dict):
+        for k,v in nom.items():
+            if v.get('easy_extra'):EX[k]=list(v['easy_extra'])
+    return EX
+def add_easy_extras(st,d,q,extras,cap=EASY_N):
+    """verified easy extras are appended up to cap: must occur in the stream, not be an alias / container of the gold, not a same-event hard candidate, not already in the easy list. -> list of verdicts"""
+    res=[];hn={B.norm(h['surface']) for h in d['hard']}
+    for s_ in extras:
+        has={B.norm(e['surface']) for e in d['easy']};na=stream_count(st,s_)
+        if any(B.related(s_,v) for v in q['variants']):res.append(dict(extra=s_,accepted=False,reason='alias / container of the gold'))
+        elif na==0:res.append(dict(extra=s_,accepted=False,reason='does not occur in the stream'))
+        elif B.norm(s_) in hn:res.append(dict(extra=s_,accepted=False,reason='is a same-event hard candidate'))
+        elif B.norm(s_) in has or any(B.related(s_,e['surface']) for e in d['easy']):res.append(dict(extra=s_,accepted=False,reason='already in the easy list'))
+        elif len(d['easy'])>=cap:res.append(dict(extra=s_,accepted=False,reason='easy list already has %d'%cap))
+        else:d['easy'].append(dict(surface=s_,from_event=None,c_prime=None,source='nominated easy extra (news thread), verified in the stream',c_prime_stream_articles=na));res.append(dict(extra=s_,accepted=True,reason='occurs in the stream',c_prime_stream_articles=na))
+    d['n_easy']=len(d['easy']);return res
+# ---------- verify nominations ----------
+def verify(out,nomfile,log=print):
+    out=pathlib.Path(out);fd=out/'e57_bank';st,idx=B.load(out);Q={q['id']:q for q in map(json.loads,[l for l in open(fd/'t2_validated.jsonl') if l.strip()])};D={d['id']:d for d in json.load(open(out/'e57_t1t2_t2_distractors.json'))}
     EXALL=easy_extras_of(nomfile);N=json.load(open(nomfile))['nominations']
     if isinstance(N,dict):N=[dict(id=k,nominated_from_list=v.get('hard',[]),proposed_extra_needs_code_check=v.get('hard_proposed_need_stream_check',[]),easy_extra=EXALL.get(k,[])) for k,v in N.items()]
     rep=[];lines=[];prob=[]
@@ -273,11 +296,36 @@ def _selftest():
     golds=[dict(id='a',gold='Zed Gold',gold_class='PERSON',pool_type='PERSON',event='Ev'),dict(id='b',gold='Amy Other',gold_class='PERSON',pool_type='PERSON',event='Ev2'),dict(id='c',gold='Big Title',gold_class='TITLE',pool_type='OTHER',event='Ev3')]
     qa=dict(id='a',variants=['Zed Gold','Gold'],gold_class='PERSON');e=person_easy(pool,qa,[dict(surface='Tom Hill')],golds);sf=[x['surface'] for x in e];assert sf[0]=='Amy Other' and 'Jane Roe' in sf and 'Tom Hill' not in sf and 'Big Title' not in sf,sf
     assert other_easy({},dict(id='c',gold_class='TEAM',variants=['Big Title']),golds+[dict(id='d',gold='Some Team',gold_class='TEAM',pool_type='OTHER',event='Ev4')],[])[0]['surface']=='Some Team'
+    d_=dict(hard=[dict(surface='Hardone Name')],easy=[]);r_=add_easy_extras(st_,d_,dict(variants=['Zed Gold']),['Jane Roe','Zed Gold','Hardone Name','Nobody Atall','Jane Roe']);assert [x['accepted'] for x in r_]==[True,False,False,False,False] and d_['n_easy']==1,r_
+    import tempfile as _t;f_=pathlib.Path(_t.mkdtemp())/'n.json';f_.write_text(json.dumps({'nominations':{'rev-a':{'hard':['X']}},'easy_extra_proposed':{'titles (shared by rev-a and rev-b; need check)':['T1','T2'],'teams (rev-c)':['K']}}));ex_=easy_extras_of(f_);assert ex_=={'rev-a':['T1','T2'],'rev-b':['T1','T2'],'rev-c':['K']},ex_
     print('e57_t1t2 selftest ok')
+
+def _selftest_e2e():
+    """check -> verify -> freeze on a tiny synthetic store (monkeypatched loader / bank), so that every step of the job runs once before it is run on the real stream"""
+    import tempfile
+    td=pathlib.Path(tempfile.mkdtemp());sents=['Mayor Jane Roe said the Zed Gold film opened in Paris.','Dr Tom Hill told us Jane Roe will visit Paris on July 31.','Mayor Amy Other said Tom Hill was away.']
+    st_={'Ev':dict(rids=['r1','r2','r3','r4'],hosts=['h']*4,dates=[1,2,3,4],cum=[[0,10,20,30]]*4,kept=[3,3,3,3],sents=[sents]*4),'Ev2':dict(rids=['s1','s2'],hosts=['h']*2,dates=[5,6],cum=[[0,10,20,30]]*2,kept=[3,3],sents=[['Mayor Amy Other said it today.','Dr Kim Park told us so.','Nothing here.']]*2)}
+    me=sys.modules[__name__];old=(B.load,me.bank_check,dict(T2_CLASS));B.load=lambda out:(st_,{})
+    bq=dict(id='q1',event='Ev',S='Zed Gold',type='PERSON',canonical='Jane Roe',variants=['Jane Roe'],frame='Who opened {S}?',fixed_surface='Jane Roe',easy=[dict(surface='Kim Park')],hard_all=[dict(surface='Tom Hill')],hard_nominated=[dict(surface='Tom Hill')],stratum='main')
+    me.bank_check=lambda d:(dict(questions=[bq]),dict(ok=True,sha256='9374e1f5'+'0'*56,recomputed='',sha_file='',file_bytes_sha256=''))
+    T2_CLASS.update({'Jane Roe':'PERSON','Amy Other':'PERSON'})
+    try:
+        items=[dict(kind='T1',id='q1#f1',form='question',source='q1',frame='Which person opened a big movie in a city?',gold='Jane Roe',variants=['Jane Roe'],type='PERSON',event='Ev'),dict(kind='T2',id='rev-a',form='question',source='q1',frame='Who is the mayor that said the film opened?',gold='Jane Roe',type='REVERSE',event='Ev'),dict(kind='T2',id='rev-a-cloze',form='cloze',source='q1',frame='The mayor who said so is ___',gold='Jane Roe',type='REVERSE',event='Ev'),dict(kind='T2',id='rev-b',form='question',source='q2',frame='Which mayor spoke today?',gold='Amy Other',type='REVERSE',event='Ev2')]
+        dp=td/'draft.json';dp.write_text(json.dumps(dict(version='t',items=items)));nf=td/'nom.json'
+        nf.write_text(json.dumps({'nominations':{'rev-a':{'hard':['Tom Hill'],'easy_extra':[]},'rev-b':{'hard':[],'hard_proposed_need_stream_check':['Kim Park']}},'easy_extra_proposed':{'persons (rev-a and rev-b)':['Kim Park','Nobody Atall']}}))
+        out=td/'o';(out/'e57_bank').mkdir(parents=True)
+        key=check(str(dp),str(td),out,log=lambda *x:None,nomfile=str(nf));assert 'pass_k3_zero_overlap' in key and len(key['t2'])==2,key
+        rep,prob=verify(out,nf,log=lambda *x:None);assert any(x['id']=='rev-a' for x in rep),rep
+        b=freeze(out,'v1',str(dp),str(td),log=lambda *x:None);assert b['n_t2_questions']==2 and (out/'t1t2_v1.sha256').exists()
+        try:freeze(out,'v1',str(dp),str(td),log=lambda *x:None);assert False
+        except SystemExit as e:assert e.code==8
+    finally:
+        B.load,me.bank_check=old[0],old[1];T2_CLASS.clear();T2_CLASS.update(old[2])
+    print('e57_t1t2 e2e selftest ok')
 DEFAULT_DRAFT='data/news-lite/t1t2_draft_v1.json'
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('cmd',nargs='?',choices=['check','verify','freeze']);ap.add_argument('--out',default='experiments/exp07_write_ladder/e57_news/e57_t1t2');ap.add_argument('--draft',default=DEFAULT_DRAFT);ap.add_argument('--bank-dir',default='experiments/exp07_write_ladder/e57_news/e57_bank');ap.add_argument('--nominations');ap.add_argument('--version',default='v1');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
-    if a.selftest:_selftest();return
+    if a.selftest:_selftest();_selftest_e2e();return
     if a.cmd=='check':check(a.draft,a.bank_dir,a.out,nomfile=a.nominations)
     elif a.cmd=='verify':verify(a.out,a.nominations)
     elif a.cmd=='freeze':freeze(a.out,a.version,a.draft,a.bank_dir)
