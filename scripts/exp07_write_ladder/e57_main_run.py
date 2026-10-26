@@ -3,7 +3,7 @@
   NATADAMH Adam direction, update norm = 0.5 x the NAT norm of the same chunk, NO mask (the same-size update control of the masked arms; arm added at run time to e55_swap.ADAM);
   ORC      Adam direction x 0.5 NAT norm + ORACLE answer mask: every window sentence that holds the gold answer (surface-form match, any question of the bank) is hidden from the attention of the write (stored mask file e57_main_oracle_masks.npz, e55_selmask.SelMask arm SELC1; labels are used: oracle);
   RAND     the same hidden-token count per chunk as ORC, random window sentences (e55_uv.UV arm RSELC1).
-Reads of the FROZEN bank (bank_v1.json) at W0 and at --npos (default 1 = the end of every cycle) read positions per cycle, fixed by stream position before the run: OUT = neutral SQuAD tail of exactly 8192 tokens (no gold string of the bank in it); IN = the natural window (the last 8192 stream tokens before the read; window_info present / absent by gold surface-form match in the decoded window). Reads are read-only (fp32 COPY of the weights). W0 is read with the same contexts as every later read. Canary (pg11 generation NLL, pg1342 tail NLL) at W0 and at --canary-npos (10) positions per cycle; the first chunk at which the rise of either canary NLL over W0 reaches --stop-rise (default 0.10, the E55 limit) is RECORDED (the runs are short, R = 2, and continue). Log rows as in e57_reads.log_rows (per arm, cycle, read position, condition, window_info, question, n_k, shadow, gold log-prob, ranks over all / hard-only / full hard pool, accuracy, per-candidate log-probs). Results: E57_main_<ARM>.json (rewritten after every read position) and E57_main_W0.json.
+Reads of the FROZEN bank (bank_v1.json) at W0 and at --npos (default 1 = the end of every cycle) read positions per cycle, fixed by stream position before the run: OUT = neutral SQuAD tail of exactly 8192 tokens (no gold string of the bank in it); IN = the natural window (the last 8192 stream tokens before the read; window_info present / absent by gold surface-form match in the decoded window). Reads are read-only (fp32 COPY of the weights). W0 is read with the same contexts as every later read. Canary (pg11 generation NLL, pg1342 tail NLL) at W0 and at --canary-npos (10) positions per cycle; the first chunk at which the rise of either canary NLL over W0 reaches --stop-rise  Log rows as in e57_reads.log_rows (per arm, cycle, read position, condition, window_info, question, n_k, shadow, gold log-prob, ranks over all / hard-only / full hard pool, accuracy, per-candidate log-probs). Results: E57_main_<ARM>.json (rewritten after every read position) and E57_main_W0.json.
   python3 e57_main_run.py --bundle OUT_news --out DIR [--bank F] [--cycles 2] [--npos 1] [--canary-npos 10] [--arms NAT,NATADAMH,ORC,RAND] [--stop-rise 0.10] --stage arms|reads [--check-only] [--selftest]"""
 import sys,json,os,time,argparse,hashlib,pathlib,gc
 import numpy as np
@@ -29,7 +29,7 @@ def oracle_masks(ends,ids_all,tk,items,nch,UVm):
         out[f'h1_{k}']=hid;out[f'wlen{k}']=np.asarray(wlen,np.int32)
     return out
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=0.10)
+    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=None,help='unused (the canary limit was abolished by Hans, E57 section 50); kept for old command lines')
     ap.add_argument('--stage',default=None);ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     ROOT=HERE.parents[1];import gen_world_ctl as G
@@ -86,16 +86,15 @@ def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,
         traj=[];hold={'stopped':None}
         def hook(k,m,arm=arm,traj=traj,hold=hold):
             cyc=k//n+1;cn=can(m);traj.append(dict(chunk=int(k),cycle=cyc,canary=cn))
-            rg=cn['_gen_nll']-cw0['_gen_nll'];rt_=cn['_tail_nll']-cw0['_tail_nll'];lg(f'  {arm} end of cycle {cyc} (chunk {k}): canary rise gen {rg:+.4f} tail {rt_:+.4f}')
-            if max(rg,rt_)>=a.stop_rise and hold['stopped'] is None:hold['stopped']=int(k);lg(f'  {arm}: the end-of-cycle canary rise reached the limit {a.stop_rise} at chunk {k}; this cycle and every later cycle are exploratory in the report')
+            rg=cn['_gen_nll']-cw0['_gen_nll'];rt_=cn['_tail_nll']-cw0['_tail_nll'];lg(f'  {arm} end of cycle {cyc} (chunk {k}): canary rise gen {rg:+.4f} tail {rt_:+.4f} (recorded only; no limit, no monitoring)')
             return {'ok':True}
         t0=time.monotonic()
         res=L.run_stream(engine,1,ids_all,nch=eff,tag=f'main{arm}',log=lg,read_hook=hook,hook_chunks=set(c for c in cch if c<eff),read_chunks=set(c for c in rch if c<eff),chunks_meta=dummy_meta,norm_targets=ntg,uv=uvo)
         log=res['log']
         if arm=='NAT':ntg=[e['update_norm'] for e in log]
         if arm=='ORC':rs_t=[e.get('n_masked_keys',0) for e in log]
-        fnA.write_text(json.dumps(dict(arm=arm,engine=engine,bank=bsrc,cycles=N,n_chunks=nch,first_chunk_over_canary_limit=hold['stopped'],canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,
-            update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys') if k_ in e} for e in log],norm_targets=ntg if arm=='NAT' else None,rs_targets=rs_t if arm=='ORC' else None,read_positions_in_cycle=kks,stop_rise=a.stop_rise),default=float));print('wrote',fnA,flush=True)
+        fnA.write_text(json.dumps(dict(arm=arm,engine=engine,bank=bsrc,cycles=N,n_chunks=nch,canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,
+            update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys') if k_ in e} for e in log],norm_targets=ntg if arm=='NAT' else None,rs_targets=rs_t if arm=='ORC' else None,read_positions_in_cycle=kks,),default=float));print('wrote',fnA,flush=True)
         del L,res;gc.collect();LD.jax.clear_caches()
 def inner_dtypes(LD,rd,m):
     """precision of the inner (written) parameters: {dtype: number of leaves} -> the saved weights must have the precision of the training state"""
@@ -164,7 +163,7 @@ def stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,c
             dt=inner_dtypes(LD,rd,m);assert dt==live_dt,('saved weights have another precision than the training state',dt,live_dt)
             cs=can(m);c1=by_chunk.get(k);can_chk.append(dict(chunk=k,canary_from_saved=cs,canary_in_run=c1,diff_gen=None if c1 is None else cs['_gen_nll']-c1['_gen_nll'],diff_tail=None if c1 is None else cs['_tail_nll']-c1['_tail_nll']))
             tim[k]=read(arm,cyc,kk,m,rows);del m;lg(f'  {arm} read at the end of cycle {cyc} (chunk {k}): {tim[k]:.0f}s; canary from the saved weights vs in the run: {can_chk[-1]["diff_gen"]},{can_chk[-1]["diff_tail"]}')
-        fnF.write_text(json.dumps(dict(arm=arm,engine=A['engine'],bank=bsrc,cycles=A['cycles'],n_chunks=A['n_chunks'],run_chunks=A['n_chunks'],first_chunk_over_canary_limit=A['first_chunk_over_canary_limit'],canary_w0=cw0,trajectory=A['trajectory'],rows=rows,timings={str(k):v for k,v in tim.items()},sec_total=A['sec_total'],update_log=A['update_log'],read_positions_in_cycle=A['read_positions_in_cycle'],stop_rise=A['stop_rise'],canary_saved_vs_run=can_chk,saved_weights_precision=live_dt),default=float));print('wrote',fnF,len(rows),'rows',flush=True)
+        fnF.write_text(json.dumps(dict(arm=arm,engine=A['engine'],bank=bsrc,cycles=A['cycles'],n_chunks=A['n_chunks'],run_chunks=A['n_chunks'],canary_w0=cw0,trajectory=A['trajectory'],rows=rows,timings={str(k):v for k,v in tim.items()},sec_total=A['sec_total'],update_log=A['update_log'],read_positions_in_cycle=A['read_positions_in_cycle'],canary_saved_vs_run=can_chk,saved_weights_precision=live_dt),default=float));print('wrote',fnF,len(rows),'rows',flush=True)
 def selftest():
     assert read_positions(280,10)==[27,55,83,111,139,167,195,223,251,279]
     import e55_uv as UVm
