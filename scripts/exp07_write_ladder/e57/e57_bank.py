@@ -14,7 +14,7 @@ PERSON_BEFORE=re.compile(r"(?:\b(?:Mr|Mrs|Ms|Dr|President|Minister|Mayor|Governo
 PERSON_AFTER=re.compile(r"^\s*(?:,\s*[^,]{0,60},)?\s*(?:said|says|told|added|stated|announced|confirmed|has|was|is|will|had)\b")
 PLACE_WORDS={'city','county','jail','airport','park','palace','fort','hotel','stadium','island','valley','beach','river','lake'}
 PLACE_SUF=('pur','abad','nagar','garh','ganj','ville','burg','burgh','shire','stan','polis','grad')
-ORG_WORDS={'bank','ministry','court','university','party','council','association','company','corp','inc','ltd','department','committee','commission','group','police','government','agency','league','club','news','times','post'}
+ORG_WORDS={'bank','ministry','court','university','party','council','association','company','corp','inc','ltd','department','committee','commission','group','police','government','agency','league','club','news','times','post','hall','justice','administration','prize','prizes','award','awards','hotels','authority','board','service','services','house','office','bureau','forces','army','navy','institute','foundation','federation','union','corporation','festival','cup','trophy','series','tournament','conference','summit','treaty','fund','trust','network','studios','pictures','productions','entertainment','airlines','airways','airspace','commissioner','secretary'}      # extended 2026-10-26: titles / organisations / prizes typed as PERSON were competitors (city hall, chief justice, federal aviation administration, nobel peace prize, itc hotels)
 CAPSEQ=re.compile(r"\b[A-Z][A-Za-z'’\-]{2,}(?:\s+[A-Z][A-Za-z'’\-]{2,}){0,3}\b")
 RELTIME=re.compile(r"^(?:yesterday|today|tomorrow|tonight|last\s+\w+|next\s+\w+|this\s+\w+|(?:mon|tues|wednes|thurs|fri|satur|sun)day)$",re.I)
 STOP={'the','and','for','from','with','said','news','city','state','court','police','government','minister','president','bank','new','group','company','national','international','university','united'}
@@ -38,7 +38,7 @@ def type_strings(sent):
         if any(a<y and b>x for x,y in spans):continue
         low=[x.lower() for x in w];pre=sent[max(0,a-16):a];post=sent[b:b+80]
         place=bool(PLACE_CTX.search(sent[max(0,a-12):a])) or low[-1] in PLACE_WORDS or low[-1].endswith(PLACE_SUF)
-        person=bool(PERSON_BEFORE.search(pre) or PERSON_AFTER.search(post)) or (2<=len(w)<=3 and not place and not set(low)&ORG_WORDS)
+        person=(bool(PERSON_BEFORE.search(pre) or PERSON_AFTER.search(post)) or (2<=len(w)<=3 and not place)) and not set(low)&ORG_WORDS       # organisation / title words veto the person type even before 'said' (fix 2026-10-26)
         ty='PLACE' if place and not PERSON_BEFORE.search(pre) else 'PERSON' if person else 'OTHER'
         out.append((ty,norm(t),t,a,b))
     return out
@@ -50,7 +50,11 @@ def ans_matcher(q):
             for f in C.facts_in_sentence(' '+s+' '):
                 if f[0]==('DATE' if ty=='DATE' else 'NUM'):keys.add(f[1])
     vs=[v for v in [q['canonical']]+list(q.get('variants',[])) if v]
-    rx=re.compile('|'.join(r'(?<![\w])'+re.escape(v)+r'(?![\w])' for v in vs),re.I) if vs else None
+    def _pat(v):
+        if ty=='NUMBER' and re.fullmatch(r'\d{1,4}',v.strip()):                           # bare integer (34, 112, 2025): key = its value; not inside 4.5 / 34% / $34 million / 34,000 (fix 2026-10-26)
+            keys.add('%g'%float(v.strip()));return r'(?<![\w$.,])'+re.escape(v.strip())+r'(?![\w%]|[.,]\d|\s?(?:million|billion|trillion|thousand|percent|per cent)\b)'
+        return r'(?<![\w])'+re.escape(v)+r'(?![\w])'
+    rx=re.compile('|'.join(_pat(v) for v in vs),re.I) if vs else None
     def holds(sent):
         if rx and rx.search(sent):return True
         if keys:return any(f[0]==('DATE' if ty=='DATE' else 'NUM') and f[1] in keys for f in C.facts_in_sentence(sent))
@@ -88,7 +92,7 @@ def lead_stream(E):
 def near_idx(cum,i0,n):
     lo=cum[i0]-WIN;hi=cum[i0+1]+WIN;return [j for j in range(n) if cum[j+1]>lo and cum[j]<hi]
 def question_stats(q,E):
-    holds,keys=ans_matcher(q);cs=core(q['S']);selfw=cs|core(q.get('event',''));arts=[];near=[];sent_only=[];comp=collections.defaultdict(set);cwin=set();vs=[q['canonical']]+list(q.get('variants',[]))
+    holds,keys=ans_matcher(q);cs=core(q['S']);selfw=cs|core(q.get('event',''));selftxt=' '+norm(q.get('frame','').replace('{S}',' ')+' '+q['S'])+' ';arts=[];near=[];sent_only=[];comp=collections.defaultdict(set);cwin=set();vs=[q['canonical']]+list(q.get('variants',[]))
     for ai,sents,cum in lead_stream(E):
         n=len(sents);ia=[i for i,t in enumerate(sents) if holds(t)]
         if ia:
@@ -103,7 +107,7 @@ def question_stats(q,E):
             for ty,key,sf,a,b in type_strings(sents[j]):
                 if ty!=q['type']:continue
                 if any(related(sf,v) for v in vs) or (q['type'] in('DATE','NUMBER') and key in keys):continue
-                if q['type'] in('PLACE','PERSON') and core(sf)&selfw:continue          # a string made of S / event-name words is the topic itself, not a competitor (fix 2026-10-26)
+                if q['type'] in('PLACE','PERSON') and (core(sf)&selfw or ' '+norm(sf)+' ' in selftxt or (norm(q['S']) and norm(q['S']) in norm(sf))):continue          # a string made of S / event-name words is the topic itself, not a competitor (fix 2026-10-26)
                 comp[key if q['type'] in('DATE','NUMBER') else norm(sf)].add(ai)
     top=sorted(((k,v&cwin) for k,v in comp.items()),key=lambda kv:(-len(kv[1]),kv[0]))[:3]      # numerator and denominator on the same population: window articles that hold the answer (fix 2026-10-26)
     return dict(c=len(arts),c_SA=len(near)/max(1,len(arts)),c_SA_sentence=len(sent_only)/max(1,len(arts)),c_window=len(cwin),comp_top=[(k,len(v)) for k,v in top],comp_max=len(top[0][1]) if top else 0,answer_rids=[E['rids'][ai] for ai in arts])
@@ -129,7 +133,7 @@ def check_question(q,E,P):
     fw=C.ngr(C.words(q['frame'].replace('{S}','')),5);ng=set()
     for ai,sents,cum in lead_stream(E):
         for t in sents:ng|=C.ngr(C.words(t),5)
-    if fw&ng:why.append('frame 5-gram overlap with the lead sentences')
+    if fw&ng:why.append('frame 5-gram overlap with the lead sentences: '+' | '.join(' '.join(g) for g in sorted(fw&ng)[:3]))
     stt=question_stats(q,E)
     if stt['c']<C_MIN:why.append(f"c = {stt['c']} < {C_MIN}")
     if stt['c_SA']<CSA_MIN:why.append(f"c_SA = {stt['c_SA']:.2f} < {CSA_MIN}")
@@ -149,7 +153,7 @@ def validate(out,bankfile,log=print):
         if r['id'] in coll:r['reasons'].append('same answer is the answer of another event (same type)')
     ok=[q for q in ok if q['id'] not in coll];fd=pathlib.Path(out)/'e57_bank';fd.mkdir(exist_ok=True)
     (fd/'validated.jsonl').write_text('\n'.join(json.dumps(q,ensure_ascii=False) for q in ok)+('\n' if ok else ''));(fd/'validation.json').write_text(json.dumps(dict(thresholds=dict(c_min=C_MIN,c_sa_min=CSA_MIN,comp_max=COMP_MAX,win=WIN),results=res),indent=1,default=str))
-    L=['# E57 question validation (counts and values only)','',f'{len(Q)} questions, {len(ok)} survive. Thresholds fixed before any result: c >= {C_MIN} lead articles, c_SA >= {CSA_MIN}, same-type competitor <= {COMP_MAX} of the window articles holding the answer.','','| id | event | type | c | c_SA (sentence only) | window articles | top competitor | verdict |','|---|---|---|---|---|---|---|---|']
+    L=['# E57 question validation (counts and values only)','','**Validator version note: this validator was changed AFTER seeing the results of jobs 230 and 243 (fixes: S / event-name / frame strings and titles / organisations are not competitors, competitor and denominator on the same window-article population, bare-integer answers readable, overlapping 5-grams printed). Thresholds are unchanged.**','',f'{len(Q)} questions, {len(ok)} survive. Thresholds fixed before any result: c >= {C_MIN} lead articles, c_SA >= {CSA_MIN}, same-type competitor <= {COMP_MAX} of the window articles holding the answer.','','| id | event | type | c | c_SA (sentence only) | window articles | top competitor | verdict |','|---|---|---|---|---|---|---|---|']
     for r in res:
         s=r['stats'];L.append(f"| {r['id']} | {r['event']} | {r['type']} | {s['c'] if s else ''} | {('%.2f (%.2f)'%(s['c_SA'],s['c_SA_sentence'])) if s else ''} | {s['c_window'] if s else ''} | {s['comp_top'][0] if s and s['comp_top'] else ''} | {'ok' if not r['reasons'] else '; '.join(r['reasons'])} |")
     ev=collections.Counter(r['event'] for r in res if not r['reasons']);L+=['','survivors per event: '+', '.join(f'{k}: {v}' for k,v in ev.items())]
@@ -247,6 +251,8 @@ def _selftest():
             except SystemExit as e:assert e.code==8
         # type rules without a dictionary
         ts={(t,s) for t,k,s,a,b in type_strings('He lives in Springfield. Dr Ivan Petrov said so at Central Park and in Rajpur.')};assert ('PLACE','Springfield') in ts and ('PERSON','Ivan Petrov') in ts and ('PLACE','Rajpur') in ts and ('PLACE','Central Park') in ts,ts
+        h_,k_=ans_matcher(dict(type='NUMBER',canonical='34',variants=['34','thirty-four'],S='x'));assert k_=={'34'} and h_('He is 34 years old.') and not h_('It cost $34 million.') and not h_('34% rose') and not h_('4.5 and 3.4'),'bare integer answer'
+        ts_={(t_,s_) for t_,k2_,s_,a_,b_ in type_strings('He met at City Hall. The Chief Justice said so. ITC Hotels announced it. Dr Ivan Petrov said so.')};assert ('PERSON','Ivan Petrov') in ts_ and not any(t_=='PERSON' and s_ in('Chief Justice','ITC Hotels','City Hall') for t_,s_ in ts_),ts_
         print('e57_bank selftest ok:',nm,'t1 survived' if 't1' in okids else 't1 rejected (reasons above)')
     N3._selftest(after)
 def main():
