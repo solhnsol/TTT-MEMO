@@ -117,7 +117,7 @@ def analyze(cl):
                 for Af in fs:
                     if (Af[0],Af[1])==(S[0],S[1]) or (Af[0]=='NAME' and (Af[1] in S[1] or S[1] in Af[1])):continue
                     pair_art[(S[1],Af[0],Af[1])].setdefault(ai,si)
-    targets=[];used=set()
+    targets=[];used=set();CONF=[]
     best={}
     for (sk,ty,ak),d in pair_art.items():
         c=len(d)
@@ -132,7 +132,7 @@ def analyze(cl):
             occ[ai]=ss
             for si in ss[:1]:items.append((arts[ai]['sents'][si],[surf[(ty,ak)],surf.get(('NAME',sk),sk)]+[f[2] for f in arts[ai]['facts'][si] if (f[0],f[1]) in ((ty,ak),('NAME',sk))]))
         f=C.n_forms(items)
-        if f<2:continue
+        if f<A.get('min_f',2):continue
         # conflict proxy: another value of the same type that co-occurs with S, in >= max(2, c/2) articles, in a sentence of the SAME slot-masked form as a sentence of this target (a competing value for the same slot)
         if ty in('NUM','DATE'):
             tg=[C.ngr(C.words(C.masked(x,[y for y in sfs])),5) for x,sfs in items]
@@ -141,14 +141,21 @@ def analyze(cl):
                 if s2!=sk or t2!=ty or k2==ak or len(dd)<max(2,c/2):continue
                 for ai2,si2 in dd.items():
                     sent2=arts[ai2]['sents'][si2];g2=C.ngr(C.words(C.masked(sent2,[surf[(ty,k2)],surf.get(('NAME',sk),sk)])),5)
-                    if any(C.jac(g2,g1)>=0.6 for g1 in tg):conf=True;break
+                    if any(C.jac(g2,g1)>=0.6 for g1 in tg):conf=(k2,sorted(dd));break
                 if conf:break
-            if conf:continue
+            if conf:
+                if A.get('conflicts'):CONF.append(dict(S=sk,ty=ty,key=ak,c=c,other=conf[0],arts_a=sorted(d),arts_b=conf[1]))      # E57 events survey: the competing value of the same slot (kept out of the targets)
+                continue
         targets.append(dict(ty=ty,key=ak,S=sk,c=c,f=f,occ={int(k):v for k,v in occ.items()},surface=surf[(ty,ak)]))
     pools={}
     for t in targets:pools[(t['ty'],t['key'])]=[(k,len(v)) for k,v in fact_art.items() if k[0]==t['ty'] and k[1]!=t['key']]
-    return dict(ok=True,n_dedup=len(keep),n_before=len(texts),arts=[dict(host=x['host'],tl=x['tl'],cum=x['cum'],n_sents=len(x['sents'])) for x in arts],targets=targets,
+    r=dict(ok=True,n_dedup=len(keep),n_before=len(texts),arts=[dict(host=x['host'],tl=x['tl'],cum=x['cum'],n_sents=len(x['sents'])) for x in arts],targets=targets,
         pool_counts={f'{k[0]}|{k[1]}':[c for _,c in v] for k,v in pools.items()},title=cl['title'])
+    if A.get('conflicts'):r['conf_rec']=CONF
+    if A.get('detail'):         # E57 freeze: sentences, the indices of the kept articles inside cl['texts'], candidate strings
+        r['keep']=list(keep);r['sents']=[x['sents'] for x in arts];r['facts']=[[[(f[0],f[1],f[2]) for f in fs] for fs in x['facts']] for x in arts]
+        r['pool_detail']={f'{k[0]}|{k[1]}':[(k2[0],k2[1],surf.get(k2,k2[1]),cn) for k2,cn in v] for k,v in pools.items()}
+    return r
 def variant(res,mode,lead_tok=350,cap=1500):
     """geometry of a variant: per article the kept sentences (prefix) and token length; targets restricted to occurrences inside"""
     lim=lead_tok if mode=='lead' else cap;V=dict(tok={},kept={})
