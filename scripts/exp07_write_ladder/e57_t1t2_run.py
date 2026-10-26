@@ -76,12 +76,19 @@ def t1t2_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,cw
     rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     raw,ntok,bad=RD.build_rows(rt.tok,new);assert not bad,bad
     forbid=sorted({s for it in items for s in it['variants']+[it['cands'][0]] if len(s)>=4 and not any(ch.isdigit() for ch in s)})       # the forbid list of the bank v1 = the OUT tail of job 261
-    out_tail=R.out_tail_8192(LD,rt.tok,rt.bos,forbid);P_out=rd.packed(raw,out_tail);tail_txt=tk.decode([int(x) for x in out_tail])
+    out_tail=R.out_tail_8192(LD,rt.tok,rt.bos,forbid)
+    GROUP=40;groups=[];o=0                                                          # packs of about 40 items (about the 1300 rows of one pack in job 261); 4551 rows in one pack were never run
+    for g0 in range(0,len(new),GROUP):
+        sub=new[g0:g0+GROUP];nr=sum(len(it['cands']) for it in sub);groups.append((sub,rd.packed(raw[o:o+nr],out_tail)));o+=nr
+    assert o==len(raw),(o,len(raw));tail_txt=tk.decode([int(x) for x in out_tail])
     gold_strings=sorted({s for it in new for s in it['variants']+[it['cands'][0]] if len(s)>=4 and not any(ch.isdigit() for ch in s)});in_tail=[s for s in gold_strings if s in tail_txt]
     lg(f'OUT tail: {len(out_tail)} tokens; sha {hashlib.sha256(np.asarray(out_tail,np.int64).tobytes()).hexdigest()[:16]}; frozen gold / variant strings found inside the tail: {in_tail or "none"}')
     def score(m):
         m32=rd.to_fp32(m)
-        with LD.jax.default_matmul_precision('highest'):return RD.split_scores(np.asarray(P_out.r1(m32)),new)
+        out_=[]
+        with LD.jax.default_matmul_precision('highest'):
+            for sub,P in groups:out_+=RD.split_scores(np.asarray(P.r1(m32)),sub)
+        return out_
     t0=time.monotonic();w0rows=rows_for_state(new,score(rt.base),ntok,'W0');lg(f'  W0 read: {time.monotonic()-t0:.0f}s');allrows=list(w0rows);tim={'W0':time.monotonic()-t0}
     live_dt=inner_dtypes_(LD,rd,rt.base)
     for arm in arms:
