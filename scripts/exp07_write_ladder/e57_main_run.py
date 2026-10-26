@@ -30,7 +30,7 @@ def oracle_masks(ends,ids_all,tk,items,nch,UVm):
     return out
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=None,help='unused (the canary limit was abolished by Hans, E57 section 50); kept for old command lines')
-    ap.add_argument('--stage',default=None);ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap.add_argument('--stage',default=None);ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--pfx-chunks',type=int,default=560);ap.add_argument('--pfx-seg',type=int,default=140);ap.add_argument('--pfx-seg2',type=int,default=70);ap.add_argument('--ctx-chunks',type=int,default=192);ap.add_argument('--seg-chunks',type=int,default=280);ap.add_argument('--pfx-tol',type=float,default=0.02);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     ROOT=HERE.parents[1];import gen_world_ctl as G
     tfile=a.tokenizer or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.StubTok() if a.stub else G.load_enc(tfile)
@@ -56,18 +56,20 @@ def main():
             wp=RD.window_present(items,tk.decode([int(x) for x in ids_all[gwin(n+kk)[0]:gwin(n+kk)[1]]]));print(f'  read chunk {kk} (cycle 2 window): gold of {sum(wp.values())} of {len(items)} questions in the window',flush=True)
     if a.check_only:print('main run check-only OK');return
     out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True)
-    assert a.stage in ('pair','arms','reads'),'--stage pair | arms | reads (separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
+    assert a.stage in ('pfx','pair','arms','reads'),'--stage pair | arms | reads (separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
     import e55_swap as E
     E.ADAM['NATADAMH']=('NAT',0.5,False);E.ARMS.append('NATADAMH')               # BEFORE e55_core is imported (lab() below): IMPLEMENTED / CHUNK_META_ARMS are built from E.ADAM at import
     import e55_run as R,e55_selmask as SM
     LD,s3,C=R.lab();rt=LD.Runtime();can=R.Canary55(LD,rt);lg=lambda *x:print(*x,flush=True)
     cw0=can(rt.base);print('canary W0',cw0,flush=True)
-    if a.stage=='pair':stage_pair(a,out,items,bsrc,iv,hits,shtab,ids,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
+    if a.stage=='pfx':stage_pfx(a,out,items,bsrc,iv,hits,shtab,ids,ids_all,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
+    elif a.stage=='pair':stage_pair(a,out,items,bsrc,iv,hits,shtab,ids,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
     elif a.stage=='arms':stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM)
     else:stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,cw0,lg,can)
 def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM):
     """STAGE 1 (no fp32 reader, no scorers on the GPU): the arms; canary at the end of every cycle; the weights at the end of every cycle are saved (state files of 1.4 GB, e55_core save_state) for stage 2"""
     import e55_uv as UVm
+    install_segmented_prefix(rt,seg_chunks=a.seg_chunks,ctx_chunks=a.ctx_chunks,log=lg)
     ntg=None;ends=UVm.sentence_ends(UVm.tokenizer(tfile),ids_all)
     mfile=out/'e57_main_oracle_masks.npz';ms=oracle_masks(ends,ids_all,tk,items,nch,UVm);np.savez_compressed(mfile,**ms)
     rs_t=None;dummy_meta=[{'sents':[]} for _ in range(nch)];rc={}                                  # rc: ONE record of the natural K,V of the stream (about 400 GiB host for 6 cycles) shared by all arms
@@ -96,6 +98,61 @@ def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,
         fnA.write_text(json.dumps(dict(arm=arm,engine=engine,bank=bsrc,cycles=N,n_chunks=nch,canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,
             update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys') if k_ in e} for e in log],norm_targets=ntg if arm=='NAT' else None,rs_targets=rs_t if arm=='ORC' else None,read_positions_in_cycle=kks,),default=float));print('wrote',fnA,flush=True)
         del L,res;gc.collect();LD.jax.clear_caches()
+def install_segmented_prefix(rt,seg_chunks=280,ctx_chunks=192,log=print):
+    """run_stream computes the prefix (frozen first layers) output of the WHOLE stream in one jitted call: the working memory grows with the stream length (about 46 MB per chunk: 12.9 GiB for 280 chunks, 77 GiB for the 1680 chunks of 6 cycles, which fails). The wrapper computes it in segments of seg_chunks chunks, each with ctx_chunks chunks of preceding context (24 prefix layers x window 8192 tokens = 192 chunks: the largest distance one position can depend on), keeps the segment part, and caches the result for the other arms (it depends on the token ids and the base weights only). RoPE is relative (and computed on the fly, rope_fly), so the segment may start at position 0."""
+    import jax.numpy as jnp
+    orig=rt.prefix;cache={}
+    def seg_prefix(m,seq):
+        T=int(seq.input_ids.shape[0])
+        if T<=(seg_chunks+ctx_chunks)*CH:return orig(m,seq)
+        key=(hashlib.sha256(np.asarray(seq.input_ids).tobytes()).hexdigest(),id(m))
+        if key in cache:log('  prefix output of the stream taken from the cache');return cache[key]
+        outs=[];t0=time.monotonic()
+        for a in range(0,T,seg_chunks*CH):
+            b=min(T,a+seg_chunks*CH);lo=max(0,a-ctx_chunks*CH)
+            sub=type(seq)(input_ids=seq.input_ids[lo:b],target_tokens=seq.target_tokens[lo:b],loss_masks=seq.loss_masks[lo:b]);h=orig(m,sub);outs.append(h[a-lo:b-lo]);del h
+        res=jnp.concatenate(outs,axis=0);del outs;cache.clear();cache[key]=res;log(f'  prefix output of the stream computed in segments of {seg_chunks} chunks (+{ctx_chunks} context): {T//CH} chunks, {time.monotonic()-t0:.0f}s');return res
+    rt.prefix=seg_prefix;rt._orig_prefix=orig;return seg_prefix
+def stage_pfx(a,out,items,bsrc,iv,hits,shtab,ids,ids_all,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R):
+    """EQUIVALENCE CHECK of the segmented prefix (before the long run), two parts, exit 9 if either fails (the criteria are fixed and are not relaxed after seeing the numbers):
+    (1) the prefix output of the first --pfx-chunks (560) chunks in ONE call against the segmented computation with --pfx-seg (140) chunk segments: relative L2 error <= --pfx-tol (0.02);
+    (2) the NAT arm over ONE cycle (280 chunks, fits in one call) is run twice, with the one-call prefix and with the segmented prefix (segments of --pfx-seg2 = 70 chunks + context, so that the segmentation is really used); at the end of the cycle the 84 read rows (OUT 42 + IN 42) and the canary of both weights are compared: cand_lp max abs difference <= --pair-tol (1e-3), no rank changed, canary gen and tail difference <= --pair-tol."""
+    out=pathlib.Path(out);rep={}
+    T=a.pfx_chunks*CH;ids_=ids_all[:T];seq=rt.seq(ids_,mask=np.ones(T,bool));t0=time.monotonic();orig=rt.prefix
+    with rt.mesh:
+        full=np.asarray(orig(rt.base,seq)).astype(np.float32);lg('full prefix computed',full.shape,f'{time.monotonic()-t0:.0f}s')
+        install_segmented_prefix(rt,seg_chunks=a.pfx_seg,ctx_chunks=a.ctx_chunks,log=lg);segd=np.asarray(rt.prefix(rt.base,seq)).astype(np.float32);rt.prefix=orig
+    d=np.abs(full-segd);rel=float(np.linalg.norm(full-segd)/np.linalg.norm(full));mx=float(d.max())
+    per=[float(np.linalg.norm((full-segd)[c*CH:(c+1)*CH])/np.linalg.norm(full[c*CH:(c+1)*CH])) for c in range(0,a.pfx_chunks,max(1,a.pfx_chunks//14))]
+    ok1=rel<=a.pfx_tol;rep['part1_prefix']=dict(chunks=a.pfx_chunks,segment_chunks=a.pfx_seg,context_chunks=a.ctx_chunks,rel_l2=rel,max_abs=mx,rel_l2_by_sampled_chunk=per,tolerance=a.pfx_tol,ok=bool(ok1))
+    del full,segd,d;gc.collect();lg('PFX part 1',json.dumps(rep['part1_prefix']))
+    import e55_gpu as RG
+    rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
+    raw,ntok,bad=RD.build_rows(rt.tok,items);assert not bad,bad
+    forbid=sorted({s for it in items for s in it['variants']+[it['cands'][0]] if len(s)>=4 and not any(ch.isdigit() for ch in s)})
+    out_tail=R.out_tail_8192(LD,rt.tok,rt.bos,forbid);P_out=rd.packed(raw,out_tail)
+    s_,e_=max(0,n*CH-8192),n*CH;P_in=rd.packed(raw,[int(x) for x in ids[s_:e_]]);wp=RD.window_present(items,tk.decode([int(x) for x in ids[s_:e_]]));csa={it['id']:it['q'].get('c_SA') for it in items}
+    def score(P,m):
+        m32=rd.to_fp32(m)
+        with LD.jax.default_matmul_precision('highest'):return RD.split_scores(np.asarray(P.r1(m32)),items)
+    def read(arm,m):
+        rows=RD.log_rows(items,score(P_out,m),ntok,cycle=1,read_chunk=n-1,pos_tokens=n*CH,win=None,arm=arm,condition='OUT',iv=iv,hits=hits,csa=csa,shadow=shtab)
+        rows+=RD.log_rows(items,score(P_in,m),ntok,cycle=1,read_chunk=n-1,pos_tokens=n*CH,win=(s_,e_),arm=arm,condition='IN',iv=iv,hits=hits,winpresent=wp,csa=csa,shadow=shtab);return rows
+    res2={}
+    for tag,seg in (('full',None),('segmented',a.pfx_seg2)):
+        rt.prefix=orig
+        if seg:install_segmented_prefix(rt,seg_chunks=seg,ctx_chunks=a.ctx_chunks,log=lg)
+        got={}
+        def hook(k,m):got['rows']=read('NAT_'+tag,m);got['canary']=can(m);return {'ok':True}
+        L=C.Ladder55(rt,save_dir=out/'states'/f'E57_pfx_{tag}',canary=None);t1=time.monotonic()
+        L.run_stream('NAT',1,ids,nch=n,tag='pfx'+tag,log=lg,read_hook=hook,hook_chunks={n-1});res2[tag]=dict(rows=got['rows'],canary=got['canary'],sec=time.monotonic()-t1);del L;gc.collect();rt.prefix=orig
+    A,B=res2['full'],res2['segmented'];dl=[abs(x-y) for r1,r2 in zip(A['rows'],B['rows']) for x,y in zip(r1['cand_lp'],r2['cand_lp'])];rk=sum(1 for r1,r2 in zip(A['rows'],B['rows']) if (r1['rank_all'],r1['rank_hard'],r1['rank_pool'])!=(r2['rank_all'],r2['rank_hard'],r2['rank_pool']))
+    cd=dict(gen=B['canary']['_gen_nll']-A['canary']['_gen_nll'],tail=B['canary']['_tail_nll']-A['canary']['_tail_nll'])
+    ok2=max(dl)<=a.pair_tol and rk==0 and max(abs(cd['gen']),abs(cd['tail']))<=a.pair_tol
+    rep['part2_nat_one_cycle']=dict(rows=len(A['rows']),max_abs_diff_cand_lp=max(dl),mean_abs_diff_cand_lp=float(np.mean(dl)),rows_with_changed_rank=rk,canary_full=A['canary'],canary_segmented=B['canary'],canary_diff=cd,segment_chunks=a.pfx_seg2,context_chunks=a.ctx_chunks,tolerance=a.pair_tol,ok=bool(ok2),sec_full=A['sec'],sec_segmented=B['sec'])
+    rep['ok']=bool(ok1 and ok2);rep['sec']=time.monotonic()-t0
+    (out/'E57_pfx_check.json').write_text(json.dumps(rep,indent=1,default=float));print('PFX CHECK',json.dumps({k:(v if k!='part2_nat_one_cycle' else {kk:vv for kk,vv in v.items() if not kk.startswith('canary_')}) for k,v in rep.items()},default=float),flush=True)
+    if not rep['ok']:print('segmented prefix check FAILED (exit 9): the differences are reported above; the long run is not started and Hans decides (the criteria are not relaxed)',flush=True);sys.exit(9)
 def inner_dtypes(LD,rd,m):
     """precision of the inner (written) parameters: {dtype: number of leaves} -> the saved weights must have the precision of the training state"""
     import collections as _c
