@@ -90,11 +90,14 @@ def t1t2_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,cw
             for sub,P in groups:out_+=RD.split_scores(np.asarray(P.r1(m32)),sub)
         return out_
     t0=time.monotonic();w0rows=rows_for_state(new,score(rt.base),ntok,'W0');lg(f'  W0 read: {time.monotonic()-t0:.0f}s');allrows=list(w0rows);tim={'W0':time.monotonic()-t0}
+    pathlib.Path(out).mkdir(parents=True,exist_ok=True);part=pathlib.Path(out)/'E57_t1t2_scores_partial.json'
+    def save_partial():part.write_text(json.dumps(dict(done=sorted({r['state'] for r in allrows}),rows=allrows),default=float))
+    save_partial()
     live_dt=inner_dtypes_(LD,rd,rt.base)
     for arm in arms:
         s=man[arm];f=pathlib.Path(F['state_dir'])/pathlib.Path(s['file']).name if F['state_dir'] else pathlib.Path(s['file'])
-        t0=time.monotonic();m=rd.load_state(str(f),expect_hash=s['hash']);dt=inner_dtypes_(LD,rd,m);assert dt==live_dt,('saved weights have another precision than the training state',dt,live_dt)
-        allrows+=rows_for_state(new,score(m),ntok,arm,w0=w0rows);del m;tim[arm]=time.monotonic()-t0;lg(f'  {arm} (end of cycle 1) read: {tim[arm]:.0f}s')
+        lg(f'  {arm}: loading {f} ...');t0=time.monotonic();m=rd.load_state(str(f),expect_hash=s['hash']);lg(f'  {arm}: state loaded and hash checked in {time.monotonic()-t0:.0f}s');dt=inner_dtypes_(LD,rd,m);assert dt==live_dt,('saved weights have another precision than the training state',dt,live_dt)
+        allrows+=rows_for_state(new,score(m),ntok,arm,w0=w0rows);del m;tim[arm]=time.monotonic()-t0;save_partial();lg(f'  {arm} (end of cycle 1) read: {tim[arm]:.0f}s (partial rows saved)')
     meta=dict(frozen_sha256=frozen['sha256'],draft_version=frozen.get('draft_version'),bank_v1_sha256=frozen['bank_v1_sha256'],states={k:v['hash'] for k,v in man.items()},context='OUT (8192-token SQuAD tail of job 261)',out_tail_gold_strings_inside=in_tail,primary_score='cand_mean = cand_lp / cand_ntok (gold against gold+easy+nominated hard)',n_items=len(new),timings=tim,saved_weights_precision=live_dt)
     pathlib.Path(out).mkdir(parents=True,exist_ok=True);(pathlib.Path(out)/'E57_t1t2_scores.json').write_text(json.dumps(dict(meta=meta,rows=allrows),default=float))
     kn=key_numbers(allrows,meta);(pathlib.Path(out)/'E57_t1t2_score_keys.json').write_text(json.dumps(kn,indent=1,default=float));lg('wrote E57_t1t2_scores.json and E57_t1t2_score_keys.json');lg(json.dumps({s:{g:(v['n'],round(v['acc_all_mean'],3)) for g,v in d.items()} for s,d in kn['states'].items()}))
