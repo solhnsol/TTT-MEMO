@@ -20,6 +20,14 @@ def run(d):
     for a,v in files.items():
         if a=='W0':L.append(f"- W0: canary {v['canary_w0']}")
         else:L.append(f"- {a}: run chunks {v['run_chunks']} of {v['n_chunks']}, update_norm mean {mean([e['update_norm'] for e in v['update_log']]):.3g}, sec {v['sec_total']:.0f}")
+    pf=d/'E57_pfx_check.json'
+    if pf.exists():
+        P=json.load(open(pf));p1=P['part1_prefix'];p2=P['part2_nat_one_cycle']
+        L+=['','## segmented prefix (reference method, E57 section 53): measured deviation from the one-call prefix (job 259, recorded)','',
+            f"- The prefix output of the stream is computed in segments of 280 chunks with 192 chunks of context (the reference method of this run; closer to chunk-wise TTT use than one call over the whole stream).",
+            f"- Part 1 (560 chunks, one call vs 140-chunk segments): relative L2 {p1['rel_l2']:.4f}, max abs {p1['max_abs']:.2f}; per sampled chunk (every 40th): {', '.join(f'{x:.4f}' for x in p1['rel_l2_by_sampled_chunk'])}. Original criterion (<= {p1['tolerance']}): NOT PASSED. The 20% at chunk 400 and 3% at chunk 520 are not explained (to be examined separately).",
+            f"- Part 2 (NAT, one cycle, one-call vs segmented 70-chunk segments, {p2['rows']} read rows): max |delta cand_lp| {p2['max_abs_diff_cand_lp']:.4f}, mean {p2['mean_abs_diff_cand_lp']:.4f}, rows with changed rank {p2['rows_with_changed_rank']}, canary difference gen {p2['canary_diff']['gen']:+.2e} tail {p2['canary_diff']['tail']:+.2e}. Original criteria (cand_lp <= {p2['tolerance']}, no rank change, canary <= {p2['tolerance']}): NOT PASSED on cand_lp; rank and canary passed.",
+            "- Original criteria not passed; WAIVED by Hans (2026-10-26 08:28Z). Replacement stop condition (E57 section 53): more than 4 of the 84 rows changed rank or a canary difference above 0.01: not met."]
     L+=['','## canary at the end of every cycle (NLL, rise over W0, perplexity ratio = exp(rise))','','| arm | chunk | cycle | gen NLL | gen rise | gen ppl ratio | tail NLL | tail rise | tail ppl ratio |','|---|---|---|---|---|---|---|---|---|']
     import math
     w0=files['W0']['canary_w0'] if 'W0' in files else None
