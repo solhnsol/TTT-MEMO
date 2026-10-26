@@ -16,7 +16,7 @@ def groups(rows):
 def run(d):
     d=pathlib.Path(d);files={a:json.load(open(d/f'E57_main_{a}.json')) for a in ('W0','NAT','NATADAMH','ORC','RAND') if (d/f'E57_main_{a}.json').exists()}
     rows=[r for v in files.values() for r in v['rows']];first_over={a:v.get('first_chunk_over_canary_limit') for a,v in files.items() if a!='W0'}
-    for r in rows:r['explore']=bool(r['cycle']>0 and first_over.get(r['arm']) is not None and r['read_chunk']>first_over[r['arm']])      # read AFTER the canary limit: exploratory, kept apart
+    for r in rows:r['explore']=bool(r['cycle']>0 and first_over.get(r['arm']) is not None and r['read_chunk']>=first_over[r['arm']])      # E57 section 47: the canary is measured at the end of every cycle; a cycle whose end canary rise is above the limit (and every later cycle) is exploratory, kept apart
     L=['# E57 main run report (counts and means only; first observation, 42 questions, 10 events, no inference)','']
     for a,v in files.items():
         if a=='W0':L.append(f"- W0: canary {v['canary_w0']}")
@@ -29,7 +29,7 @@ def run(d):
     res={}
     for excl in (False,True):
         sel=[r for r in rows if not (excl and r['question'] in EXCL)];tag='without may-person-01 / may-person-03' if excl else 'all 42 questions'
-        L+=['',f'## metrics per arm / cycle / read position ({tag})','','| arm | cycle | read chunk in cycle | after canary limit (exploratory) | condition | n | acc all | rank ratio all | acc hard | rank ratio hard | rank ratio pool | mean n_k | mean shadow |','|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+        L+=['',f'## metrics per arm / cycle / read position ({tag})','','| arm | cycle | read chunk in cycle | cycle end canary over +0.10 (exploratory) | condition | n | acc all | rank ratio all | acc hard | rank ratio hard | rank ratio pool | mean n_k | mean shadow |','|---|---|---|---|---|---|---|---|---|---|---|---|---|']
         g=groups(sel);res[tag]={}
         for key in sorted(g,key=lambda k:(k[0]!='W0',k[0],k[1],k[2],k[3])):
             conds=[(key[3],g[key])]
