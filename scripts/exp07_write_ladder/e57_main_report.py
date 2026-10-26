@@ -29,7 +29,7 @@ def run(d):
     res={}
     for excl in (False,True):
         sel=[r for r in rows if not (excl and r['question'] in EXCL)];tag='without may-person-01 / may-person-03' if excl else 'all 42 questions'
-        L+=['',f'## metrics per arm / cycle / read position ({tag})','','| arm | cycle | read chunk in cycle | condition | n | acc all | rank ratio all | acc hard | rank ratio hard | rank ratio pool | mean n_k | mean shadow |','|---|---|---|---|---|---|---|---|---|---|---|---|']
+        L+=['',f'## metrics per arm / cycle / read position ({tag})','','| arm | cycle | read at stream chunk | condition | n | acc all | rank ratio all | acc hard | rank ratio hard | rank ratio pool | mean n_k | mean shadow |','|---|---|---|---|---|---|---|---|---|---|---|---|']
         g=groups(sel);res[tag]={}
         for key in sorted(g,key=lambda k:(k[0]!='W0',k[0],k[1],k[2],k[3])):
             conds=[(key[3],g[key])]
@@ -37,7 +37,7 @@ def run(d):
             for cname,rr in conds:
                 m=agg(rr)
                 if m is None:continue
-                L.append(f"| {key[0]} | {key[1]} | {key[2]} | {cname} | {m['n']} | {f(m['acc_all'])} | {f(m['rr_all'])} | {f(m['acc_hard'])} | {f(m['rr_hard'])} | {f(m['rr_pool'])} | {f(m['n_k'])} | {f(m['shadow'])} |")
+                L.append(f"| {key[0]} | {key[1]} | {key[2]-280 if key[1]>0 else key[2]} | {cname} | {m['n']} | {f(m['acc_all'])} | {f(m['rr_all'])} | {f(m['acc_hard'])} | {f(m['rr_hard'])} | {f(m['rr_pool'])} | {f(m['n_k'])} | {f(m['shadow'])} |")
                 res[tag][f'{key[0]}|{key[1]}|{key[2]}|{cname}']=m
         # end-of-cycle paired differences to NAT and to W0 (by question)
         L+=['',f'### reads at the end of each cycle: paired differences ({tag}); positive acc / negative rank ratio = better than the reference','','| arm | cycle | primary (last cycle) | condition | vs | mean diff acc all | mean diff rank ratio all | mean diff acc hard | mean diff rank ratio hard |','|---|---|---|---|---|---|---|---|---|']

@@ -29,7 +29,7 @@ def oracle_masks(ends,ids_all,tk,items,nch,UVm):
         out[f'h1_{k}']=hid;out[f'wlen{k}']=np.asarray(wlen,np.int32)
     return out
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=None,help='unused (the canary limit was abolished by Hans, E57 section 50); kept for old command lines')
+    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--read-at',default=None,help='comma list of in-cycle chunk indices of the reads (overrides --npos), e.g. 7,15,32,65,131,279');ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=None,help='unused (the canary limit was abolished by Hans, E57 section 50); kept for old command lines')
     ap.add_argument('--stage',default=None);ap.add_argument('--smoke',type=int,default=12,help='stage arms: chunks of the inline smoke run of every arm engine before the real arms (0 = none)');ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--pfx-chunks',type=int,default=560);ap.add_argument('--pfx-seg',type=int,default=140);ap.add_argument('--pfx-seg2',type=int,default=70);ap.add_argument('--ctx-chunks',type=int,default=192);ap.add_argument('--seg-chunks',type=int,default=280);ap.add_argument('--pfx-tol',type=float,default=0.02);ap.add_argument('--noise-factor',type=float,default=2.0);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     ROOT=HERE.parents[1];import gen_world_ctl as G
@@ -40,7 +40,7 @@ def main():
     else:
         assert a.check_only,f'frozen bank {bank} missing (exit 7)';out0=pathlib.Path(a.out);out0.mkdir(parents=True,exist_ok=True);tmp=out0/'_pseudo_bank.json';tmp.write_text(json.dumps(TR.pseudo_bank(a.bundle)));items=RD.load_items(tmp);bsrc='PSEUDO (check only)'
     ids,iv,hits=RD.article_intervals(a.bundle,enc,items);n=len(ids)//CH;N=a.cycles;nch=N*n;shtab=RD.shadow_table(iv,hits,n*CH);ids_all=np.tile(ids,N)
-    kks=read_positions(n,a.npos);assert min(kks)>=NW-1,kks;rch=sorted(c*n+kk for c in range(N) for kk in kks);cpos=read_positions(n,a.canary_npos);cch=sorted(set(rch)|{c*n+kk for c in range(N) for kk in cpos})
+    kks=[int(x) for x in a.read_at.split(',')] if a.read_at else read_positions(n,a.npos);assert min(kks)>=NW-1,kks;rch=sorted(c*n+kk for c in range(N) for kk in kks);cpos=read_positions(n,a.canary_npos);cch=sorted(set(rch)|{c*n+kk for c in range(N) for kk in cpos})
     arms=a.arms.split(',');assert all(x in ARMS_ALL for x in arms),arms
     from tokenizers import Tokenizer;tk=None if a.stub else Tokenizer.from_file(tfile)
     print(f'bank {bsrc}: {len(items)} questions; stream {n} chunks x {N} cycles = {nch}; read positions in a cycle (chunk): {kks}; arms {arms}; ids sha {hashlib.sha256(ids.tobytes()).hexdigest()[:16]}',flush=True)
@@ -274,8 +274,9 @@ def stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,c
         m32=rd.to_fp32(m)
         with LD.jax.default_matmul_precision('highest'):return RD.split_scores(np.asarray(P.r1(m32)),items)
     csa={it['id']:it['q'].get('c_SA') for it in items}
+    ids2=np.tile(ids,2)                                                                 # the IN window of a read at chunk kk is taken from the second copy of the stream (equal to ids_all for cycles >= 2; valid also for a one-cycle run)
     def pin(kk):
-        if kk not in P_in:s_,e_=gwin(n+kk);P_in[kk]=(rd.packed(raw,[int(x) for x in ids_all[s_:e_]]),RD.window_present(items,tk.decode([int(x) for x in ids_all[s_:e_]])),(s_,e_))
+        if kk not in P_in:s_,e_=gwin(n+kk);P_in[kk]=(rd.packed(raw,[int(x) for x in ids2[s_:e_]]),RD.window_present(items,tk.decode([int(x) for x in ids2[s_:e_]])),(s_,e_))
         return P_in[kk]
     def read(arm,cycle,kk,m,store):
         t0=time.monotonic();pos=(kk+1)*CH
