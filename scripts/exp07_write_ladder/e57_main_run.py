@@ -30,7 +30,7 @@ def oracle_masks(ends,ids_all,tk,items,nch,UVm):
     return out
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=None,help='unused (the canary limit was abolished by Hans, E57 section 50); kept for old command lines')
-    ap.add_argument('--stage',default=None);ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap.add_argument('--stage',default=None);ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--pfx-chunks',type=int,default=560);ap.add_argument('--pfx-seg',type=int,default=140);ap.add_argument('--ctx-chunks',type=int,default=192);ap.add_argument('--seg-chunks',type=int,default=280);ap.add_argument('--pfx-tol',type=float,default=0.02);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     ROOT=HERE.parents[1];import gen_world_ctl as G
     tfile=a.tokenizer or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.StubTok() if a.stub else G.load_enc(tfile)
@@ -56,18 +56,20 @@ def main():
             wp=RD.window_present(items,tk.decode([int(x) for x in ids_all[gwin(n+kk)[0]:gwin(n+kk)[1]]]));print(f'  read chunk {kk} (cycle 2 window): gold of {sum(wp.values())} of {len(items)} questions in the window',flush=True)
     if a.check_only:print('main run check-only OK');return
     out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True)
-    assert a.stage in ('pair','arms','reads'),'--stage pair | arms | reads (separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
+    assert a.stage in ('pfx','pair','arms','reads'),'--stage pair | arms | reads (separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
     import e55_swap as E
     E.ADAM['NATADAMH']=('NAT',0.5,False);E.ARMS.append('NATADAMH')               # BEFORE e55_core is imported (lab() below): IMPLEMENTED / CHUNK_META_ARMS are built from E.ADAM at import
     import e55_run as R,e55_selmask as SM
     LD,s3,C=R.lab();rt=LD.Runtime();can=R.Canary55(LD,rt);lg=lambda *x:print(*x,flush=True)
     cw0=can(rt.base);print('canary W0',cw0,flush=True)
-    if a.stage=='pair':stage_pair(a,out,items,bsrc,iv,hits,shtab,ids,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
+    if a.stage=='pfx':stage_pfx(a,out,ids_all,n,nch,LD,rt,lg)
+    elif a.stage=='pair':stage_pair(a,out,items,bsrc,iv,hits,shtab,ids,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
     elif a.stage=='arms':stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM)
     else:stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,cw0,lg,can)
 def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM):
     """STAGE 1 (no fp32 reader, no scorers on the GPU): the arms; canary at the end of every cycle; the weights at the end of every cycle are saved (state files of 1.4 GB, e55_core save_state) for stage 2"""
     import e55_uv as UVm
+    install_segmented_prefix(rt,seg_chunks=a.seg_chunks,ctx_chunks=a.ctx_chunks,log=lg)
     ntg=None;ends=UVm.sentence_ends(UVm.tokenizer(tfile),ids_all)
     mfile=out/'e57_main_oracle_masks.npz';ms=oracle_masks(ends,ids_all,tk,items,nch,UVm);np.savez_compressed(mfile,**ms)
     rs_t=None;dummy_meta=[{'sents':[]} for _ in range(nch)];rc={}                                  # rc: ONE record of the natural K,V of the stream (about 400 GiB host for 6 cycles) shared by all arms
@@ -96,6 +98,33 @@ def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,
         fnA.write_text(json.dumps(dict(arm=arm,engine=engine,bank=bsrc,cycles=N,n_chunks=nch,canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,
             update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys') if k_ in e} for e in log],norm_targets=ntg if arm=='NAT' else None,rs_targets=rs_t if arm=='ORC' else None,read_positions_in_cycle=kks,),default=float));print('wrote',fnA,flush=True)
         del L,res;gc.collect();LD.jax.clear_caches()
+def install_segmented_prefix(rt,seg_chunks=280,ctx_chunks=192,log=print):
+    """run_stream computes the prefix (frozen first layers) output of the WHOLE stream in one jitted call: the working memory grows with the stream length (about 46 MB per chunk: 12.9 GiB for 280 chunks, 77 GiB for the 1680 chunks of 6 cycles, which fails). The wrapper computes it in segments of seg_chunks chunks, each with ctx_chunks chunks of preceding context (24 prefix layers x window 8192 tokens = 192 chunks: the largest distance one position can depend on), keeps the segment part, and caches the result for the other arms (it depends on the token ids and the base weights only). RoPE is relative (and computed on the fly, rope_fly), so the segment may start at position 0."""
+    import jax.numpy as jnp
+    orig=rt.prefix;cache={}
+    def seg_prefix(m,seq):
+        T=int(seq.input_ids.shape[0])
+        if T<=(seg_chunks+ctx_chunks)*CH:return orig(m,seq)
+        key=(hashlib.sha256(np.asarray(seq.input_ids).tobytes()).hexdigest(),id(m))
+        if key in cache:log('  prefix output of the stream taken from the cache');return cache[key]
+        outs=[];t0=time.monotonic()
+        for a in range(0,T,seg_chunks*CH):
+            b=min(T,a+seg_chunks*CH);lo=max(0,a-ctx_chunks*CH)
+            sub=type(seq)(input_ids=seq.input_ids[lo:b],target_tokens=seq.target_tokens[lo:b],loss_masks=seq.loss_masks[lo:b]);h=orig(m,sub);outs.append(h[a-lo:b-lo]);del h
+        res=jnp.concatenate(outs,axis=0);del outs;cache.clear();cache[key]=res;log(f'  prefix output of the stream computed in segments of {seg_chunks} chunks (+{ctx_chunks} context): {T//CH} chunks, {time.monotonic()-t0:.0f}s');return res
+    rt.prefix=seg_prefix;rt._orig_prefix=orig;return seg_prefix
+def stage_pfx(a,out,ids_all,n,nch,LD,rt,lg):
+    """EQUIVALENCE CHECK of the segmented prefix (cheap, before the long run): the prefix output of the first --pfx-chunks chunks of the stream computed in ONE call (fits: about 26 GiB for 560 chunks) against the segmented computation with a small segment size (several segments with context); relative L2 error and max abs difference must be <= --pfx-tol. Exit 9 otherwise."""
+    import jax.numpy as jnp
+    T=a.pfx_chunks*CH;ids=ids_all[:T];seq=rt.seq(ids,mask=np.ones(T,bool));t0=time.monotonic()
+    with rt.mesh:
+        full=np.asarray(rt.prefix(rt.base,seq)).astype(np.float32);lg('full prefix computed',full.shape,f'{time.monotonic()-t0:.0f}s')
+        install_segmented_prefix(rt,seg_chunks=a.pfx_seg,ctx_chunks=a.ctx_chunks,log=lg);seg=np.asarray(rt.prefix(rt.base,seq)).astype(np.float32)
+    d=np.abs(full-seg);rel=float(np.linalg.norm(full-seg)/np.linalg.norm(full));mx=float(d.max())
+    per=[float(np.linalg.norm((full-seg)[c*CH:(c+1)*CH])/np.linalg.norm(full[c*CH:(c+1)*CH])) for c in range(0,a.pfx_chunks,max(1,a.pfx_chunks//14))]
+    ok=rel<=a.pfx_tol;rep=dict(chunks=a.pfx_chunks,segment_chunks=a.pfx_seg,context_chunks=a.ctx_chunks,rel_l2=rel,max_abs=mx,rel_l2_by_sampled_chunk=per,tolerance=a.pfx_tol,ok=bool(ok),sec=time.monotonic()-t0)
+    (out/'E57_pfx_check.json').write_text(json.dumps(rep,indent=1));print('PFX CHECK',json.dumps(rep),flush=True)
+    if not ok:print('segmented prefix check FAILED (exit 9)',flush=True);sys.exit(9)
 def inner_dtypes(LD,rd,m):
     """precision of the inner (written) parameters: {dtype: number of leaves} -> the saved weights must have the precision of the training state"""
     import collections as _c
