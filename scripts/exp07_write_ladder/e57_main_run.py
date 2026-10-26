@@ -29,7 +29,7 @@ def oracle_masks(ends,ids_all,tk,items,nch,UVm):
         out[f'h1_{k}']=hid;out[f'wlen{k}']=np.asarray(wlen,np.int32)
     return out
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--read-at',default=None,help='comma list of in-cycle chunk indices of the reads (overrides --npos), e.g. 7,15,32,65,131,279');ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=None,help='unused (the canary limit was abolished by Hans, E57 section 50); kept for old command lines')
+    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--mask-pos',default='39,79,119,159,199,239,279',help='stage w0mask: in-cycle chunk indices of the windows');ap.add_argument('--mask-seeds',type=int,default=2,help='stage w0mask: random-deletion controls per window');ap.add_argument('--read-at',default=None,help='comma list of in-cycle chunk indices of the reads (overrides --npos), e.g. 7,15,32,65,131,279');ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=None,help='unused (the canary limit was abolished by Hans, E57 section 50); kept for old command lines')
     ap.add_argument('--stage',default=None);ap.add_argument('--smoke',type=int,default=12,help='stage arms: chunks of the inline smoke run of every arm engine before the real arms (0 = none)');ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--pfx-chunks',type=int,default=560);ap.add_argument('--pfx-seg',type=int,default=140);ap.add_argument('--pfx-seg2',type=int,default=70);ap.add_argument('--ctx-chunks',type=int,default=192);ap.add_argument('--seg-chunks',type=int,default=280);ap.add_argument('--pfx-tol',type=float,default=0.02);ap.add_argument('--noise-factor',type=float,default=2.0);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     ROOT=HERE.parents[1];import gen_world_ctl as G
@@ -54,9 +54,11 @@ def main():
         print(f'oracle answer mask: hidden window tokens at sampled chunks {hid_tok} (of ~8192)',flush=True)
         for kk in kks[:2]+kks[-1:]:
             wp=RD.window_present(items,tk.decode([int(x) for x in np.tile(ids,2)[gwin(n+kk)[0]:gwin(n+kk)[1]]]));print(f'  read chunk {kk} (cycle 2 window): gold of {sum(wp.values())} of {len(items)} questions in the window',flush=True)
+    if a.check_only and tk is not None:
+        pl=w0mask_plan(items,ids,iv,tk,tfile,[int(x) for x in a.mask_pos.split(',')],a.mask_seeds);print('w0mask plan:',json.dumps(pl['summary']),flush=True)
     if a.check_only:print('main run check-only OK');return
     out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True)
-    assert a.stage in ('pfx','noise','pair','arms','reads'),'--stage pair | arms | reads (separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
+    assert a.stage in ('pfx','noise','pair','arms','reads','w0mask'),'--stage pair | arms | reads (separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
     import e55_swap as E
     E.ADAM['NATADAMH']=('NAT',0.5,False);E.ARMS.append('NATADAMH')               # BEFORE e55_core is imported (lab() below): IMPLEMENTED / CHUNK_META_ARMS are built from E.ADAM at import
     import e55_run as R,e55_selmask as SM
@@ -66,6 +68,7 @@ def main():
     elif a.stage=='noise':stage_noise(a,out,items,bsrc,iv,hits,shtab,ids,ids_all,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
     elif a.stage=='pair':stage_pair(a,out,items,bsrc,iv,hits,shtab,ids,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
     elif a.stage=='arms':stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM)
+    elif a.stage=='w0mask':stage_w0mask(a,out,items,bsrc,iv,hits,ids,n,tk,tfile,LD,rt,R,cw0,lg)
     else:stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,cw0,lg,can)
 def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM):
     """STAGE 1 (no fp32 reader, no scorers on the GPU): the arms; canary at the end of every cycle; the weights at the end of every cycle are saved (state files of 1.4 GB, e55_core save_state) for stage 2"""
@@ -274,7 +277,7 @@ def stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,c
         m32=rd.to_fp32(m)
         with LD.jax.default_matmul_precision('highest'):return RD.split_scores(np.asarray(P.r1(m32)),items)
     csa={it['id']:it['q'].get('c_SA') for it in items}
-    ids2=np.tile(ids,2)                                                                 # the IN window of a read at chunk kk is taken from the second copy of the stream (equal to ids_all for cycles >= 2; valid also for a one-cycle run)
+    ids2=np.tile(ids_all[:n*CH],2)                                                      # the IN window of a read at chunk kk is taken from the second copy of the stream (equal to ids_all for cycles >= 2; valid also for a one-cycle run)
     def pin(kk):
         if kk not in P_in:s_,e_=gwin(n+kk);P_in[kk]=(rd.packed(raw,[int(x) for x in ids2[s_:e_]]),RD.window_present(items,tk.decode([int(x) for x in ids2[s_:e_]])),(s_,e_))
         return P_in[kk]
@@ -300,6 +303,54 @@ def stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,c
             cs=can(m);c1=by_chunk.get(k);can_chk.append(dict(chunk=k,canary_from_saved=cs,canary_in_run=c1,diff_gen=None if c1 is None else cs['_gen_nll']-c1['_gen_nll'],diff_tail=None if c1 is None else cs['_tail_nll']-c1['_tail_nll']))
             tim[k]=read(arm,cyc,kk,m,rows);del m;lg(f'  {arm} read at the end of cycle {cyc} (chunk {k}): {tim[k]:.0f}s; canary from the saved weights vs in the run: {can_chk[-1]["diff_gen"]},{can_chk[-1]["diff_tail"]}')
         fnF.write_text(json.dumps(dict(arm=arm,engine=A['engine'],bank=bsrc,cycles=A['cycles'],n_chunks=A['n_chunks'],run_chunks=A['n_chunks'],canary_w0=cw0,trajectory=A['trajectory'],rows=rows,timings={str(k):v for k,v in tim.items()},sec_total=A['sec_total'],update_log=A['update_log'],read_positions_in_cycle=A['read_positions_in_cycle'],canary_saved_vs_run=can_chk,saved_weights_precision=live_dt),default=float));print('wrote',fnF,len(rows),'rows',flush=True)
+def w0mask_plan(items,ids,iv,tk,tfile,positions,seeds):
+    """windows of the W0 masked-window read (CPU): per position kk (window = the 8192 tokens before the end of chunk kk) FULL; DELORC = the last 8192 tokens that remain after the sentence fragments hidden by the ORACLE answer mask rule (fragment = sentence piece inside one chunk, hidden when it holds the gold of ANY bank question) are deleted (the window reaches back to earlier chunks until 8192 tokens are kept); DELRND<j> = the same with the same number of deleted tokens taken from random fragments of the same region (seed (RS_SEED + j, kk), overshoot < one fragment). Per question the PRIMARY window = the position whose FULL window holds the most tokens of articles of the question's own event (ties: the later position)."""
+    import e55_uv as UVm,e57_bank as B
+    n=len(ids)//CH;ends=UVm.sentence_ends(UVm.tokenizer(tfile),ids[:n*CH]);fr=[]
+    for c in range(n):
+        for s_,e_ in UVm.chunk_sents(ends,c,CH):fr.append((c*CH+s_,e_-s_))
+    fst=np.array([f[0] for f in fr]);fln=np.array([f[1] for f in fr]);ms=[B.ans_matcher(it['q'])[0] for it in items];hidden=np.zeros(len(fr),bool)
+    for i,(st,ln) in enumerate(fr):
+        txt=tk.decode([int(x) for x in ids[st:st+ln]]);hidden[i]=any(m(txt) for m in ms)
+    def build(kk,hid):
+        e=(kk+1)*CH;hi=int(np.searchsorted(fst+fln,e,side='right'));tot=0;j=hi-1;pieces=[]
+        while j>=0 and tot<8192:
+            if not hid[j]:pieces.append(j);tot+=int(fln[j])
+            j-=1
+        assert tot>=8192,('window cannot be filled',kk,tot)
+        seq=np.concatenate([ids[fst[q]:fst[q]+fln[q]] for q in reversed(pieces)])[-8192:]
+        return [int(x) for x in seq],j+1,hi
+    wins={};summ={'n_fragments':len(fr),'hidden_fragments':int(hidden.sum()),'hidden_token_share_of_stream':float(fln[hidden].sum()/fln.sum()),'positions':{}}
+    own={}
+    for kk in positions:
+        e=(kk+1)*CH;full=[int(x) for x in ids[e-8192:e]];o,j0,hi=build(kk,hidden);H=int(fln[j0:hi][hidden[j0:hi]].sum());d={'IN_FULL':(full,(e-8192,e)),'IN_DELORC':(o,(int(fst[j0]),e))}
+        for j in range(seeds):
+            hr=np.zeros(len(fr),bool);hr[j0:hi]=UVm.rands_hidden(fln[j0:hi],H,kk,UVm.RS_SEED+j);r,rj0,_=build(kk,hr);d[f'IN_DELRND{j}']=(r,(int(fst[rj0]),e))
+        wins[kk]=d;summ['positions'][kk]={'hidden_tokens_in_region':H,'region_start_chunk':float(fst[j0]/CH),'lens':{k_:len(v[0]) for k_,v in d.items()}}
+        for q,it in enumerate(items):own[(q,kk)]=sum(max(0,min(e,b)-max(e-8192,a0)) for a0,b,ev,rid in iv if ev==it['event'])
+    primary={it['id']:max(positions,key=lambda kk:(own[(q,kk)],kk)) for q,it in enumerate(items)}
+    summ['primary_position_counts']={str(kk):sum(1 for v in primary.values() if v==kk) for kk in positions};summ['questions_without_own_tokens_in_any_window']=[it['id'] for q,it in enumerate(items) if max(own[(q,kk)] for kk in positions)==0]
+    return dict(windows=wins,own=own,primary=primary,summary=summ)
+def stage_w0mask(a,out,items,bsrc,iv,hits,ids,n,tk,tfile,LD,rt,R,cw0,lg):
+    """W0 masked-window read (E57 section 62; no writing): W0 reads the frozen bank with IN windows FULL / DELORC / DELRND<j> at the positions --mask-pos, plus the neutral OUT tail. Same scorer, same candidate rows as the main reads."""
+    import e55_gpu as RG
+    pos=[int(x) for x in a.mask_pos.split(',')];pl=w0mask_plan(items,ids,iv,tk,tfile,pos,a.mask_seeds);lg('w0mask plan:',json.dumps(pl['summary']))
+    rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
+    raw,ntok,bad=RD.build_rows(rt.tok,items);assert not bad,bad
+    forbid=sorted({s for it in items for s in it['variants']+[it['cands'][0]] if len(s)>=4 and not any(ch.isdigit() for ch in s)})
+    out_tail=R.out_tail_8192(LD,rt.tok,rt.bos,forbid);P_out=rd.packed(raw,out_tail)
+    def score(P,m):
+        m32=rd.to_fp32(m)
+        with LD.jax.default_matmul_precision('highest'):return RD.split_scores(np.asarray(P.r1(m32)),items)
+    csa={it['id']:it['q'].get('c_SA') for it in items};rows=[];tim={};t0=time.monotonic()
+    rows+=RD.log_rows(items,score(P_out,rt.base),ntok,cycle=0,read_chunk=0,pos_tokens=0,win=None,arm='W0',condition='OUT',iv=iv,hits=hits,csa=csa,shadow=None);tim['OUT']=time.monotonic()-t0
+    for kk in pos:
+        for cond,(seq,(s_,e_)) in pl['windows'][kk].items():
+            t0=time.monotonic();P=rd.packed(raw,seq);wp=RD.window_present(items,tk.decode(seq))
+            rr=RD.log_rows(items,score(P,rt.base),ntok,cycle=0,read_chunk=kk,pos_tokens=(kk+1)*CH,win=(s_,e_),arm='W0',condition=cond,iv=iv,hits=hits,winpresent=wp,csa=csa,shadow=None)
+            for r in rr:r['own_event_tokens_in_full_window']=pl['own'][([x['id'] for x in items].index(r['question']),kk)];r['primary_position']=bool(pl['primary'][r['question']]==kk)
+            rows+=rr;tim[f'{cond}@{kk}']=time.monotonic()-t0;lg(f'  W0 {cond} at chunk {kk}: {tim[f"{cond}@{kk}"]:.0f}s; gold string present in {sum(wp.values())} of {len(items)} windows')
+    (out/'E57_w0mask.json').write_text(json.dumps(dict(arm='W0',bank=bsrc,canary_w0=cw0,positions=pos,summary=pl['summary'],primary=pl['primary'],rows=rows,timings=tim),default=float));lg('wrote',out/'E57_w0mask.json')
 def selftest():
     rng=np.random.default_rng(0);x=rng.standard_normal((5,2,16)).astype(np.float32)
     def rope(x,p,th=500000.0):
