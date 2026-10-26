@@ -40,7 +40,7 @@ def partial_rx(q):
         elif len(w)==1:out['single_word']=re.compile(r'(?<![\w])'+re.escape(w[0])+r'(?![\w])',re.I)
     return out
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--w0mask');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--tokenizer');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--w0mask');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--tokenizer');ap.add_argument('--variant',default='orc',help='mask variant of e57_orc2: orc (261 rule, default) | v1 | v2 | v2p');a=ap.parse_args()
     import gen_world_ctl as G,e55_uv as UVm,e57_reads as RD,e57_bank as B
     from tokenizers import Tokenizer
     tf=a.tokenizer or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.load_enc(tf);tk=Tokenizer.from_file(tf)
@@ -51,6 +51,9 @@ def main():
         for s_,e_ in UVm.chunk_sents(ends,c,CH):fr.append((c,c*CH+s_,e_-s_))
     fst=np.array([f[1] for f in fr]);fln=np.array([f[2] for f in fr]);fch=np.array([f[0] for f in fr]);ms=[B.ans_matcher(it['q'])[0] for it in items];txt=[tk.decode([int(x) for x in ids[s:s+l]]) for _,s,l in fr]
     hidden=np.array([any(m(t) for m in ms) for t in txt])
+    if a.variant!='orc':
+        import e57_orc2 as O2
+        bd=O2.build(a.variant,ids,tk,tf,items,iv,UVm,B);fr=bd['fr'];fst=np.array([f[1] for f in fr]);fln=np.array([f[2] for f in fr]);fch=np.array([f[0] for f in fr]);txt=bd['txt'];hidden=bd['hidden'];ends=bd['ends']
     art_starts=[x[0] for x in iv];art_event=[x[2] for x in iv]
     E,idx=B.load(a.bundle);ev_dates={}
     for ev,Ev in E.items():
