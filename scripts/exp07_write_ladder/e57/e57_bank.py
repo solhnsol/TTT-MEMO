@@ -63,12 +63,12 @@ def slug(nm):return re.sub(r'[^A-Za-z0-9]+','_',nm).strip('_')[:60]
 def jhash(o):return hashlib.sha256(json.dumps(o,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 # ---------- A packet ----------
 EXCLUDE_DEFAULT=('Kärcher','Karcher','Umar Khalid')       # agreed with the news thread 2026-10-24: mixed appliance-sale cluster; no targets (c_SA 0)
-def packet(out,n=NPACK,log=print,exclude=EXCLUDE_DEFAULT,eth_off=False):
+def packet(out,n=NPACK,log=print,exclude=EXCLUDE_DEFAULT):
     st,idx=load(out);pd=pathlib.Path(out)/'e57_bank'/'packets';pd.mkdir(parents=True,exist_ok=True);info=[];excl=[]
     for nm,E in st.items():
         eth=idx.get(nm,{}).get('eth_v1_event_level')
         if any(x.lower() in nm.lower() for x in exclude):excl.append(dict(event=nm,reason='excluded by default (agreed list)'));continue
-        if eth and not eth_off:excl.append(dict(event=nm,reason='event-level ETH-v1: '+str(eth)[:120]));continue
+        if eth:excl.append(dict(event=nm,reason='event-level ETH-v1: '+str(eth)[:120]));continue
         rng=random.Random(SEED+int(hashlib.md5(nm.encode()).hexdigest()[:8],16));order=list(range(len(E['rids'])));rng.shuffle(order);sel=sorted(order[:n],key=lambda ai:(E['dates'][ai],E['rids'][ai]))
         arts=[];k=0;m={}
         for j,ai in enumerate(sel,1):
@@ -88,7 +88,7 @@ def lead_stream(E):
 def near_idx(cum,i0,n):
     lo=cum[i0]-WIN;hi=cum[i0+1]+WIN;return [j for j in range(n) if cum[j+1]>lo and cum[j]<hi]
 def question_stats(q,E):
-    holds,keys=ans_matcher(q);cs=core(q['S']);arts=[];near=[];sent_only=[];comp=collections.defaultdict(set);cwin=set();vs=[q['canonical']]+list(q.get('variants',[]))
+    holds,keys=ans_matcher(q);cs=core(q['S']);selfw=cs|core(q.get('event',''));arts=[];near=[];sent_only=[];comp=collections.defaultdict(set);cwin=set();vs=[q['canonical']]+list(q.get('variants',[]))
     for ai,sents,cum in lead_stream(E):
         n=len(sents);ia=[i for i,t in enumerate(sents) if holds(t)]
         if ia:
@@ -103,8 +103,9 @@ def question_stats(q,E):
             for ty,key,sf,a,b in type_strings(sents[j]):
                 if ty!=q['type']:continue
                 if any(related(sf,v) for v in vs) or (q['type'] in('DATE','NUMBER') and key in keys):continue
+                if q['type'] in('PLACE','PERSON') and core(sf)&selfw:continue          # a string made of S / event-name words is the topic itself, not a competitor (fix 2026-10-26)
                 comp[key if q['type'] in('DATE','NUMBER') else norm(sf)].add(ai)
-    top=sorted(comp.items(),key=lambda kv:(-len(kv[1]),kv[0]))[:3]
+    top=sorted(((k,v&cwin) for k,v in comp.items()),key=lambda kv:(-len(kv[1]),kv[0]))[:3]      # numerator and denominator on the same population: window articles that hold the answer (fix 2026-10-26)
     return dict(c=len(arts),c_SA=len(near)/max(1,len(arts)),c_SA_sentence=len(sent_only)/max(1,len(arts)),c_window=len(cwin),comp_top=[(k,len(v)) for k,v in top],comp_max=len(top[0][1]) if top else 0,answer_rids=[E['rids'][ai] for ai in arts])
 def check_question(q,E,P):
     why=[]
@@ -249,10 +250,10 @@ def _selftest():
         print('e57_bank selftest ok:',nm,'t1 survived' if 't1' in okids else 't1 rejected (reasons above)')
     N3._selftest(after)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('cmd',nargs='?',choices=['packet','validate','distract','freeze']);ap.add_argument('--out',default='e57_news');ap.add_argument('--n',type=int,default=NPACK);ap.add_argument('--bank');ap.add_argument('--validated');ap.add_argument('--distractors');ap.add_argument('--nominations');ap.add_argument('--version',default='v1');ap.add_argument('--exclude',default=','.join(EXCLUDE_DEFAULT),help='comma list of event-name substrings left out of the packets');ap.add_argument('--eth-off',action='store_true',help='do not leave out events that fail the event-level ETH-v1 (decision of Hans 2026-10-26; the by-default exclude list still applies)');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('cmd',nargs='?',choices=['packet','validate','distract','freeze']);ap.add_argument('--out',default='e57_news');ap.add_argument('--n',type=int,default=NPACK);ap.add_argument('--bank');ap.add_argument('--validated');ap.add_argument('--distractors');ap.add_argument('--nominations');ap.add_argument('--version',default='v1');ap.add_argument('--exclude',default=','.join(EXCLUDE_DEFAULT),help='comma list of event-name substrings left out of the packets');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:_selftest();return
     out=pathlib.Path(a.out)
-    if a.cmd=='packet':packet(out,a.n,exclude=tuple(x for x in a.exclude.split(',') if x),eth_off=a.eth_off)
+    if a.cmd=='packet':packet(out,a.n,exclude=tuple(x for x in a.exclude.split(',') if x))
     elif a.cmd=='validate':validate(out,a.bank)
     elif a.cmd=='distract':distract(out,a.validated or out/'e57_bank'/'validated.jsonl')
     elif a.cmd=='freeze':freeze(out,a.validated or out/'e57_bank'/'validated.jsonl',a.distractors or out/'e57_bank'/'distractors.json',a.nominations,a.version)
