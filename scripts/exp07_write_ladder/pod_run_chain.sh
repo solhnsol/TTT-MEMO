@@ -3,7 +3,7 @@
 set -u
 mkdir -p /home/solhnsol/workspace && ln -sfn /workspace/TTT-MEMO /home/solhnsol/workspace/TTT-MEMO
 source /workspace/rp_env.sh
-export PYTHONUNBUFFERED=1 JAX_PLATFORMS=
+export PYTHONUNBUFFERED=1
 cd /workspace/TTT-MEMO
 S=scripts/exp07_write_ladder; B=/workspace/exp07_out/e57_news; O=/workspace/exp07_out/e57_pod; L=/workspace/exp07_out/pod_logs; X=/workspace/exp07_out
 mkdir -p "$O" "$L"
