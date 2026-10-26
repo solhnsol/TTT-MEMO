@@ -20,7 +20,7 @@ def pseudo_bank(bundle):
     qs=[]
     for q in V:
         d=D[q['id']];keys={B.norm(x) for x in N[q['id']]['nominated']};hn=[h for h in d['hard'] if B.norm(h['surface']) in keys]
-        qs.append(dict(q,fixed_surface=q['canonical'],easy=d['easy'],hard_nominated=hn))
+        qs.append(dict(q,fixed_surface=q['canonical'],easy=d['easy'],hard_nominated=hn,hard_all=d['hard']))
     return dict(questions=qs)
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--bundle',required=True);ap.add_argument('--out',required=True);ap.add_argument('--bank');ap.add_argument('--points');ap.add_argument('--read-chunks');ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');a=ap.parse_args()
@@ -37,6 +37,7 @@ def main():
     from tokenizers import Tokenizer;tk=None if a.stub else Tokenizer.from_file(tfile)
     def win_of(k):pos=(k+1)*CH;return (max(0,pos-8192),pos)
     def win_text(k):s,e=win_of(k);return tk.decode([int(x) for x in ids[s:e]])
+    print('duplicates removed from the scored candidate lists:',{i['id']:i['removed_duplicates'] for i in items if i['removed_duplicates']} or 'none',flush=True)
     print(f'bank {bsrc}: {len(items)} questions, candidates per question min/max {min(len(i["cands"]) for i in items)}/{max(len(i["cands"]) for i in items)}, hard-only sets {min(len(i["hard_idx"])+1 for i in items)}-{max(len(i["hard_idx"])+1 for i in items)}',flush=True)
     allsh=[c1 for v in shtab.values() for a_,e_,c1,cn in v];print(f'n_shadow (same-fact articles inside the 8192-token window before an exposure, cycle 1): mean {np.mean(allsh):.2f}, share with none {np.mean([x==0 for x in allsh]):.2f}, over {len(allsh)} exposures',flush=True)
     print(f'stream: {n} chunks, canary at {pts}, reads at {rch}, ids sha {hashlib.sha256(ids.tobytes()).hexdigest()[:16]}',flush=True)
@@ -74,7 +75,7 @@ def main():
         return {'ok':True}
     L=C.Ladder55(rt,save_dir=out/'states'/'E57_trial',canary=None);t0=time.monotonic()
     r=L.run_stream('NAT',1,ids,nch=n,tag='trialNAT',log=lambda *x:print(*x,flush=True),read_hook=hook,hook_chunks=set(pts)|set(rch))
-    res=dict(arm='NAT',bank=bsrc,shadow_table={q:[dict(article=int(a_),end=int(e_),n_shadow_cycle1=int(c1),n_shadow_later_cycles=int(cn)) for a_,e_,c1,cn in v] for q,v in shtab.items()},n_chunks=n,ids_sha=hashlib.sha256(ids.tobytes()).hexdigest()[:16],canary_w0=cw0,trajectory=traj,rows=rows,log=[{k:e[k] for k in ('k','ce','update_norm','coef','sec') if k in e} for e in r['log']],timings=tim,sec_total=time.monotonic()-t0,
+    res=dict(arm='NAT',bank=bsrc,candidate_counts={i['id']:dict(G=len(i['cands']),n_all=len(i['all_idx']),n_hard=len(i['hard_idx'])+1,n_pool=len(i['pool_idx'])+1,removed_duplicates=i['removed_duplicates']) for i in items},shadow_table={q:[dict(article=int(a_),end=int(e_),n_shadow_cycle1=int(c1),n_shadow_later_cycles=int(cn)) for a_,e_,c1,cn in v] for q,v in shtab.items()},n_chunks=n,ids_sha=hashlib.sha256(ids.tobytes()).hexdigest()[:16],canary_w0=cw0,trajectory=traj,rows=rows,log=[{k:e[k] for k in ('k','ce','update_norm','coef','sec') if k in e} for e in r['log']],timings=tim,sec_total=time.monotonic()-t0,
         e55_reference='E55 canary rise at 128 updates: SGD +0.023, 0.5N +0.043, Adam +0.159; limit 0.10 (E57 doc 12.2)',ordering_note='cand_lp = summed span log-prob (E49 convention); cand_ntok lets the analysis form per-token means')
     fn.write_text(json.dumps(res,default=float));print('wrote',fn,len(rows),'rows')
 if __name__=='__main__':main()

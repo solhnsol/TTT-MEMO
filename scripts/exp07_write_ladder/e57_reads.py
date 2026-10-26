@@ -13,14 +13,19 @@ def load_items(bankfile):
     for q in b['questions']:
         gold=q['fixed_surface'];easy=[e['surface'] for e in q['easy']];hard=[h['surface'] for h in q['hard_nominated']]
         hard=list(dict.fromkeys(x for x in hard if x.lower()!=gold.lower() or (_ for _ in ()).throw(ValueError(f"{q['id']}: hard candidate {x!r} equals the gold"))))      # the hard list of the bank may hold the same surface twice (two sources): kept once
-        hl={x.lower() for x in hard};seen={gold.lower()};cands=[gold];kinds=['gold']
-        for s,k in [(x,'easy') for x in easy if x.lower() not in hl]+[(x,'hard') for x in hard]:       # an easy candidate equal to a hard one (e.g. the gold of another event) is dropped, the hard one is kept
+        pool_all=list(dict.fromkeys(h['surface'] for h in q.get('hard_all',[]) if h['surface'].lower()!=gold.lower()))
+        hl={x.lower() for x in hard};seen={gold.lower()};cands=[gold];kinds=['gold'];removed=[]
+        for s,k in [(x,'easy') for x in easy]+[(x,'hard') for x in hard]:
+            if k=='easy' and s.lower() in hl:removed.append(s);continue                  # an easy candidate equal to a nominated hard one (e.g. the gold of another event) is dropped, the hard one is kept
             if s.lower() in seen:
                 if k=='hard':raise ValueError(f"{q['id']}: hard candidate {s!r} equals the gold or another hard candidate")
-                continue
+                removed.append(s);continue
             seen.add(s.lower());cands.append(s);kinds.append(k)
+        for s in pool_all:                                                               # the rest of the same-event hard pool (not nominated): scored as 'pool', NOT part of the primary all-candidate rank
+            if s.lower() not in seen:seen.add(s.lower());cands.append(s);kinds.append('pool')
+        low=[c.lower() for c in cands];pool_idx=[low.index(s.lower()) for s in pool_all if s.lower() in low]
         # an easy candidate that duplicates a later hard candidate: keep the hard one
-        items.append(dict(id=q['id'],event=q['event'],type=q['type'],stratum=q.get('stratum','main'),prefix=prefix_of(q),cands=cands,kinds=kinds,gold_idx=0,hard_idx=[i for i,k in enumerate(kinds) if k=='hard'],
+        items.append(dict(id=q['id'],event=q['event'],type=q['type'],stratum=q.get('stratum','main'),prefix=prefix_of(q),cands=cands,kinds=kinds,gold_idx=0,hard_idx=[i for i,k in enumerate(kinds) if k=='hard'],pool_idx=sorted(set(pool_idx)),all_idx=[i for i,k in enumerate(kinds) if k in('gold','easy','hard')],removed_duplicates=removed,
             S=q['S'],variants=[q['canonical']]+list(q['variants']),q=q))
     return items
 def build_rows(tok,items):
@@ -35,11 +40,14 @@ def build_rows(tok,items):
             if ids is not None:raw.append((ids,(span[0]-1,span[1]-1)));nt.append(span[1]-span[0])
         ntok.append(nt)
     return raw,ntok,bad
-def metrics(lp,gold_idx,hard_idx):
-    lp=np.asarray(lp,np.float64);g=lp[gold_idx];others=[j for j in range(len(lp)) if j!=gold_idx]
-    r_all=1+sum(1 for j in others if lp[j]>g);r_hard=1+sum(1 for j in hard_idx if lp[j]>g);n_hard=len(hard_idx)+1
-    return dict(gold_lp=float(g),rank_all=int(r_all),n_all=int(len(lp)),rank_hard=int(r_hard),n_hard=int(n_hard),rank_ratio_all=r_all/len(lp),rank_ratio_hard=r_hard/n_hard,acc_all=bool(r_all==1),acc_hard=bool(r_hard==1),
-        margin=float(g-max(lp[j] for j in others)),margin_hard=float(g-max(lp[j] for j in hard_idx)) if hard_idx else None)
+def metrics(lp,gold_idx,hard_idx,all_idx=None,pool_idx=None):
+    """primary: gold against all_idx (gold + easy + nominated hard; default all candidates) -> rank_all / n_all / acc_all; hard-only: gold against the nominated hard (rank_hard / n_hard); pool: gold against the full same-event hard pool (rank_pool / n_pool, secondary readout)"""
+    lp=np.asarray(lp,np.float64);g=lp[gold_idx];al=[j for j in (all_idx if all_idx is not None else range(len(lp))) if j!=gold_idx]
+    r_all=1+sum(1 for j in al if lp[j]>g);n_all=len(al)+1;r_hard=1+sum(1 for j in hard_idx if lp[j]>g);n_hard=len(hard_idx)+1
+    pl=[j for j in (pool_idx or []) if j!=gold_idx];r_pool=1+sum(1 for j in pl if lp[j]>g) if pl else None
+    return dict(gold_lp=float(g),rank_all=int(r_all),n_all=int(n_all),rank_hard=int(r_hard),n_hard=int(n_hard),rank_ratio_all=r_all/n_all,rank_ratio_hard=r_hard/n_hard,acc_all=bool(r_all==1),acc_hard=bool(r_hard==1),
+        margin=float(g-max(lp[j] for j in al)),margin_hard=float(g-max(lp[j] for j in hard_idx)) if hard_idx else None,
+        rank_pool=int(r_pool) if r_pool else None,n_pool=len(pl)+1 if pl else None,rank_ratio_pool=(r_pool/(len(pl)+1)) if pl else None,acc_pool=bool(r_pool==1) if pl else None)
 def split_scores(flat,items):
     out=[];o=0
     for it in items:n=len(it['cands']);out.append(np.asarray(flat[o:o+n]));o+=n
@@ -68,9 +76,9 @@ def log_rows(items,scores,ntok,*,cycle,read_chunk,pos_tokens,win,arm,condition,i
     """rows for one (read position, condition). win = (start, end) token offsets inside the cycle stream (None for OUT); n_k = cumulative exposure (gold-bearing articles fully read, counted from the article ids actually in the stream: cycles before + articles fully read in this cycle)"""
     rows=[]
     for it,lp,nt in zip(items,scores,ntok):
-        m=metrics(lp,it['gold_idx'],it['hard_idx']);sh=shadow_stats(shadow,it['id'],cycle,pos_tokens) if shadow is not None else (None,None,0)
+        m=metrics(lp,it['gold_idx'],it['hard_idx'],it.get('all_idx'),it.get('pool_idx'));sh=shadow_stats(shadow,it['id'],cycle,pos_tokens) if shadow is not None else (None,None,0)
         rows.append(dict(cycle=cycle,read_chunk=read_chunk,pos_tokens=pos_tokens,window_start=None if win is None else win[0],window_end=None if win is None else win[1],arm=arm,condition=condition,window_info=None if winpresent is None else ('present' if winpresent[it['id']] else 'absent'),
-            question=it['id'],event=it['event'],type=it['type'],stratum=it['stratum'],n_k=cumulative_n(iv,hits,it['id'],cycle,pos_tokens),shadow_mean=sh[0],shadow_none=sh[1],shadow_n=sh[2],c_SA=None if csa is None else csa.get(it['id']),**m,cand_surface=it['cands'],cand_kinds=it['kinds'],cand_ntok=nt,cand_lp=[float(x) for x in lp]))
+            question=it['id'],event=it['event'],type=it['type'],stratum=it['stratum'],n_k=cumulative_n(iv,hits,it['id'],cycle,pos_tokens),shadow_mean=sh[0],shadow_none=sh[1],shadow_n=sh[2],c_SA=None if csa is None else csa.get(it['id']),**m,n_cand_scored=len(it['cands']),cand_surface=it['cands'],cand_kinds=it['kinds'],cand_ntok=nt,cand_lp=[float(x) for x in lp]))
     return rows
 W_WIN=8192
 def shadow_table(iv,hits,cycle_tokens):
@@ -100,6 +108,7 @@ def selftest():
     sc=split_scores(np.arange(7.0),[dict(cands=[1,2,3]),dict(cands=[1,2,3,4])]);assert [len(x) for x in sc]==[3,4]
     iv=[(0,10,'e','a'),(10,30,'e','b'),(30,50,'e','c')];hits={'q':[0,2]}
     assert exposure(iv,hits,'q',9)==0 and exposure(iv,hits,'q',10)==1 and exposure(iv,hits,'q',50)==2 and cumulative_n(iv,hits,'q',2,10)==3 and cumulative_n(iv,hits,'q',0,10)==0
+    m=metrics([-1.0,-2.0,-3.0,-0.5,-4.0],0,[2],all_idx=[0,1,2],pool_idx=[2,3]);assert m['n_all']==3 and m['rank_all']==1 and m['rank_pool']==2 and m['n_pool']==3 and m['rank_hard']==1
     items=[dict(id='q',event='e',type='PERSON',stratum='main',cands=['a','b','c'],kinds=['gold','easy','hard'],gold_idx=0,hard_idx=[2])]
     r=log_rows(items,[[-1.0,-2.0,-0.5]],[[1,1,1]],cycle=1,read_chunk=3,pos_tokens=10,win=(0,10),arm='NAT',condition='IN',iv=iv,hits=hits,winpresent={'q':True},csa={'q':1.0})[0]
     assert r['n_k']==1 and r['rank_all']==2 and r['rank_hard']==2 and r['window_info']=='present' and r['cand_lp']==[-1.0,-2.0,-0.5]
