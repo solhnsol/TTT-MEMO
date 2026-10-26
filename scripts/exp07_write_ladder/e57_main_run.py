@@ -135,8 +135,13 @@ def install_segmented_prefix(rt,seg_chunks=280,ctx_chunks=192,log=print):
             sub=type(seq)(input_ids=seq.input_ids[lo:b],target_tokens=seq.target_tokens[lo:b],loss_masks=seq.loss_masks[lo:b]);h=orig(m,sub);outs.append(h[a-lo:b-lo]);del h
         res=jnp.concatenate(outs,axis=0);del outs;cache.clear();cache[key]=res;log(f'  prefix output of the stream computed in segments of {seg_chunks} chunks (+{ctx_chunks} context): {T//CH} chunks, {time.monotonic()-t0:.0f}s');return res
     rt.prefix=seg_prefix;rt._orig_prefix=orig;return seg_prefix
+def rotate_keys(K,offset,theta=500000.0):
+    """post-RoPE keys [T, nh, d] (interleaved pairs, complex multiplication as ttt.model.attention.apply_rotary_emb) rotated by `offset` further positions, angle computed in float64 on the host"""
+    T,nh,d=K.shape;j=np.arange(d//2);ang=offset/(theta**(2.0*j/d));c=np.cos(ang).astype(np.float32);sn=np.sin(ang).astype(np.float32)
+    x=K.astype(np.float32).reshape(T,nh,d//2,2);re,im=x[...,0],x[...,1];out=np.stack((re*c-im*sn,re*sn+im*c),axis=-1).reshape(T,nh,d)
+    return out.astype(K.dtype)
 def record_segmented(L,rt,s3,LD,ids,seg_chunks=280,ctx_chunks=192,log=print):
-    """natural per-layer post-RoPE K,V of the whole stream (host [layers, T, nh, d], as e55_core.record) computed in segments: the one-call record of 1680 chunks needs an 87 GiB working array (job 261, 09:06Z). Each segment is run with ctx_chunks of preceding context (24 prefix layers x window 8192 = 192 chunks) and with the GLOBAL position ids (Batch.position_ids), so that the stored keys carry their absolute RoPE rotation exactly as in the one-call record; only the segment part is kept."""
+    """natural per-layer post-RoPE K,V of the whole stream (host [layers, T, nh, d], as e55_core.record) computed in segments: the one-call record of 1680 chunks needs an 87 GiB working array (job 261, 09:06Z). Each segment is run with ctx_chunks of preceding context (24 prefix layers x window 8192 = 192 chunks) and and the keys of a segment are rotated further by the offset of the segment start (host, float64 angle) so that they carry their absolute RoPE rotation as in the one-call record (Batch.position_ids is not read by the recording hook: the first version of this function was caught by the guard, V identical, K different); only the segment part is kept."""
     jnp,eqx,jax=LD.jnp,LD.eqx,LD.jax;Batch=L.Batch;S3=s3.S3
     @eqx.filter_jit
     def layer_rec_pos(blk,h,ids_,pos_):
@@ -151,6 +156,7 @@ def record_segmented(L,rt,s3,LD,ids,seg_chunks=280,ctx_chunks=192,log=print):
         b=min(T,a+seg_chunks*CH);lo=max(0,a-ctx_chunks*CH);ids_=jnp.asarray(ids[lo:b],dtype=jnp.int32);pos_=jnp.arange(lo,b,dtype=jnp.int32);h=L.embed(m,ids_)
         for l in range(nl):
             blk=jax.tree.map(lambda x:x[l] if eqx.is_array(x) else x,blocks);h,K,V=layer_rec_pos(blk,h,ids_,pos_);K=np.asarray(jax.device_get(K))[a-lo:b-lo];V=np.asarray(jax.device_get(V))[a-lo:b-lo]
+            if lo>0:K=rotate_keys(K,lo,theta=float(getattr(rt.cfg.model,'rope_theta',500000.0)))      # the captured keys carry the segment-local rotation (the recording hook does not read Batch.position_ids; job 261 guard, V identical, K differed): add the offset of the segment start
             if Kh is None:Kh=np.empty((nl,T)+K.shape[1:],K.dtype);Vh=np.empty((nl,T)+V.shape[1:],V.dtype)
             Kh[l,a:b]=K;Vh[l,a:b]=V;del K,V
         del h;log(f'    record segment {a//CH}-{b//CH} of {T//CH} chunks: {time.monotonic()-t0:.0f}s')
@@ -294,6 +300,11 @@ def stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,c
             tim[k]=read(arm,cyc,kk,m,rows);del m;lg(f'  {arm} read at the end of cycle {cyc} (chunk {k}): {tim[k]:.0f}s; canary from the saved weights vs in the run: {can_chk[-1]["diff_gen"]},{can_chk[-1]["diff_tail"]}')
         fnF.write_text(json.dumps(dict(arm=arm,engine=A['engine'],bank=bsrc,cycles=A['cycles'],n_chunks=A['n_chunks'],run_chunks=A['n_chunks'],canary_w0=cw0,trajectory=A['trajectory'],rows=rows,timings={str(k):v for k,v in tim.items()},sec_total=A['sec_total'],update_log=A['update_log'],read_positions_in_cycle=A['read_positions_in_cycle'],canary_saved_vs_run=can_chk,saved_weights_precision=live_dt),default=float));print('wrote',fnF,len(rows),'rows',flush=True)
 def selftest():
+    rng=np.random.default_rng(0);x=rng.standard_normal((5,2,16)).astype(np.float32)
+    def rope(x,p,th=500000.0):
+        d=x.shape[-1];j=np.arange(d//2);ang=(p/(th**(2.0*j/d)))[:,None] if np.ndim(p)==0 else None
+        z=x.reshape(*x.shape[:-1],-1,2);c=np.cos(np.arange(d//2)*0+ (p/(th**(2.0*j/d))));s_=np.sin(p/(th**(2.0*j/d)));re,im=z[...,0],z[...,1];return np.stack((re*c-im*s_,re*s_+im*c),-1).reshape(x.shape)
+    assert np.allclose(rotate_keys(rope(x,7.0),123),rope(x,130.0),atol=1e-5),'rotate_keys composition'
     assert read_positions(280,10)==[27,55,83,111,139,167,195,223,251,279]
     import e55_uv as UVm
     ends=np.zeros(4*CH,bool);ends[100::100]=True
