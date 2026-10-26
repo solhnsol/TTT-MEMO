@@ -137,7 +137,7 @@ def check_question(q,E,P):
     stt=question_stats(q,E)
     if stt['c']<C_MIN:why.append(f"c = {stt['c']} < {C_MIN}")
     if stt['c_SA']<CSA_MIN:why.append(f"c_SA = {stt['c_SA']:.2f} < {CSA_MIN}")
-    if stt['comp_max']>COMP_MAX*max(1,stt['c_window']):why.append(f"same-type competitor {stt['comp_top'][0] if stt['comp_top'] else ''} in {stt['comp_max']} of {stt['c_window']} window articles (> {COMP_MAX})")
+    if q.get('stratum')!='hard_confusable' and stt['comp_max']>COMP_MAX*max(1,stt['c_window']):why.append(f"same-type competitor {stt['comp_top'][0] if stt['comp_top'] else ''} in {stt['comp_max']} of {stt['c_window']} window articles (> {COMP_MAX})")
     return why,stt
 def validate(out,bankfile,log=print):
     st,idx=load(out);pd=pathlib.Path(out)/'e57_bank'/'packets';Q=[json.loads(l) for l in open(bankfile) if l.strip()];res=[];ok=[]
@@ -157,6 +157,7 @@ def validate(out,bankfile,log=print):
     for r in res:
         s=r['stats'];L.append(f"| {r['id']} | {r['event']} | {r['type']} | {s['c'] if s else ''} | {('%.2f (%.2f)'%(s['c_SA'],s['c_SA_sentence'])) if s else ''} | {s['c_window'] if s else ''} | {s['comp_top'][0] if s and s['comp_top'] else ''} | {'ok' if not r['reasons'] else '; '.join(r['reasons'])} |")
     ev=collections.Counter(r['event'] for r in res if not r['reasons']);L+=['','survivors per event: '+', '.join(f'{k}: {v}' for k,v in ev.items())]
+    strat={q.get('id'):q.get('stratum','main') for q in Q};sv=collections.Counter(strat[r['id']] for r in res if not r['reasons']);tot=collections.Counter(strat[r['id']] for r in res);L+=['','survivors per stratum (hard_confusable = cast / character confusion kept as hard items: ONLY the same-type competitor rule is not applied there; its top competitor is shown in the table): '+', '.join(f'{k}: {sv.get(k,0)} of {n}' for k,n in tot.items())]
     (fd/'validation_report.md').write_text('\n'.join(L)+'\n');log('\n'.join(L)[:4000]);return ok,res
 # ---------- D distract ----------
 def easy_form(q):
