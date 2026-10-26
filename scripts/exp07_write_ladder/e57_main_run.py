@@ -53,7 +53,7 @@ def main():
         hid_tok=[int(sum(int(l) for l,h in zip(ms[f"wlen{k}"],ms[f"h1_{k}"]) if h)) for k in range(NW+1,nch,max(1,nch//12)) if f"wlen{k}" in ms]
         print(f'oracle answer mask: hidden window tokens at sampled chunks {hid_tok} (of ~8192)',flush=True)
         for kk in kks[:2]+kks[-1:]:
-            wp=RD.window_present(items,tk.decode([int(x) for x in ids_all[gwin(n+kk)[0]:gwin(n+kk)[1]]]));print(f'  read chunk {kk} (cycle 2 window): gold of {sum(wp.values())} of {len(items)} questions in the window',flush=True)
+            wp=RD.window_present(items,tk.decode([int(x) for x in np.tile(ids,2)[gwin(n+kk)[0]:gwin(n+kk)[1]]]));print(f'  read chunk {kk} (cycle 2 window): gold of {sum(wp.values())} of {len(items)} questions in the window',flush=True)
     if a.check_only:print('main run check-only OK');return
     out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True)
     assert a.stage in ('pfx','noise','pair','arms','reads'),'--stage pair | arms | reads (separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
