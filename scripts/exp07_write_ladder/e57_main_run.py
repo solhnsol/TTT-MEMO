@@ -74,6 +74,10 @@ def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,
     ntg=None;ends=UVm.sentence_ends(UVm.tokenizer(tfile),ids_all)
     mfile=out/'e57_main_oracle_masks.npz';ms=oracle_masks(ends,ids_all,tk,items,nch,UVm);np.savez_compressed(mfile,**ms)
     rs_t=None;dummy_meta=[{'sents':[]} for _ in range(nch)];rc={}                                  # rc: ONE record of the natural K,V of the stream (about 400 GiB host for 6 cycles) shared by all arms
+    # the natural K,V record of the whole stream needs a 44 GiB working array on the GPU; run_stream records AFTER it has computed the prefix, and the (cached) prefix output of 8 GiB plus the compiled segment programs left too little room (job 261, 08:57Z): record FIRST, while only the model is on the GPU, and hand the result to run_stream through its record cache (same key as run_stream builds)
+    L0=C.Ladder55(rt,save_dir=out/'states'/'E57_main_rec',canary=None);t0=time.monotonic()
+    with rt.mesh:Kh0,Vh0,_h=L0.record(ids_all[:nch*CH])
+    rc[(hashlib.sha256(np.asarray(ids_all[:nch*CH],np.int64).tobytes()).hexdigest(),nch)]=(Kh0,Vh0);lg(f'  natural K,V of the stream recorded before the arms ({Kh0.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s');del L0,_h;gc.collect();LD.jax.clear_caches()
     for arm in arms:
         fnA=out/f'E57_main_{arm}.arms.json'
         if fnA.exists() and not a.rerun:
