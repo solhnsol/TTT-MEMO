@@ -30,7 +30,7 @@ def oracle_masks(ends,ids_all,tk,items,nch,UVm):
     return out
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--cycles',type=int,default=2);ap.add_argument('--npos',type=int,default=1,help='read positions per cycle (1 = the end of every cycle)');ap.add_argument('--canary-npos',type=int,default=10,help='canary positions per cycle (canary only, no reads)');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--stop-rise',type=float,default=0.10)
-    ap.add_argument('--stage',default=None);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap.add_argument('--stage',default=None);ap.add_argument('--pair-tol',type=float,default=1e-3);ap.add_argument('--check-only',action='store_true');ap.add_argument('--stub',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     ROOT=HERE.parents[1];import gen_world_ctl as G
     tfile=a.tokenizer or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.StubTok() if a.stub else G.load_enc(tfile)
@@ -56,14 +56,15 @@ def main():
             wp=RD.window_present(items,tk.decode([int(x) for x in ids_all[gwin(n+kk)[0]:gwin(n+kk)[1]]]));print(f'  read chunk {kk} (cycle 2 window): gold of {sum(wp.values())} of {len(items)} questions in the window',flush=True)
     if a.check_only:print('main run check-only OK');return
     out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True)
-    assert a.stage in ('arms','reads'),'--stage arms | reads (the two stages run in separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
+    assert a.stage in ('pair','arms','reads'),'--stage pair | arms | reads (separate processes: the GPU memory of the full-stream prefix output and of the fp32 reader do not fit together)'
     import e55_swap as E
     E.ADAM['NATADAMH']=('NAT',0.5,False);E.ARMS.append('NATADAMH')               # BEFORE e55_core is imported (lab() below): IMPLEMENTED / CHUNK_META_ARMS are built from E.ADAM at import
     import e55_run as R,e55_selmask as SM
     LD,s3,C=R.lab();rt=LD.Runtime();can=R.Canary55(LD,rt);lg=lambda *x:print(*x,flush=True)
     cw0=can(rt.base);print('canary W0',cw0,flush=True)
-    if a.stage=='arms':stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM)
-    else:stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,cw0,lg)
+    if a.stage=='pair':stage_pair(a,out,items,bsrc,iv,hits,shtab,ids,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R)
+    elif a.stage=='arms':stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM)
+    else:stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,cw0,lg,can)
 def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM):
     """STAGE 1 (no fp32 reader, no scorers on the GPU): the arms; canary at the end of every cycle; the weights at the end of every cycle are saved (state files of 1.4 GB, e55_core save_state) for stage 2"""
     import e55_uv as UVm
@@ -96,7 +97,38 @@ def stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,
         fnA.write_text(json.dumps(dict(arm=arm,engine=engine,bank=bsrc,cycles=N,n_chunks=nch,first_chunk_over_canary_limit=hold['stopped'],canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,
             update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys') if k_ in e} for e in log],norm_targets=ntg if arm=='NAT' else None,rs_targets=rs_t if arm=='ORC' else None,read_positions_in_cycle=kks,stop_rise=a.stop_rise),default=float));print('wrote',fnA,flush=True)
         del L,res;gc.collect();LD.jax.clear_caches()
-def stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,cw0,lg):
+def inner_dtypes(LD,rd,m):
+    """precision of the inner (written) parameters: {dtype: number of leaves} -> the saved weights must have the precision of the training state"""
+    import collections as _c
+    return dict(_c.Counter(str(x.dtype) for x in LD.jax.tree_util.tree_leaves(LD.eqx.partition(m,rd.f)[0])))
+def stage_pair(a,out,items,bsrc,iv,hits,shtab,ids,n,kks,tk,LD,s3,C,rt,can,cw0,lg,R):
+    """PAIRED CHECK (cheap, before the long run): the NAT arm over ONE cycle (280 chunks, the stream of job 256), the weights at the end of the cycle are (a) read INLINE in the continuing run (fp32 reader resident, as in job 256) and (b) saved and read again FROM THE SAVED FILE; the cand_lp of every row, the ranks and the canary must agree (tolerance --pair-tol); the saved weights must have the precision of the training state. Exit 9 on disagreement."""
+    import e55_gpu as RG
+    rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
+    raw,ntok,bad=RD.build_rows(rt.tok,items);assert not bad,bad
+    forbid=sorted({s for it in items for s in it['variants']+[it['cands'][0]] if len(s)>=4 and not any(ch.isdigit() for ch in s)})
+    out_tail=R.out_tail_8192(LD,rt.tok,rt.bos,forbid);P_out=rd.packed(raw,out_tail);kk=kks[-1]
+    s_,e_=max(0,(n)*CH-8192),n*CH;P_in=rd.packed(raw,[int(x) for x in ids[s_:e_]]);wp=RD.window_present(items,tk.decode([int(x) for x in ids[s_:e_]]))
+    csa={it['id']:it['q'].get('c_SA') for it in items}
+    def score(P,m):
+        m32=rd.to_fp32(m)
+        with LD.jax.default_matmul_precision('highest'):return RD.split_scores(np.asarray(P.r1(m32)),items)
+    def read(arm,m):
+        rows=RD.log_rows(items,score(P_out,m),ntok,cycle=1,read_chunk=n-1,pos_tokens=n*CH,win=None,arm=arm,condition='OUT',iv=iv,hits=hits,csa=csa,shadow=shtab)
+        rows+=RD.log_rows(items,score(P_in,m),ntok,cycle=1,read_chunk=n-1,pos_tokens=n*CH,win=(s_,e_),arm=arm,condition='IN',iv=iv,hits=hits,winpresent=wp,csa=csa,shadow=shtab);return rows
+    got={}
+    def hook(k,m):
+        got['rows']=read('PAIR_inline',m);got['canary']=can(m);got['dtypes']=inner_dtypes(LD,rd,m);return {'ok':True}
+    L=C.Ladder55(rt,save_dir=out/'states'/'E57_pair',canary=None);t0=time.monotonic()
+    res=L.run_stream('NAT',1,ids,nch=n,tag='pair',log=lg,read_hook=hook,hook_chunks={n-1},read_chunks={n-1})
+    st=res['reads'][n-1];m2=rd.load_state(st['_file'],expect_hash=st['_hash']);rows2=read('PAIR_saved',m2);can2=can(m2);dt2=inner_dtypes(LD,rd,m2)
+    d=[abs(x-y) for r1,r2 in zip(got['rows'],rows2) for x,y in zip(r1['cand_lp'],r2['cand_lp'])];rk=sum(1 for r1,r2 in zip(got['rows'],rows2) if (r1['rank_all'],r1['rank_hard'])!=(r2['rank_all'],r2['rank_hard']))
+    cd=dict(gen=can2['_gen_nll']-got['canary']['_gen_nll'],tail=can2['_tail_nll']-got['canary']['_tail_nll'])
+    ok=max(d)<=a.pair_tol and rk==0 and max(abs(cd['gen']),abs(cd['tail']))<=a.pair_tol and dt2==got['dtypes']
+    rep=dict(rows=len(got['rows']),max_abs_diff_cand_lp=max(d),mean_abs_diff_cand_lp=float(np.mean(d)),rows_with_changed_rank=rk,canary_inline=got['canary'],canary_saved=can2,canary_diff=cd,precision_training_state=got['dtypes'],precision_saved_weights=dt2,tolerance=a.pair_tol,state_file=st['_file'],state_hash=st['_hash'],ok=bool(ok),sec=time.monotonic()-t0)
+    (out/'E57_pair_check.json').write_text(json.dumps(rep,indent=1,default=float));print('PAIR CHECK',json.dumps({k:v for k,v in rep.items() if k not in('canary_inline','canary_saved')},default=float),flush=True)
+    if not ok:print('pair check FAILED (exit 9)',flush=True);sys.exit(9)
+def stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,cw0,lg,can):
     """STAGE 2: reads of the frozen bank at W0 and at the end of every cycle from the saved weights (read-only; fp32 copy)"""
     import e55_gpu as RG
     rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
@@ -116,6 +148,7 @@ def stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,c
         store.extend(RD.log_rows(items,score(P_out,m),ntok,cycle=cycle,read_chunk=cycle*n+kk if cycle>0 else kk,pos_tokens=pos,win=None,arm=arm,condition='OUT',iv=iv,hits=hits,csa=csa,shadow=shtab))
         P,wp,(s_,e_)=pin(kk);store.extend(RD.log_rows(items,score(P,m),ntok,cycle=cycle,read_chunk=cycle*n+kk if cycle>0 else kk,pos_tokens=pos,win=(s_,e_),arm=arm,condition='IN',iv=iv,hits=hits,winpresent=wp,csa=csa,shadow=shtab))
         return time.monotonic()-t0
+    live_dt=inner_dtypes(LD,rd,rt.base);lg('inner parameter precision of the training state:',live_dt)
     fn0=out/'E57_main_W0.json'
     if not fn0.exists() or a.rerun:
         rows0=[];tim0={}
@@ -125,10 +158,13 @@ def stage_reads(a,out,items,bsrc,iv,hits,shtab,ids_all,n,N,kks,arms,tk,LD,rt,R,c
         fnA=out/f'E57_main_{arm}.arms.json';fnF=out/f'E57_main_{arm}.json'
         if not fnA.exists():print('stage 1 file missing, skipped:',fnA);continue
         if fnF.exists() and not a.rerun:print('exists, reused:',fnF);continue
-        A=json.load(open(fnA));rows=[];tim={}
+        A=json.load(open(fnA));rows=[];tim={};can_chk=[];by_chunk={t['chunk']:t['canary'] for t in A['trajectory']}
         for k_str,st in sorted(A['states'].items(),key=lambda x:int(x[0])):
-            k=int(k_str);cyc=k//n+1;kk=k%n;m=rd.load_state(st['file'],expect_hash=st['hash']);tim[k]=read(arm,cyc,kk,m,rows);del m;lg(f'  {arm} read at the end of cycle {cyc} (chunk {k}): {tim[k]:.0f}s')
-        fnF.write_text(json.dumps(dict(arm=arm,engine=A['engine'],bank=bsrc,cycles=A['cycles'],n_chunks=A['n_chunks'],run_chunks=A['n_chunks'],first_chunk_over_canary_limit=A['first_chunk_over_canary_limit'],canary_w0=cw0,trajectory=A['trajectory'],rows=rows,timings={str(k):v for k,v in tim.items()},sec_total=A['sec_total'],update_log=A['update_log'],read_positions_in_cycle=A['read_positions_in_cycle'],stop_rise=A['stop_rise']),default=float));print('wrote',fnF,len(rows),'rows',flush=True)
+            k=int(k_str);cyc=k//n+1;kk=k%n;m=rd.load_state(st['file'],expect_hash=st['hash'])
+            dt=inner_dtypes(LD,rd,m);assert dt==live_dt,('saved weights have another precision than the training state',dt,live_dt)
+            cs=can(m);c1=by_chunk.get(k);can_chk.append(dict(chunk=k,canary_from_saved=cs,canary_in_run=c1,diff_gen=None if c1 is None else cs['_gen_nll']-c1['_gen_nll'],diff_tail=None if c1 is None else cs['_tail_nll']-c1['_tail_nll']))
+            tim[k]=read(arm,cyc,kk,m,rows);del m;lg(f'  {arm} read at the end of cycle {cyc} (chunk {k}): {tim[k]:.0f}s; canary from the saved weights vs in the run: {can_chk[-1]["diff_gen"]},{can_chk[-1]["diff_tail"]}')
+        fnF.write_text(json.dumps(dict(arm=arm,engine=A['engine'],bank=bsrc,cycles=A['cycles'],n_chunks=A['n_chunks'],run_chunks=A['n_chunks'],first_chunk_over_canary_limit=A['first_chunk_over_canary_limit'],canary_w0=cw0,trajectory=A['trajectory'],rows=rows,timings={str(k):v for k,v in tim.items()},sec_total=A['sec_total'],update_log=A['update_log'],read_positions_in_cycle=A['read_positions_in_cycle'],stop_rise=A['stop_rise'],canary_saved_vs_run=can_chk,saved_weights_precision=live_dt),default=float));print('wrote',fnF,len(rows),'rows',flush=True)
 def selftest():
     assert read_positions(280,10)==[27,55,83,111,139,167,195,223,251,279]
     import e55_uv as UVm
