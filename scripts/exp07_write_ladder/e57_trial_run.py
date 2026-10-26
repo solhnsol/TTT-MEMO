@@ -31,13 +31,14 @@ def main():
     if bank.exists():items=RD.load_items(bank);bsrc=str(bank)
     else:
         assert a.check_only,f'frozen bank {bank} missing (exit 7)';tmp=pathlib.Path(a.out)/'_pseudo_bank.json';pathlib.Path(a.out).mkdir(parents=True,exist_ok=True);tmp.write_text(json.dumps(pseudo_bank(a.bundle)));items=RD.load_items(tmp);bsrc='PSEUDO (check only)'
-    ids,iv,hits=RD.article_intervals(a.bundle,enc,items);n=len(ids)//CH;ctoks=n*CH
+    ids,iv,hits=RD.article_intervals(a.bundle,enc,items);n=len(ids)//CH;ctoks=n*CH;shtab=RD.shadow_table(iv,hits,ctoks)
     pts=[int(x) for x in a.points.split(',')] if a.points else CR.points_default(n);rch=sorted({n-1}|({int(x) for x in a.read_chunks.split(',')} if a.read_chunks else set()))
     assert all(0<=p<n for p in pts+rch)
     from tokenizers import Tokenizer;tk=None if a.stub else Tokenizer.from_file(tfile)
     def win_of(k):pos=(k+1)*CH;return (max(0,pos-8192),pos)
     def win_text(k):s,e=win_of(k);return tk.decode([int(x) for x in ids[s:e]])
     print(f'bank {bsrc}: {len(items)} questions, candidates per question min/max {min(len(i["cands"]) for i in items)}/{max(len(i["cands"]) for i in items)}, hard-only sets {min(len(i["hard_idx"])+1 for i in items)}-{max(len(i["hard_idx"])+1 for i in items)}',flush=True)
+    allsh=[c1 for v in shtab.values() for a_,e_,c1,cn in v];print(f'n_shadow (same-fact articles inside the 8192-token window before an exposure, cycle 1): mean {np.mean(allsh):.2f}, share with none {np.mean([x==0 for x in allsh]):.2f}, over {len(allsh)} exposures',flush=True)
     print(f'stream: {n} chunks, canary at {pts}, reads at {rch}, ids sha {hashlib.sha256(ids.tobytes()).hexdigest()[:16]}',flush=True)
     if tk is not None:
         raw,ntok,bad=RD.build_rows(tk,items);print(f'rows: {len(raw)}; candidate texts the tokenizer span check rejects: {bad or "none"}',flush=True)
@@ -59,9 +60,9 @@ def main():
     rows=[];tim={}
     def read(cycle,k,m,tag):
         t0=time.monotonic();pos=(k+1)*CH if cycle>0 else (k+1)*CH
-        rows.extend(RD.log_rows(items,score(P_out,m),ntok,cycle=cycle,read_chunk=k,pos_tokens=pos,win=None,arm='NAT',condition='OUT',iv=iv,hits=hits,csa=csa))
+        rows.extend(RD.log_rows(items,score(P_out,m),ntok,cycle=cycle,read_chunk=k,pos_tokens=pos,win=None,arm='NAT',condition='OUT',iv=iv,hits=hits,csa=csa,shadow=shtab))
         if k not in P_in:P_in[k]=rd.packed(raw,[int(x) for x in ids[win_of(k)[0]:win_of(k)[1]]])
-        wp=RD.window_present(items,win_text(k));rows.extend(RD.log_rows(items,score(P_in[k],m),ntok,cycle=cycle,read_chunk=k,pos_tokens=pos,win=win_of(k),arm='NAT',condition='IN',iv=iv,hits=hits,winpresent=wp,csa=csa))
+        wp=RD.window_present(items,win_text(k));rows.extend(RD.log_rows(items,score(P_in[k],m),ntok,cycle=cycle,read_chunk=k,pos_tokens=pos,win=win_of(k),arm='NAT',condition='IN',iv=iv,hits=hits,winpresent=wp,csa=csa,shadow=shtab))
         tim[f'{tag}']=time.monotonic()-t0;print(f'  reads {tag}: {tim[tag]:.0f}s',flush=True)
     cw0=can(rt.base);print('canary W0',cw0,flush=True)
     for k in rch:read(0,k,rt.base,f'W0@{k}')                       # W0 read with the contexts of every later read position
@@ -73,7 +74,7 @@ def main():
         return {'ok':True}
     L=C.Ladder55(rt,save_dir=out/'states'/'E57_trial',canary=None);t0=time.monotonic()
     r=L.run_stream('NAT',1,ids,nch=n,tag='trialNAT',log=lambda *x:print(*x,flush=True),read_hook=hook,hook_chunks=set(pts)|set(rch))
-    res=dict(arm='NAT',bank=bsrc,n_chunks=n,ids_sha=hashlib.sha256(ids.tobytes()).hexdigest()[:16],canary_w0=cw0,trajectory=traj,rows=rows,log=[{k:e[k] for k in ('k','ce','update_norm','coef','sec') if k in e} for e in r['log']],timings=tim,sec_total=time.monotonic()-t0,
+    res=dict(arm='NAT',bank=bsrc,shadow_table={q:[dict(article=int(a_),end=int(e_),n_shadow_cycle1=int(c1),n_shadow_later_cycles=int(cn)) for a_,e_,c1,cn in v] for q,v in shtab.items()},n_chunks=n,ids_sha=hashlib.sha256(ids.tobytes()).hexdigest()[:16],canary_w0=cw0,trajectory=traj,rows=rows,log=[{k:e[k] for k in ('k','ce','update_norm','coef','sec') if k in e} for e in r['log']],timings=tim,sec_total=time.monotonic()-t0,
         e55_reference='E55 canary rise at 128 updates: SGD +0.023, 0.5N +0.043, Adam +0.159; limit 0.10 (E57 doc 12.2)',ordering_note='cand_lp = summed span log-prob (E49 convention); cand_ntok lets the analysis form per-token means')
     fn.write_text(json.dumps(res,default=float));print('wrote',fn,len(rows),'rows')
 if __name__=='__main__':main()

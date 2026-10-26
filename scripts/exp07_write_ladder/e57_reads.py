@@ -64,14 +64,32 @@ def exposure(iv,hits,qid,pos_tokens):
 def window_present(items,text):
     import e57_bank as B
     return {it['id']:bool(B.ans_matcher(it['q'])[0](text)) for it in items}
-def log_rows(items,scores,ntok,*,cycle,read_chunk,pos_tokens,win,arm,condition,iv,hits,winpresent=None,csa=None):
+def log_rows(items,scores,ntok,*,cycle,read_chunk,pos_tokens,win,arm,condition,iv,hits,winpresent=None,csa=None,shadow=None):
     """rows for one (read position, condition). win = (start, end) token offsets inside the cycle stream (None for OUT); n_k = cumulative exposure (gold-bearing articles fully read, counted from the article ids actually in the stream: cycles before + articles fully read in this cycle)"""
     rows=[]
     for it,lp,nt in zip(items,scores,ntok):
-        m=metrics(lp,it['gold_idx'],it['hard_idx'])
+        m=metrics(lp,it['gold_idx'],it['hard_idx']);sh=shadow_stats(shadow,it['id'],cycle,pos_tokens) if shadow is not None else (None,None,0)
         rows.append(dict(cycle=cycle,read_chunk=read_chunk,pos_tokens=pos_tokens,window_start=None if win is None else win[0],window_end=None if win is None else win[1],arm=arm,condition=condition,window_info=None if winpresent is None else ('present' if winpresent[it['id']] else 'absent'),
-            question=it['id'],event=it['event'],type=it['type'],stratum=it['stratum'],n_k=cumulative_n(iv,hits,it['id'],cycle,pos_tokens),c_SA=None if csa is None else csa.get(it['id']),**m,cand_surface=it['cands'],cand_kinds=it['kinds'],cand_ntok=nt,cand_lp=[float(x) for x in lp]))
+            question=it['id'],event=it['event'],type=it['type'],stratum=it['stratum'],n_k=cumulative_n(iv,hits,it['id'],cycle,pos_tokens),shadow_mean=sh[0],shadow_none=sh[1],shadow_n=sh[2],c_SA=None if csa is None else csa.get(it['id']),**m,cand_surface=it['cands'],cand_kinds=it['kinds'],cand_ntok=nt,cand_lp=[float(x) for x in lp]))
     return rows
+W_WIN=8192
+def shadow_table(iv,hits,cycle_tokens):
+    """n_shadow per exposure (a gold-bearing article of a question): number of OTHER gold-bearing articles of the same question that end inside the W_WIN tokens before the article starts (the same fact already inside the window at write time). 'c1' = first cycle (nothing before the stream); 'cn' = later cycles (the end of the previous cycle precedes the stream start: its articles count too). -> {qid: [(article idx, end token, n_c1, n_cn)]}"""
+    T=cycle_tokens;out={}
+    for q,h in hits.items():
+        rows=[]
+        for a in h:
+            s=iv[a][0];c1=sum(1 for b in h if b!=a and s-W_WIN<iv[b][1]<=s);wrap=sum(1 for b in h if iv[b][1]-T>s-W_WIN)
+            rows.append((a,iv[a][1],c1,c1+wrap))
+        out[q]=rows
+    return out
+def shadow_stats(tab,qid,cycle,pos_tokens):
+    """-> (mean n_shadow, share of exposures with none in the window, number of exposures) over the exposures counted in n_k at this read (same bookkeeping as cumulative_n; cycle 1 uses the first-cycle counts, later cycles the wrapped counts)"""
+    if cycle<=0:return None,None,0
+    rows=tab[qid]
+    if cycle==1:v=[c1 for a,e,c1,cn in rows if e<=pos_tokens]
+    else:v=[c1 for a,e,c1,cn in rows]+[cn for a,e,c1,cn in rows]*(cycle-2)+[cn for a,e,c1,cn in rows if e<=pos_tokens]
+    return (float(np.mean(v)),float(np.mean([x==0 for x in v])),len(v)) if v else (None,None,0)
 def cumulative_n(iv,hits,qid,cycle,pos_tokens):
     """exposure n_k at read position pos_tokens of cycle `cycle` (1-based; cycle 0 = W0 = 0): full cycles before + articles fully read in this cycle"""
     if cycle<=0:return 0
@@ -85,6 +103,9 @@ def selftest():
     items=[dict(id='q',event='e',type='PERSON',stratum='main',cands=['a','b','c'],kinds=['gold','easy','hard'],gold_idx=0,hard_idx=[2])]
     r=log_rows(items,[[-1.0,-2.0,-0.5]],[[1,1,1]],cycle=1,read_chunk=3,pos_tokens=10,win=(0,10),arm='NAT',condition='IN',iv=iv,hits=hits,winpresent={'q':True},csa={'q':1.0})[0]
     assert r['n_k']==1 and r['rank_all']==2 and r['rank_hard']==2 and r['window_info']=='present' and r['cand_lp']==[-1.0,-2.0,-0.5]
+    tab=shadow_table([(0,10,'e','a'),(10,30,'e','b'),(9000,9100,'e','c')],{'q':[0,1,2]},9100)
+    assert tab['q'][0][2]==0 and tab['q'][1][2]==1 and tab['q'][2][2]==0 and tab['q'][0][3]==0+sum(1 for b in (0,1,2) if [10,30,9100][b]-9100>0-W_WIN) 
+    mm,nn,k=shadow_stats(tab,'q',1,9100);assert k==3 and abs(mm-1/3)<1e-9 and abs(nn-2/3)<1e-9 and shadow_stats(tab,'q',0,0)==(None,None,0)
     print('e57_reads selftest ok')
 if __name__=='__main__':
     ap=__import__('argparse').ArgumentParser();ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
