@@ -255,9 +255,9 @@ def freeze(out,validated,distractors,nominations,version,log=print):
                 for v in vs:
                     if re.search(r'(?<![\w])'+re.escape(v)+r'(?![\w])',t,re.I):cnt[v]+=1
         fixed=cnt.most_common(1)[0][0] if cnt else q['canonical']
-        items.append(dict(q,fixed_surface=fixed,easy=d['easy'],rank_analysis=d['rank_analysis'],hard_all=hard,hard_nominated=nom,nomination=nm))
+        items.append(dict(q,stratum=q.get('stratum','main'),fixed_surface=fixed,easy=d['easy'],rank_analysis=d['rank_analysis'],hard_all=hard,hard_nominated=nom,nomination=nm))
     if prob:print('freeze refused:',prob);sys.exit(7)
-    tz=datetime.timezone(datetime.timedelta(hours=9));body=dict(version=version,frozen_at=datetime.datetime.now(tz).isoformat(timespec='seconds'),n_questions=len(items),questions=items,authors=sorted({q['author'] for q in items}),packet_hashes={q['event']:q['packet_hash'] for q in items})
+    tz=datetime.timezone(datetime.timedelta(hours=9));body=dict(version=version,frozen_at=datetime.datetime.now(tz).isoformat(timespec='seconds'),n_questions=len(items),event_counts=dict(collections.Counter(i['event'] for i in items)),type_counts=dict(collections.Counter(i['type'] for i in items)),stratum_counts=dict(collections.Counter(i['stratum'] for i in items)),questions=items,authors=sorted({q['author'] for q in items}),packet_hashes={q['event']:q['packet_hash'] for q in items})
     h=jhash(body);body['sha256']=h;bf.write_text(json.dumps(body,indent=1,ensure_ascii=False));(fd/f'bank_{version}.sha256').write_text(h+'\n');log(f'bank {version}: {len(items)} questions, sha256 {h[:16]}');return body
 def _selftest():
     import tempfile,e57_bundle as B,e57_namedevents3 as N3
