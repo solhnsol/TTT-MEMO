@@ -10,13 +10,13 @@ PY=$(realpath -s "$PY")
 case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
 D=scripts/exp07_write_ladder
-COMMIT=5c835409e9a32b77829fdb20e4022a6547f06705; BANKCOMMIT=2c05884a35c84a2c9906b8beebd9d2a8d58d5979
+COMMIT=5c835409e9a32b77829fdb20e4022a6547f06705; BANKCOMMIT=c9e5e6a6b60adad98bf917d00cd19678d8c4c1a6
 FILES="$D/e56/e56_text.py $D/e57/e57_common.py $D/e57/e57_news.py $D/e57/e57_news96.py $D/e57/e57_news10.py $D/e57/e57_rope.py $D/e57/e57_freeze.py $D/e57/e57_bigclusters.py $D/e57/e57_events.py $D/e57/e57_namedevents.py $D/e57/e57_namedevents2.py $D/e57/e57_namedevents3.py $D/e57/e57_lite.py $D/e57/e57_bundle.py $D/e57/e57_verify.py $D/e57/e57_bank.py"
 : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}/e57_news}"; mkdir -p "$OUT"; : "${RAW:=$OUT/news_raw}"; : "${WORKERS:=8}"
 if [ -z "$NO_INSTALL" ]; then
   git cat-file -e $COMMIT^{commit} || { echo "commit $COMMIT not in the local clone: git fetch origin claude/project-thread-rwhdac first (exit 4)"; exit 4; }
   git cat-file -e $BANKCOMMIT^{commit} || { echo "commit $BANKCOMMIT missing (exit 4)"; exit 4; }
-  git checkout $COMMIT -- ${FILES% $D/e57/e57_bank.py}; git checkout $BANKCOMMIT -- $D/e57/e57_bank.py ; git cat-file -e 8557adc4352564b2f6640a9b27688782c6fee5a0^{commit} && git checkout 8557adc4352564b2f6640a9b27688782c6fee5a0 -- $D/e57/e57_nominate.py
+  git checkout $COMMIT -- ${FILES% $D/e57/e57_bank.py}; git checkout $BANKCOMMIT -- $D/e57/e57_bank.py ; git cat-file -e 7b14d5c386f07decaeb4852fe0f5260fe25bbf1c^{commit} && git checkout 7b14d5c386f07decaeb4852fe0f5260fe25bbf1c -- $D/e57/e57_nominate.py
 fi
 if [ -z "$SKIP_VERIFY" ]; then
   while read HH F; do
@@ -39,7 +39,7 @@ fe7309299152 e57/e57_namedevents.py
 f66cea288f61 e57/e57_lite.py
 765c674da589 e57/e57_bundle.py
 4f6ad6e59e4a e57/e57_verify.py
-7843a666e1a8 e57/e57_bank.py
+88076d1f3dd1 e57/e57_bank.py
 MANIFEST
   echo "installed code verified against the manifest"
 fi
@@ -49,7 +49,7 @@ $PY $D/e57/e57_bundle.py --selftest | tail -2
 $PY $D/e57/e57_bank.py --selftest | tail -2
 [ -z "$CPU_ONLY" ] || { echo "CPU_ONLY: checks done, full run skipped"; exit 0; }
 [ -f "$OUT/e57_bundle/bundle_store.pkl" ] || { echo "$OUT/e57_bundle/bundle_store.pkl missing: job 229 first (exit 7)"; exit 7; }
-[ "$(sha256sum $D/e57/e57_nominate.py | cut -c1-12)" = 5797b68d6026 ] || { echo "VERSION MISMATCH e57_nominate.py (exit 5)"; exit 5; }; STEP=nominate; NOMF=${NOMF:-experiments/exp07_write_ladder/e57_news/e57_bank/nominations_v4.json}; [ -f "$NOMF" ] || { echo "nominations file missing (exit 7)"; exit 7; }; for f in validated.jsonl distractors.json; do [ -f "$OUT/e57_bank/$f" ] || { echo "$f missing (exit 7)"; exit 7; }; done; [ -f "$OUT/e57_bank/distractors_ext.json" ] && [ -z "$RERUN" ] && { echo "distractors_ext.json exists (exit 8)"; exit 8; }
+[ "$(sha256sum $D/e57/e57_nominate.py | cut -c1-12)" = 834202c165e6 ] || { echo "VERSION MISMATCH e57_nominate.py (exit 5)"; exit 5; }; STEP=nominate; NOMF=${NOMF:-experiments/exp07_write_ladder/e57_news/e57_bank/nominations_v4.json}; [ -f "$NOMF" ] || { echo "nominations file missing (exit 7)"; exit 7; }; for f in validated.jsonl distractors.json; do [ -f "$OUT/e57_bank/$f" ] || { echo "$f missing (exit 7)"; exit 7; }; done; [ -f "$OUT/e57_bank/distractors_ext.json" ] && [ -z "$RERUN" ] && { echo "distractors_ext.json exists (exit 8)"; exit 8; }
 case "$STEP" in
   packet)   $PY $D/e57/e57_bank.py packet --out "$OUT" ${N_PACKET:+--n $N_PACKET} ${EXCLUDE:+--exclude "$EXCLUDE"};;
   validate) [ -f "$BANK" ] || { echo "BANK=<questions.jsonl> missing (exit 7)"; exit 7; }; $PY $D/e57/e57_bank.py validate --out "$OUT" --bank "$BANK";;

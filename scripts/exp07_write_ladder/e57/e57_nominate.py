@@ -28,8 +28,8 @@ def run(out,nomfile,log=print):
         qid=n['id']
         if qid not in Q:prob.append(f'{qid}: not a validated question');continue
         q=Q[qid];d=D[qid];E=st[q['event']];pk=B.packet_refs(out,q['event']);have={B.norm(h['surface']) for h in d['hard']}
-        picks=[x['surface'] for x in n.get('nominated_from_list',[])];bad=[x for x in picks if B.norm(x) not in have]
-        if bad:prob.append(f'{qid}: list picks not in the hard list {bad}');continue
+        picks=[x['surface'] for x in n.get('nominated_from_list',[])];moved=[x for x in picks if B.norm(x) not in have]                # corrected surface of a hard-list string (e.g. 'Paso International Airport' -> 'El Paso International Airport'): checked in the stream like an extra
+        picks=[x for x in picks if x not in moved];n=dict(n,proposed_extra_needs_code_check=list(n.get('proposed_extra_needs_code_check',[]))+moved)
         res=[check_extra(q,s,E,pk) for s in n.get('proposed_extra_needs_code_check',[])]
         acc=[r for r in res if r['accepted']]
         for r in acc:
