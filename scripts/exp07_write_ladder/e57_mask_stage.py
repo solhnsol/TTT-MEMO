@@ -71,8 +71,8 @@ def compute(ends,all_ids,model,frac,nch,k0=1,passfn=None,L=None,rt=None,s3=None,
     return out,stats
 class SelMaskAll:
     """UV-compatible mask object (.keep) for e55_core (arms SELC1): stored hidden sentences of window AND chunk, rank r; returns a per-query keep [CH, WIN+CH] (module doc)"""
-    def __init__(self,arm,rank,masks,ends,UVm,CH=CH,nw=NW,log=print):
-        self.vlog={};self.arm=arm;self.rank=rank;self.masks=masks;self.ends=np.asarray(ends);self.UVm=UVm;self.CH=CH;self.nw=nw;self.log=log
+    def __init__(self,arm,rank,masks,ends,UVm,CH=CH,nw=NW,log=print,guard=0):
+        self.guard=int(guard);self.vlog={};self.arm=arm;self.rank=rank;self.masks=masks;self.ends=np.asarray(ends);self.UVm=UVm;self.CH=CH;self.nw=nw;self.log=log
     def keep(self,k,m,Kc,Vc,ids_k,keep_all):
         CH,nw=self.CH,self.nw;W=nw*CH;wsid,wst,wlen=self.UVm.window_sents(self.ends,k,CH,nw);q=self.UVm.chunk_sents(self.ends,k,CH)
         kw=f'h{self.rank}_{k}';kc=f'ch{self.rank}_{k}';hw=np.zeros(len(wlen),bool);hc=np.zeros(len(q),bool)
@@ -92,7 +92,9 @@ class SelMaskAll:
         same=(csid[:,None]==csid[None,:])                       # query row i, chunk key j: the own sentence stays visible (and the token itself)
         keep[:,W:]=~(hck[None,:]&~same)
         keep[np.arange(CH),W+np.arange(CH)]=True
-        info={'uv_arm':self.arm,'sel_rank':self.rank,'uv_hidden_tokens':int(hk.sum()),'uv_hidden_chunk_tokens':int(hck.sum()),'uv_window_sents':int(len(wlen)),'uv_chunk_sents':int(len(q))}
+        for dd in range(1,self.guard+1):                         # LOCAL GUARD: the `guard` tokens right before a query token always stay visible (window tail for the first tokens of the chunk, chunk tokens otherwise)
+            keep[np.arange(CH),W+np.arange(CH)-dd]=True
+        info={'uv_arm':self.arm,'sel_rank':self.rank,'uv_guard':self.guard,'uv_hidden_tokens':int(hk.sum()),'uv_hidden_chunk_tokens':int(hck.sum()),'uv_window_sents':int(len(wlen)),'uv_chunk_sents':int(len(q))}
         if k%16==0:self.log(f'  {self.arm} chunk {k}: hidden window tokens {int(hk.sum())} ({hk.sum()/max((wsid>=0).sum(),1):.3f} of window), hidden chunk tokens {int(hck.sum())} ({hck.sum()/CH:.3f} of chunk)')
         return keep,info
 def synth_dump(k,seed=0,nQ=5,nW=12,L=6,H=4):
@@ -152,6 +154,11 @@ def selftest():
     assert info['uv_hidden_chunk_tokens']==int(sum(b-a for i,(a,b) in enumerate(q) if hc[i]))
     # the window columns are 1-D equivalent (same for all rows)
     assert (keep[:,:W]==keep[0:1,:W]).all()
+    G_=6;ag=SelMaskAll('SELC1',2,out,ends,UVm,log=lambda *x:None,guard=G_);kg,_=ag.keep(k,None,None,None,None,None)
+    for i in range(0,CH,37):
+        for dd in range(1,G_+1):assert kg[i,W+i-dd],('guard: the tokens right before a query stay visible',i,dd)
+    assert (kg|keep).sum()==kg.sum() and kg.sum()>=keep.sum() and not np.array_equal(kg,keep),'the guard only adds visible keys'
+    assert kg[:,:W].sum()>keep[:,:W].sum() or kg[:,W:].sum()>keep[:,W:].sum()
     print('e57_mask_stage selftest ok')
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--frac',type=float,default=0.33);ap.add_argument('--coef',default=None);ap.add_argument('--tokenizer',default=None);ap.add_argument('--oracle-all',action='store_true',help='also write the ORACLE answer mask extended to the chunk (rank 5) and its same-amount random control (rank 6)');ap.add_argument('--check-only',action='store_true');ap.add_argument('--selftest',action='store_true');ap.add_argument('--rerun',action='store_true');a=ap.parse_args()
