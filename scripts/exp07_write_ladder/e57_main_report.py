@@ -15,7 +15,8 @@ def groups(rows):
     return out
 def run(d):
     d=pathlib.Path(d);files={a:json.load(open(d/f'E57_main_{a}.json')) for a in ('W0','NAT','NATADAMH','ORC','RAND') if (d/f'E57_main_{a}.json').exists()}
-    rows=[r for v in files.values() for r in v['rows']];n_pos=None
+    rows=[r for v in files.values() for r in v['rows']];first_over={a:v.get('first_chunk_over_canary_limit') for a,v in files.items() if a!='W0'}
+    for r in rows:r['explore']=bool(r['cycle']>0 and first_over.get(r['arm']) is not None and r['read_chunk']>first_over[r['arm']])      # read AFTER the canary limit: exploratory, kept apart
     L=['# E57 main run report (counts and means only; first observation, 42 questions, 10 events, no inference)','']
     for a,v in files.items():
         if a=='W0':L.append(f"- W0: canary {v['canary_w0']}")
@@ -28,7 +29,7 @@ def run(d):
     res={}
     for excl in (False,True):
         sel=[r for r in rows if not (excl and r['question'] in EXCL)];tag='without may-person-01 / may-person-03' if excl else 'all 42 questions'
-        L+=['',f'## metrics per arm / cycle / read position ({tag})','','| arm | cycle | read chunk in cycle | condition | n | acc all | rank ratio all | acc hard | rank ratio hard | rank ratio pool | mean n_k | mean shadow |','|---|---|---|---|---|---|---|---|---|---|---|---|']
+        L+=['',f'## metrics per arm / cycle / read position ({tag})','','| arm | cycle | read chunk in cycle | after canary limit (exploratory) | condition | n | acc all | rank ratio all | acc hard | rank ratio hard | rank ratio pool | mean n_k | mean shadow |','|---|---|---|---|---|---|---|---|---|---|---|---|---|']
         g=groups(sel);res[tag]={}
         for key in sorted(g,key=lambda k:(k[0]!='W0',k[0],k[1],k[2],k[3])):
             conds=[(key[3],g[key])]
@@ -36,10 +37,10 @@ def run(d):
             for cname,rr in conds:
                 m=agg(rr)
                 if m is None:continue
-                L.append(f"| {key[0]} | {key[1]} | {key[2]} | {cname} | {m['n']} | {f(m['acc_all'])} | {f(m['rr_all'])} | {f(m['acc_hard'])} | {f(m['rr_hard'])} | {f(m['rr_pool'])} | {f(m['n_k'])} | {f(m['shadow'])} |")
+                L.append(f"| {key[0]} | {key[1]} | {key[2]} | {'yes' if g[key][0].get('explore') else 'no'} | {cname} | {m['n']} | {f(m['acc_all'])} | {f(m['rr_all'])} | {f(m['acc_hard'])} | {f(m['rr_hard'])} | {f(m['rr_pool'])} | {f(m['n_k'])} | {f(m['shadow'])} |")
                 res[tag][f'{key[0]}|{key[1]}|{key[2]}|{cname}']=m
         # end-of-cycle paired differences to NAT and to W0 (by question)
-        L+=['',f'### end-of-cycle reads: paired differences ({tag}); positive acc / negative rank ratio = better than the reference','','| arm | cycle | condition | vs | mean diff acc all | mean diff rank ratio all | mean diff acc hard | mean diff rank ratio hard |','|---|---|---|---|---|---|---|---|']
+        L+=['',f'### reads at the end of each cycle: paired differences ({tag}); positive acc / negative rank ratio = better than the reference','','| arm | cycle | condition | vs | mean diff acc all | mean diff rank ratio all | mean diff acc hard | mean diff rank ratio hard |','|---|---|---|---|---|---|---|---|']
         last={r['read_chunk']%1000000 for r in sel if r['cycle']>0};endpos=max(last) if last else None
         def by(arm,cyc,cond):return {r['question']:r for r in sel if r['arm']==arm and r['cycle']==cyc and r['read_chunk']%1000000==endpos and r['condition']==cond}
         w0={cond:{r['question']:r for r in sel if r['arm']=='W0' and r['read_chunk']==endpos and r['condition']==cond} for cond in ('OUT','IN')}
