@@ -75,12 +75,13 @@ def verify_keep(masks,ends,UVm,guard,ks):
         out['outside_pairs']+=int((vis&~own&~dist).sum());out['own_sentence_pairs']+=int((vis&own&~dist).sum());out['diagonal']+=int((vis&dist).sum());out['hidden_window_tokens']+=int(hk.sum());out['hidden_chunk_tokens']+=int(hck.sum())
     return out
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--tokenizer');ap.add_argument('--check',action='store_true');ap.add_argument('--guard',type=int,default=16);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--tokenizer');ap.add_argument('--check',action='store_true');ap.add_argument('--guard',type=int,default=16);ap.add_argument('--cycles',type=int,default=1);a=ap.parse_args()
     ROOT=HERE.parents[1];import gen_world_ctl as G,e55_uv as UVm,e57_reads as RD,e57_bank as B,e57_orc2 as O2
     from tokenizers import Tokenizer
     tf=a.tokenizer or str(ROOT/'data/tokenizer/llama3/tokenizer.json');enc=G.load_enc(tf);tk=Tokenizer.from_file(tf)
     bank=pathlib.Path(a.bank) if a.bank else pathlib.Path(a.bundle)/'e57_bank'/'bank_v1.json';items=RD.load_items(bank);ids,iv,hits=RD.article_intervals(a.bundle,enc,items);n=len(ids)//CH
-    bd=O2.build('v2',ids,tk,tf,items,iv,UVm,B);masks=make(bd,bd['ends'],UVm,n);np.savez_compressed(a.out,**masks)
+    P=len(ids)//CH*CH;ids_c=np.tile(ids,a.cycles);n=len(ids_c)//CH           # several cycles: the stream repeated, fragments / hidden decisions per chunk of the repeated stream
+    bd=O2.build('v2',ids_c,tk,tf,items,iv,UVm,B,period=P);masks=make(bd,bd['ends'],UVm,n);np.savez_compressed(a.out,**masks)
     s=O2.summarize_variant(bd,n);print(f"ORC2 (v2) hidden tokens {s['hidden_tokens']} ({s['hidden_token_share_of_stream']:.3f}); window share mean {s['window_hidden_share']['mean']:.3f} (min {s['window_hidden_share']['min']:.3f} max {s['window_hidden_share']['max']:.3f}); chunk share mean {s['chunk_hidden_share']['mean']:.3f}; partial-only {s['share_partial_only']:.3f}, other-event-only {s['share_strict_cross_event_only']:.3f}, related to own event {s['share_related_to_own_event_answer']:.3f}")
     # RAND2 matching over the chunks
     dw=[];dc=[];hw_all=[];hc_all=[]
