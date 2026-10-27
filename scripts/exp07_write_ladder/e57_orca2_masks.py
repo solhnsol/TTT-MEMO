@@ -19,13 +19,13 @@ def make(bd,ends,UVm,n,seed=61):
         rw,rc=MS.random_like(hw,hc,np.asarray(wl),cl,k,seed+100)
         out[f'wlen{k}']=np.asarray(wl,np.int32);out[f'clen{k}']=cl;out['h7_%d'%k]=hw;out['ch7_%d'%k]=hc;out['h8_%d'%k]=rw;out['ch8_%d'%k]=rc
     return out
-def exposure(bd,items,B,tk,ids,guards=(4,8,16)):
-    """strict gold occurrences inside hidden fragments: visible through the guard (start / end / whole in the last G tokens of the fragment); and hidden-token share left effectively hidden"""
+def exposure(bd,items,B,tk,ids,guards=(4,16)):
+    """guard = every query token always sees its previous N tokens, masked or not. A strict gold occurrence inside a hidden fragment F (tokens a .. b-1 of F, length l) is therefore visible to the OUTSIDE queries q = l, l+1, ... (the first tokens after F; the tokens of F itself see their own sentence anyway) as long as q-N <= its tokens: any gold token visible to n_any = clip(b+N-l, 0, N) outside queries, the WHOLE string (all tokens a .. b-1) to n_whole = clip(a+N-l+1, 0, N) outside queries. Also the effective hidden share (hidden tokens minus the last N tokens of each hidden fragment)."""
     fr=bd['fr'];hid=bd['hidden'];strict=bd['strict'];txt=bd['txt'];rxs=[]
     for it in items:
         q=it['q'];vs=[v for v in [q['canonical']]+list(q.get('variants',[]))+[q.get('fixed_surface','')] if v]
         rxs.append(re.compile('|'.join(r'(?<![\w])'+re.escape(v)+r'(?![\w])' for v in vs),re.I) if vs else None)
-    tot=0;res={g:dict(start=0,end=0,whole=0) for g in guards};eff={g:0 for g in guards};hidden_tokens=0
+    tot=0;hidden_tokens=0;res={g:dict(any=0,whole=0,q_any=0,q_whole=0) for g in guards};eff={g:0 for g in guards}
     for j,(c,s,l) in enumerate(fr):
         if not hid[j]:continue
         hidden_tokens+=l
@@ -37,11 +37,11 @@ def exposure(bd,items,B,tk,ids,guards=(4,8,16)):
             for m in rx.finditer(t):
                 tot+=1
                 if cum is None:cum=[len(tk.decode([int(x) for x in ids[s:s+jj+1]])) for jj in range(l)]
+                a_=next(jj for jj in range(l) if cum[jj]>m.start());b_=next(jj for jj in range(l) if cum[jj]>=m.end())+1             # token index range [a_, b_) overlapping the match
                 for g in guards:
-                    cut=cum[l-g-1] if l-g-1>=0 else 0
-                    st=m.start()>=cut;en=m.end()>cut
-                    res[g]['start']+=1 if st else 0;res[g]['end']+=1 if en else 0;res[g]['whole']+=1 if st else 0
-    return dict(gold_occurrences_in_hidden_fragments=tot,hidden_tokens=hidden_tokens,by_guard={str(g):dict(share_end_visible=res[g]['end']/tot if tot else None,share_start_visible=res[g]['start']/tot if tot else None,share_whole_visible=res[g]['whole']/tot if tot else None,occurrences_end_visible=res[g]['end'],occurrences_start_visible=res[g]['start'],effective_hidden_share_of_hidden_tokens=eff[g]/hidden_tokens if hidden_tokens else None) for g in guards})
+                    na=min(max(b_+g-l,0),g);nw=min(max(a_+g-l+1,0),g)
+                    res[g]['any']+=1 if na>0 else 0;res[g]['whole']+=1 if nw>0 else 0;res[g]['q_any']+=na;res[g]['q_whole']+=nw
+    return dict(gold_occurrences_in_hidden_fragments=tot,hidden_tokens=hidden_tokens,by_guard={str(g):dict(share_with_a_gold_token_visible_to_outside_queries=res[g]['any']/tot if tot else None,share_with_the_whole_string_visible_to_one_outside_query=res[g]['whole']/tot if tot else None,occurrences_any=res[g]['any'],occurrences_whole=res[g]['whole'],outside_query_tokens_seeing_a_gold_token_total=res[g]['q_any'],outside_query_tokens_seeing_the_whole_string_total=res[g]['q_whole'],mean_outside_queries_per_exposed_occurrence=res[g]['q_any']/res[g]['any'] if res[g]['any'] else None,mean_outside_queries_per_occurrence=res[g]['q_any']/tot if tot else None,effective_hidden_share_of_hidden_tokens=eff[g]/hidden_tokens if hidden_tokens else None) for g in guards})
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--tokenizer');ap.add_argument('--check',action='store_true');ap.add_argument('--guard',type=int,default=16);a=ap.parse_args()
     ROOT=HERE.parents[1];import gen_world_ctl as G,e55_uv as UVm,e57_reads as RD,e57_bank as B,e57_orc2 as O2
