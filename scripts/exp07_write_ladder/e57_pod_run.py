@@ -8,15 +8,20 @@ import sys,json,time,gc,hashlib,pathlib
 import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE))
-POD={'masks':None,'ntg':None,'guard':4}
-def _pop(flag):
+POD={'masks':None,'ntg':None,'guard':4,'ends_v2':False}
+def _pop(flag,has_value=True):
     if flag in sys.argv:
-        i=sys.argv.index(flag);v=sys.argv[i+1];del sys.argv[i:i+2];return v
-RANK={'C1':1,'LRN':2,'RC1':3,'RLRN':4,'ORCA':5,'RORCA':6}
+        i=sys.argv.index(flag)
+        if not has_value:del sys.argv[i];return True
+        v=sys.argv[i+1];del sys.argv[i:i+2];return v
+RANK={'C1':1,'LRN':2,'RC1':3,'RLRN':4,'ORCA':5,'RORCA':6,'ORC2':7,'RAND2':8}
 def pod_stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM):
     import e55_uv as UVm,e57_mask_stage as MS
     CH=1024;assert N==1,'the pod run is one cycle'
-    ends=UVm.sentence_ends(UVm.tokenizer(tfile),ids_all);masks={k:v for k,v in np.load(POD['masks']).items()}
+    if POD['ends_v2']:
+        import e57_orc2 as O2;ends=O2.sentence_ends_v2(UVm.tokenizer(tfile),ids_all)             # abbreviation-aware splitting (ORC v2 arms ORC2 / RAND2)
+    else:ends=UVm.sentence_ends(UVm.tokenizer(tfile),ids_all)
+    masks={k:v for k,v in np.load(POD['masks']).items()}
     ntg=json.load(open(POD['ntg']))['norm_targets'];assert ntg is not None and len(ntg)>=nch,(None if ntg is None else len(ntg),nch);ntg=list(ntg[:nch])
     dummy_meta=[{'sents':[]} for _ in range(nch)];rc={}
     L0=C.Ladder55(rt,save_dir=out/'states'/'E57_pod_rec',canary=None);t0=time.monotonic()
@@ -40,7 +45,7 @@ def pod_stage_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD
             update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys','uv_hidden_tokens','uv_hidden_chunk_tokens') if k_ in e} for e in log],norm_targets=None,rs_targets=None,read_positions_in_cycle=kks),default=float));print('wrote',fnA,flush=True)
         del L,res;gc.collect();LD.jax.clear_caches()
 def main():
-    POD['masks']=_pop('--pod-masks');POD['ntg']=_pop('--ntg-from');g=_pop('--guard');POD['guard']=int(g) if g is not None else POD['guard']
+    POD['ends_v2']=_pop('--ends-v2',False) is True;POD['masks']=_pop('--pod-masks');POD['ntg']=_pop('--ntg-from');g=_pop('--guard');POD['guard']=int(g) if g is not None else POD['guard']
     import e57_main_run as M
     M.ARMS_ALL=tuple(M.ARMS_ALL)+tuple(RANK);M.stage_arms=pod_stage_arms
     if '--stage' in sys.argv and sys.argv[sys.argv.index('--stage')+1]=='arms':assert POD['masks'] and POD['ntg'],'--pod-masks and --ntg-from are required for the arms stage'
