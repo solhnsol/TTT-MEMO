@@ -42,6 +42,38 @@ def exposure(bd,items,B,tk,ids,guards=(4,16)):
                     na=min(max(b_+g-l,0),g);nw=min(max(a_+g-l+1,0),g)
                     res[g]['any']+=1 if na>0 else 0;res[g]['whole']+=1 if nw>0 else 0;res[g]['q_any']+=na;res[g]['q_whole']+=nw
     return dict(gold_occurrences_in_hidden_fragments=tot,hidden_tokens=hidden_tokens,by_guard={str(g):dict(share_with_a_gold_token_visible_to_outside_queries=res[g]['any']/tot if tot else None,share_with_the_whole_string_visible_to_one_outside_query=res[g]['whole']/tot if tot else None,occurrences_any=res[g]['any'],occurrences_whole=res[g]['whole'],outside_query_tokens_seeing_a_gold_token_total=res[g]['q_any'],outside_query_tokens_seeing_the_whole_string_total=res[g]['q_whole'],mean_outside_queries_per_exposed_occurrence=res[g]['q_any']/res[g]['any'] if res[g]['any'] else None,mean_outside_queries_per_occurrence=res[g]['q_any']/tot if tot else None,effective_hidden_share_of_hidden_tokens=eff[g]/hidden_tokens if hidden_tokens else None) for g in guards})
+def context_loss(bd,n,Ns=(1,4,16)):
+    """guard 0: query tokens whose previous N tokens are hidden from them (hidden fragments other than the query's own fragment): total masked previous tokens, number of affected queries, share of all query tokens"""
+    fr=bd['fr'];hid=bd['hidden'];T=n*CH;fid=np.full(T,-1,np.int64);hid_tok=np.zeros(T,bool)
+    for j,(c,s_,l) in enumerate(fr):fid[s_:s_+l]=j;hid_tok[s_:s_+l]=hid[j]
+    out={}
+    for N in Ns:
+        tot=np.zeros(T,np.int64)
+        for d in range(1,N+1):
+            m=np.zeros(T,bool);m[d:]=hid_tok[:-d]&(fid[:-d]!=fid[d:]);tot+=m
+        out[str(N)]=dict(masked_previous_tokens_total=int(tot.sum()),affected_queries=int((tot>0).sum()),affected_query_share=float((tot>0).mean()),mean_masked_previous_tokens_per_affected_query=float(tot[tot>0].mean()) if (tot>0).any() else None,share_of_all_previous_tokens=float(tot.sum()/(N*T)))
+    return out
+def verify_keep(masks,ends,UVm,guard,ks):
+    """SelMaskAll.keep at the given guard on the real masks: hidden window / hidden chunk keys visible to queries OUTSIDE their own sentence (must be 0 at guard 0); visible inside the own sentence and on the diagonal (by design)"""
+    import e57_mask_stage as MS
+    arm=MS.SelMaskAll('SELC1',7,masks,ends,UVm,log=lambda *x:None,guard=guard);W=NW*CH;out=dict(outside_pairs=0,own_sentence_pairs=0,diagonal=0,hidden_window_tokens=0,hidden_chunk_tokens=0)
+    for k in ks:
+        keep,info=arm.keep(k,None,None,None,None,None);q=UVm.chunk_sents(ends,k,CH);csid=np.full(CH,-1)
+        for i,(a_,b_) in enumerate(q):csid[a_:b_]=i
+        hc=np.asarray(masks[f'ch7_{k}'],bool);hck=np.zeros(CH,bool)
+        for i,(a_,b_) in enumerate(q):
+            if hc[i]:hck[a_:b_]=True
+        wsid,wst,wl=UVm.window_sents(ends,k,CH,NW);hw=np.asarray(masks[f'h7_{k}'],bool);hk=np.zeros(W,bool)
+        for i,(s_,l_) in enumerate(zip(wst,wl)):
+            if hw[i]:hk[int(s_):int(s_)+int(l_)]=True
+        allh=np.concatenate([hk,hck]);qr=np.arange(CH)
+        vis=keep[:,allh]                                  # visibility of hidden keys
+        cols=np.nonzero(allh)[0];own=np.zeros(vis.shape,bool);dist=np.zeros(vis.shape,bool)
+        for ci,col in enumerate(cols):
+            if col>=W:
+                own[:,ci]=(csid==csid[col-W]);dist[col-W,ci]=True
+        out['outside_pairs']+=int((vis&~own&~dist).sum());out['own_sentence_pairs']+=int((vis&own&~dist).sum());out['diagonal']+=int((vis&dist).sum());out['hidden_window_tokens']+=int(hk.sum());out['hidden_chunk_tokens']+=int(hck.sum())
+    return out
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--out');ap.add_argument('--bank');ap.add_argument('--tokenizer');ap.add_argument('--check',action='store_true');ap.add_argument('--guard',type=int,default=16);a=ap.parse_args()
     ROOT=HERE.parents[1];import gen_world_ctl as G,e55_uv as UVm,e57_reads as RD,e57_bank as B,e57_orc2 as O2
@@ -59,5 +91,7 @@ def main():
     print('RAND2 matching',json.dumps(match))
     if a.check:
         ex=exposure(bd,items,B,tk,ids);print('guard exposure of strict gold occurrences in hidden fragments:',json.dumps(ex))
-        pathlib.Path(str(a.out)+'.check.json').write_text(json.dumps(dict(variant=s,rand2_matching=match,guard_exposure=ex,n_chunks=len(hw_all)),indent=1,default=float))
+        cl=context_loss(bd,n);print('guard 0: local context loss (previous N tokens hidden from the query):',json.dumps(cl))
+        vk={g:verify_keep(masks,bd['ends'],UVm,g,range(8,n)) for g in (0,4,16)};print('keep matrix check (hidden keys visible to outside queries):',json.dumps(vk))
+        pathlib.Path(str(a.out)+'.check.json').write_text(json.dumps(dict(variant=s,rand2_matching=match,guard_exposure=ex,guard0_context_loss=cl,keep_check=vk,n_chunks=len(hw_all)),indent=1,default=float))
 if __name__=='__main__':main()
