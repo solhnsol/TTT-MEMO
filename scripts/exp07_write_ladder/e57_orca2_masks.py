@@ -91,7 +91,7 @@ def main():
     match=dict(window_token_diff_mean=float(np.mean(dw)),window_token_diff_abs_max=int(np.max(np.abs(dw))),chunk_token_diff_mean=float(np.mean(dc)),chunk_token_diff_abs_max=int(np.max(np.abs(dc))),orc2_window_tokens_mean=float(np.mean(hw_all)),orc2_chunk_tokens_mean=float(np.mean(hc_all)),rand2_window_tokens_mean=float(np.mean(hw_all)+np.mean(dw)),rand2_chunk_tokens_mean=float(np.mean(hc_all)+np.mean(dc)))
     print('RAND2 matching',json.dumps(match))
     if a.check:
-        ex=exposure(bd,items,B,tk,ids);print('guard exposure of strict gold occurrences in hidden fragments:',json.dumps(ex))
+        ex=exposure(bd,items,B,tk,ids_c);print('guard exposure of strict gold occurrences in hidden fragments:',json.dumps(ex))
         cl=context_loss(bd,n);print('guard 0: local context loss (previous N tokens hidden from the query):',json.dumps(cl))
         vk={g:verify_keep(masks,bd['ends'],UVm,g,range(8,n)) for g in (0,4,16)};print('keep matrix check (hidden keys visible to outside queries):',json.dumps(vk))
         pathlib.Path(str(a.out)+'.check.json').write_text(json.dumps(dict(variant=s,rand2_matching=match,guard_exposure=ex,guard0_context_loss=cl,keep_check=vk,n_chunks=len(hw_all)),indent=1,default=float))
