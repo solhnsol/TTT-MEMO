@@ -21,7 +21,7 @@ mkdir -p /home/solhnsol/workspace && ln -sfn $C /home/solhnsol/workspace/TTT-MEM
 source /workspace/rp_env.sh
 export PYTHONUNBUFFERED=1
 cd $C
-D=scripts/exp07_write_ladder; J=$D/jobs_proposed/292_e57_news_gainq_band_write_arms.sh; BK=/workspace/code_backup_292_p$PP
+D=scripts/exp07_write_ladder; J292=$D/jobs_proposed/292_e57_news_gainq_band_write_arms.sh; case $PP in 0.10) J=$D/jobs_proposed/293_e57_news_gainq_band_write_arms_p010.sh; JH=a57b9091b4b3150f120a8c17d1f046c9fe0a7e5392d26c4382e739c307d95c78;; 0.50) J=$D/jobs_proposed/294_e57_news_gainq_band_write_arms_p050.sh; JH=d8f9c2808685058c05f8d88b77ac76a7b2138a0185b7539b3a5ab2c829d8d07e;; *) J=$J292; JH=d25d4f1438ea42ed466f3e88979847519f54c1aba2d43c4f68add7bb5b10225d;; esac; BK=/workspace/code_backup_292_p$PP
 overlay(){
   local c=$1 f=$2 t=/tmp/ov.$$; mkdir -p "$(dirname $f)"
   curl -fsSL --retry 4 --retry-delay 3 -o $t "$RAW/$c/$f" || return 1
@@ -48,8 +48,10 @@ fetch_all(){ (
   overlay 399c3de92258f26b513eddb565cd00748ced07dc $D/e57_closure_masks.py
   overlay 399c3de92258f26b513eddb565cd00748ced07dc $D/e57_qband_masks.py
   overlay 399c3de92258f26b513eddb565cd00748ced07dc $D/e57_qband_run.py
-  overlay 2e86f02158004ba3d77792a337483da853ec4550 $J
-  [ "$(sha256sum $J | cut -d' ' -f1)" = fb7c686156b29f7bf116434be13d49a7f3e3792632309952178ebf363a29fae8 ]
+  overlay 42b28c73e77bf0d774ba8ae60ca33048951bfec6 $J292
+  [ "$(sha256sum $J292 | cut -d' ' -f1)" = d25d4f1438ea42ed466f3e88979847519f54c1aba2d43c4f68add7bb5b10225d ]
+  overlay 42b28c73e77bf0d774ba8ae60ca33048951bfec6 $J
+  [ "$(sha256sum $J | cut -d' ' -f1)" = $JH ]
 ) }
 envinfo(){ date -u; uname -a; df -h /workspace | tail -1; nvidia-smi -L || echo "no gpu"; $PY -V; ls -la $X/e57_news/e57_bundle $X/e57_news/e57_bank | head -20; ls -la /workspace/TTT-MEMO/checkpoints/3b_ttt_e2e_finetune_books_128k_3x_cc/1949 | head -5; ls -la /workspace/TTT-MEMO/data/tokenizer/llama3/tokenizer.json; echo "out dir:"; ls $X/e57_gainq_p$PP 2>&1 | head -3; echo "job-278 dump (cross-check input):"; ls $X/e57_pod/e57_pod_masks.npz $X/e57_windowless/E57_windowless_W0.npz 2>&1 | head -10; echo PY=$PY; }
 stage envinfo envinfo
