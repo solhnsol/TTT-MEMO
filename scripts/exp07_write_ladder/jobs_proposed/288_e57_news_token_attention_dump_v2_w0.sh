@@ -73,4 +73,4 @@ CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu $PY $S/e57_attdump2_run.py --bundle "$BU
 [ -f "$MOUT/e57_attdump2_manifest.json" ] && [ -z "$RERUN" ] && { echo "e57_attdump2_manifest.json exists (exit 8; RERUN=1 to redo)"; exit 8; }
 $PY $S/e57_attdump2_run.py --bundle "$BUNDLE" --out "$MOUT"
 chmod -R a+rX "$MOUT"
-$PY $S/e57_attdump2_run.py --check-278 --out "$MOUT" --chunks 1,17,33,65,129,257,279
+if [ -f "$OUT/e57_attdump/e57_attdump_manifest.json" ]; then $PY $S/e57_attdump2_run.py --check-278 --old "$OUT/e57_attdump" --out "$MOUT" --chunks 1,17,33,65,129,257,279; else echo "job-278 dump ($OUT/e57_attdump) not present here: cross-check skipped; run e57_attdump2_run.py --check-278 where both dumps exist"; fi
