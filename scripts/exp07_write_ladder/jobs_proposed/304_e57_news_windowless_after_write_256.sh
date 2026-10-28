@@ -72,6 +72,8 @@ J=$($PY - "$OUT" <<'PYE'
 import json,sys
 o=sys.argv[1];r=[]
 for lab,f in (('GAINQ256_p026',o+'/e57_gainq256_p0.26/E57_main_GAINQ256.arms.json'),('RANDQ256_p026',o+'/e57_randq256_p0.26/E57_main_RANDQ256.arms.json')):
+    import os
+    if not os.path.exists(f):continue
     st=json.load(open(f))['states']['279'];r.append(f"{lab}={st['file']}:{st['hash']}")
 print(','.join(r))
 PYE
