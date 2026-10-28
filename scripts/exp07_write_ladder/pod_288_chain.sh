@@ -28,15 +28,15 @@ overlay(){
 fetch_all(){ (
   set -e
   for f in e57_main_run.py e57_main_report.py e57_attdump_run.py e57_attdump.py e57_mask_stage.py; do overlay 6bf5250047fe95da4404071bd3325de1711bb12d $D/$f; done
-  for f in e57_attdump2.py e57_attdump2_run.py; do overlay 2703daa42eb3a158e90b2b36d732d014479bfc54 $D/$f; done
+  for f in e57_attdump2.py e57_attdump2_run.py; do overlay 770742cec1978b0ed881db8d7ab5e34a5c0b2f38 $D/$f; done
   overlay c9e5e6a6b60adad98bf917d00cd19678d8c4c1a6 $D/e57_reads.py
   overlay c9e5e6a6b60adad98bf917d00cd19678d8c4c1a6 $D/e57_trial_run.py
   overlay c9e5e6a6b60adad98bf917d00cd19678d8c4c1a6 $D/e57/e57_bank.py
   overlay 57c50b5ce5dee7e3efea0ba036c79ab4eb6e6f02 $D/e57_canary_run.py
   overlay 5c835409e9a32b77829fdb20e4022a6547f06705 $D/e56/e56_text.py
   overlay 5c835409e9a32b77829fdb20e4022a6547f06705 $D/e57/e57_common.py
-  overlay c7fe0f73c43f957ef0efe9a6d342a605d77c7c0d $J
-  [ "$(sha256sum $J | cut -d' ' -f1)" = 7e47d855404720c4011bf136372f1d0d48a93732223d0dc8193bcb8e80e0f313 ]
+  overlay 514a35bbb6279e07ff056f2455890484afcad608 $J
+  [ "$(sha256sum $J | cut -d' ' -f1)" = a79144c0458a2102f4ddea7d0399d8347f9efd19b8c08504d2c237c9f0a3c7b5 ]
 ) }
 envinfo(){ date -u; uname -a; df -h /workspace | tail -1; nvidia-smi -L || echo "no gpu"; $PY -V; ls -la $X/e57_news/e57_bundle $X/e57_news/e57_bank | head -20; ls -la /workspace/TTT-MEMO/checkpoints/3b_ttt_e2e_finetune_books_128k_3x_cc/1949 | head -5; ls -la /workspace/TTT-MEMO/data/tokenizer/llama3/tokenizer.json; echo "dump out dir:"; ls $X/e57_attdump2 2>&1 | head -3; echo "job-278 dump (cross-check input):"; ls $X/e57_attdump 2>&1 | head -10; echo PY=$PY; }
 stage envinfo envinfo
