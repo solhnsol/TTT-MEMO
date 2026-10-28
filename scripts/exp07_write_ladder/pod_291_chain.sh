@@ -54,7 +54,7 @@ fetch_all(){ (
 envinfo(){ date -u; uname -a; df -h /workspace | tail -1; nvidia-smi -L || echo "no gpu"; $PY -V; ls -la $X/e57_news/e57_bundle $X/e57_news/e57_bank | head -20; ls -la /workspace/TTT-MEMO/checkpoints/3b_ttt_e2e_finetune_books_128k_3x_cc/1949 | head -5; ls -la /workspace/TTT-MEMO/data/tokenizer/llama3/tokenizer.json; echo "out dir:"; ls $X/e57_qband 2>&1 | head -3; echo "job-278 dump (cross-check input):"; ls $X/e57_pod/e57_pod_masks.npz $X/e57_windowless/E57_windowless_W0.npz 2>&1 | head -10; echo PY=$PY; }
 stage envinfo envinfo
 stage overlay fetch_all
-inputs(){ mkdir -p $X/e57_main; [ -f $X/e57_main/E57_main_NAT.arms.json ] || cp -n $X/E57_main_NAT.arms.json $X/e57_main/E57_main_NAT.arms.json; ls -la $X/e57_main $X/E57_main_* 2>&1 | head -30; for f in $X/e57_main/E57_main_NAT.arms.json $X/e57_main/E57_main_W0.json; do [ -f $f ] && sha256sum $f || { echo "MISSING $f"; return 1; }; done; }
+inputs(){ mkdir -p $X/e57_main; [ -f $X/e57_main/E57_main_NAT.arms.json ] || cp -n $X/E57_main_NAT.arms.json $X/e57_main/E57_main_NAT.arms.json; [ -f $X/e57_main/E57_main_W0.json ] || { [ -f $X/e57_pod/E57_main_W0.json ] && cp -n $X/e57_pod/E57_main_W0.json $X/e57_main/E57_main_W0.json && echo "W0 reads of job 261 are not on the volume: copied the W0 reads of the pod run (e57_pod, same values as job 261 except timings and bank path; checked on the lab copies)"; }; ls -la $X/e57_main $X/e57_pod 2>&1 | head -40; for f in $X/e57_main/E57_main_NAT.arms.json $X/e57_main/E57_main_W0.json; do [ -f $f ] && sha256sum $f || { echo "MISSING $f"; return 1; }; done; }
 stage inputs inputs
 export OUT=$X BUNDLE=$X/e57_news MOUT=$X/e57_qband NO_INSTALL=1
 stage cpucheck env CPU_ONLY=1 bash $J
