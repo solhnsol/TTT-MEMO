@@ -80,7 +80,7 @@ def selftest():
     with tempfile.TemporaryDirectory() as t:
         man=run(t,ids,N,passfn,lambda k:([0,100],[100,924]),log=lambda *x:None);assert man['first_chunk']==1 and man['last_chunk']==N-1
         z=load_chunk(t,3);assert z['POS'].shape==(H,n,9) and z['q_ids'].shape==(CH,) and z['T_key'].dtype==np.int16 and z['VN'].shape==(H,1024)
-        assert not os.access(pathlib.Path(t)/man['shards']['0']['file'],os.W_OK),'shards are read-only'
+        import stat;assert (stat.S_IMODE(os.stat(pathlib.Path(t)/man['shards']['0']['file']).st_mode)&0o222)==0,'shards are read-only'      # mode bits, not os.access (root can always write)
         vs={j:np.ones((H,1024),np.float16)*j for j in range(1,N)};w=AD.vn_window(vs,3);assert w.shape==(H,8192) and w[0,-1]==3.0 and w[0,0]==0.0
     print('e57_attdump2_run selftest ok')
 if __name__=='__main__':main()
