@@ -25,6 +25,9 @@ def up(a,n):return np.unpackbits(a)[:n].astype(bool)
 def build_keep(keep1d,kw,qb):
     """-> bool [CH, WIN+CH]: natural 1-D keep of the chunk, window keys kw hidden for all queries, rows qb without any window key"""
     kp=np.broadcast_to(np.asarray(keep1d,bool),(CH,WIN+CH)).copy();kp[:,:WIN]&=~np.asarray(kw,bool)[None,:];kp[np.asarray(qb,bool),:WIN]=False;return kp
+def band_keep(keep1d,k):
+    """-> bool [CH, WIN+CH]: each query row i sees only the previous k tokens (itself and the k-1 before it, window AND chunk keys): key column c is at distance i + WIN - c; allowed 0 <= distance < k, intersected with the natural 1-D keep"""
+    d=np.arange(CH)[:,None]+WIN-np.arange(WIN+CH)[None,:];return np.broadcast_to(np.asarray(keep1d,bool),(CH,WIN+CH))&(d>=0)&(d<int(k))
 def rows_eligible(lm,sid):
     """rows i (0..1022) with a loss and whose predicted token i+1 lies inside a sentence"""
     ok=np.zeros(CH,bool);ok[:CH-1]=np.asarray(lm,bool)[:CH-1]&(np.asarray(sid)[1:]>=0);return ok
@@ -93,5 +96,8 @@ def selftest():
     with tempfile.TemporaryDirectory() as t:
         np.savez_compressed(pathlib.Path(t)/'a.npz',names=np.asarray(['X']),amt=np.zeros((1,3)),kw_X_9=pk(M['ORCA_K'][0]),kw_RAND_Q_M_9=pk(M['ORCA_K'][0]));np.savez(pathlib.Path(t)/'b.npz',names=np.asarray(['X']),amt=np.zeros((1,3)),kw_X_9=pk(M['ORCA_K'][0]),kw_RAND_Q_M_9=pk(M['RAND_Q_M'][0]))
         da,aa=content_hashes(pathlib.Path(t)/'a.npz');db,ab=content_hashes(pathlib.Path(t)/'b.npz');assert da==db and aa!=ab,'det hash ignores RAND_Q_* and the container'
+    nat=np.ones(WIN+CH,bool);b=band_keep(nat,128)
+    assert b.sum(1)[0]==128 and b.sum(1)[500]==128 and b.sum(1)[1023]==128 and b[0,WIN] and b[0,WIN-127] and not b[0,WIN-128] and not b[5,WIN+6] and b[700,WIN+700-127] and not b[700,WIN+700-128]
+    b1=band_keep(nat,1024);assert b1[0,WIN-1023] and not b1[0,WIN-1024] and b1[1023,WIN] and not b1[1023,WIN-1] and b1.sum(1)[0]==1024
     print('e57_closure_masks selftest ok')
 if __name__=='__main__':main()
