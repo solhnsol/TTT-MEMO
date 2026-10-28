@@ -13,6 +13,7 @@ import os,sys,json,time,argparse,hashlib
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import ladder as LD
+import margins_split as MS
 from ladder import *
 sys.path.insert(0,str(LD.ROOT/'scripts/exp04_what_ttt_retains'))
 import suppress as SP
@@ -32,18 +33,42 @@ def _full3(self,hidden_states,seq,state):
         xq,xk,xv=self.get_attention_input(hidden_states,position_ids=q0+jnp.arange(n,dtype=jnp.int32))
         K=jnp.concatenate([Kc.astype(xk.dtype),xk],axis=0);V=jnp.concatenate([Vc.astype(xv.dtype),xv],axis=0)
         qi=(q0+jnp.arange(n,dtype=jnp.int32))[:,None];kj=(q0-WIN+jnp.arange(WIN+n,dtype=jnp.int32))[None,:]
-        mask=(qi>=kj)&(qi-kj<WIN)&(kj>=0)&keep[None,:]
+        mask=(qi>=kj)&(qi-kj<WIN)&(kj>=0)&(keep if keep.ndim==2 else keep[None,:])      # E55 design 19: keep may be a per-query [n, WIN+n] mask (arm KMASK); the 1-D path is unchanged
+        o=jax.nn.dot_product_attention(xq,K,V,mask=mask,implementation='xla');o=self._merge_heads(o)
+        return (self.get_attention_output(o),state)
+    if mode=='att':
+        # E55 27.8 forward-only attention diagnostic (eager, never inside jit): the 'ctx' attention, plus the head-averaged attention probabilities of the query rows S3['att_rows'] appended (as float32 numpy [n_rows, WIN+n]) to S3['att_out']; the output of the layer is the unchanged 'ctx' output
+        Kc,Vc=state;q0=S3['q0'];keep=S3['keep'];n=hidden_states.shape[0]
+        xq,xk,xv=self.get_attention_input(hidden_states,position_ids=q0+jnp.arange(n,dtype=jnp.int32))
+        K=jnp.concatenate([Kc.astype(xk.dtype),xk],axis=0);V=jnp.concatenate([Vc.astype(xv.dtype),xv],axis=0)
+        qi=(q0+jnp.arange(n,dtype=jnp.int32))[:,None];kj=(q0-WIN+jnp.arange(WIN+n,dtype=jnp.int32))[None,:]
+        mask=(qi>=kj)&(qi-kj<WIN)&(kj>=0)&(keep if keep.ndim==2 else keep[None,:])
+        rows=S3['att_rows'];q=xq[rows].astype(jnp.float32);Kx=K.astype(jnp.float32)
+        if Kx.shape[1]!=q.shape[1]:Kx=jnp.repeat(Kx,q.shape[1]//Kx.shape[1],axis=1)
+        sc=jnp.einsum('qhd,khd->hqk',q,Kx)*(q.shape[-1]**-0.5);sc=jnp.where(mask[rows][None],sc,-1e30);ph=jax.nn.softmax(sc,axis=-1);p=ph.mean(0)
+        if S3.get('att_topk'):       # E55 31 attention dump: per head the top-m WINDOW keys (current-chunk keys and absent chunks excluded): int16 key index and float16 probability, [H, n_rows, m]
+            import numpy as _np2;kk=jnp.arange(WIN+n);vk=(kk>=S3['att_lo'])&(kk<WIN);v_,i_=jax.lax.top_k(jnp.where(vk[None,None,:],ph,-1.0),S3['att_topk']);S3['att_heads'].append((_np2.asarray(i_,_np2.int16),_np2.asarray(v_,_np2.float16)))
+        if S3.get('att_sentM') is not None:       # E55 32.10 sentence dump: attention mass of every query SENTENCE (token mean) on every window SENTENCE (sum over its key tokens), per head: [H, nQ, nW] float32 per layer; M = one-hot [WIN, nW] of the window keys, qavg = [nQ, rows] token-mean weights of the query sentences
+            import numpy as _np3;S3['att_sent'].append(_np3.asarray(jnp.einsum('sq,hqw->hsw',S3['att_qavg'],jnp.einsum('hqk,kw->hqw',ph[:,:,:WIN],S3['att_sentM'])),_np3.float32))
+        if S3.get('att_lean') is not None:       # E55 32.11 online-free mask stage: only the maximum window mass and its key index per head and query token, int16 / float16 [H, rows] per layer (the T_max / T_key of the token statistics, nothing else)
+            import numpy as _np5;pw5=ph[:,:,:WIN];S3['att_lean'].append((_np5.asarray(pw5.max(-1),_np5.float16),_np5.asarray(pw5.argmax(-1),_np5.int16)))
+        if S3.get('att_tokstat') is not None:       # E55 32.10b token-level sharpness per head and query token over the WINDOW keys: max mass, summed mass, entropy of the (unnormalised) window mass, key index of the max; float16 / int16 numpy [H, rows]
+            import numpy as _np4;pw=ph[:,:,:WIN];S3['att_tokstat'].append((_np4.asarray(pw.max(-1),_np4.float16),_np4.asarray(pw.sum(-1),_np4.float16),_np4.asarray(-(pw*jnp.log(pw+1e-30)).sum(-1),_np4.float16),_np4.asarray(pw.argmax(-1),_np4.int16),_np4.asarray(pw[:,:,:4].sum(-1),_np4.float16),_np4.asarray(pw[:,:,WIN-1024:].sum(-1),_np4.float16)))      # + mass on the first 4 window keys (sink) and on the last 1024 window keys (previous chunk)
+            if S3.get('att_vnorm') is not None:       # E55 32.10c attention x value: V-norm of every window key per query head (repeat of the kv heads), the sentence aggregation of p*|v| like att_sent, and the raw [Hkv, WIN] norms
+                vn=jnp.linalg.norm(V[:WIN].astype(jnp.float32),axis=-1);S3['att_vnorm'].append(_np4.asarray(vn.T,_np4.float16));vh=jnp.repeat(vn,pw.shape[0]//vn.shape[1],axis=1).T;S3['att_sentv'].append(_np4.asarray(jnp.einsum('sq,hqw->hsw',S3['att_qavg'],jnp.einsum('hqk,kw->hqw',pw*vh[:,None,:],S3['att_sentM'])),_np4.float32))
+        import numpy as _np
+        if not S3.get('att_noout'):S3['att_out'].append(_np.asarray(p,_np.float32))      # att_noout (E55 32.8 online votes): the head-averaged rows are not needed, skip the [rows, keys] host copy per layer
         o=jax.nn.dot_product_attention(xq,K,V,mask=mask,implementation='xla');o=self._merge_heads(o)
         return (self.get_attention_output(o),state)
     raise ValueError(mode)
 def _mask3(self,chunk_id):
     m=_prev_mask(self,chunk_id)
-    if 'kmask' in S3SUF:m=m&S3SUF['kmask'][None,:]
+    if 'kmask' in S3SUF:km=S3SUF['kmask'];m=m&(km if km.ndim==2 else km[None,:])
     return m
 SWA.full_sw_attention=_full3;SWA.sw_causal_mask=_mask3
 class Ladder3(LD.Ladder):
     def build3(self):
-        rt=self.rt;lr,clip=self.lr,self.clip;Batch=self.Batch
+        rt=self.rt;lr,clip=self.lr,self.clip;Batch=self.Batch;lr_scale=float(getattr(self,'lr_scale',1.0))   # E38: python constant in the closure; 1.0 adds no op, so the compiled x1 graph is unchanged
         @eqx.filter_jit
         def layer_rec(blk,h,ids_):
             S3['mode']='rec'
@@ -73,6 +98,7 @@ class Ladder3(LD.Ladder):
             finally:S3SUF.clear()
             g=grads.inner_parameters();gn=optax.global_norm(g);coef=jnp.where(gn<clip,1.0,clip/jnp.maximum(gn,1e-30))
             s=lr*m.get_ilr_multiplier(st_all.get(m.step_index))
+            if lr_scale!=1.0:s=s*lr_scale   # clip threshold and coef untouched
             newp=jax.tree.map(lambda p,x:(p+(-s*coef*x).astype(p.dtype)).astype(p.dtype),m.inner_parameters(),g)
             return newp,gn,coef,ce
         @eqx.filter_jit
@@ -82,6 +108,7 @@ class Ladder3(LD.Ladder):
         def native_step(m,st_all,st_suf,c,pref_):
             (_l,(ce,_n,new_st)),grads=eqx.filter_value_and_grad(MetaModel.lm_loss,has_aux=True)(m,c,st_suf,prefix_outputs=pref_)
             g=grads.inner_parameters();gn=optax.global_norm(g);coef=jnp.where(gn<clip,1.0,clip/jnp.maximum(gn,1e-30));s=lr*m.get_ilr_multiplier(st_all.get(m.step_index))
+            if lr_scale!=1.0:s=s*lr_scale
             newp=jax.tree.map(lambda p,x:(p+(-s*coef*x).astype(p.dtype)).astype(p.dtype),m.inner_parameters(),g)
             return newp,new_st,gn,coef,ce
         @eqx.filter_jit
@@ -114,31 +141,51 @@ class Ladder3(LD.Ladder):
     def ev(self,m):
         if getattr(self,'canary_only',False):return {'_gen_nll':self.gen_nll(m),'_tail_nll':self.tail_nll(m),'_canary_only':True}
         return self.evaluate(m)
+    def ctx_deltas_w0(self,seq,pref_nat,ids):
+        """k6ctx: per chunk (nll with the native window context - nll of the chunk alone), both at W0 (the ctx_gain.py read: native chain over the pass stream; chunk alone with a fresh state and its own prefix). Must run inside rt.mesh."""
+        rt=self.rt;m=rt.base;st=clone_state(rt.state_suffix);out=[]
+        for k in range(NCH):
+            c=rt.chunk(seq,k);st,lp=rt.chunk_logp(m,st,c,pref_nat[k*CH:(k+1)*CH]);ctx=float(-np.asarray(lp,np.float64)[:CH-1].mean())
+            sq=rt.seq([int(t) for t in ids[k*CH:(k+1)*CH]]);pf=rt.prefix(m,sq);_,lp2=rt.chunk_logp(m,clone_state(rt.state_suffix),rt.chunk(sq,0),pf[:CH]);out.append(ctx-float(-np.asarray(lp2,np.float64)[:CH-1].mean()))
+        return out
     def run_cell(self,swap,cell,passes=1,nch=None,seed=0):
         rt=self.rt;log=[];m=rt.base;st_all=clone_state(rt.state_all);streams,worlds=self.streams_worlds(swap,passes);nch=nch or NCH;cum=0.0
         with rt.mesh:
             log.append({'epoch':0,'margins':self.ev(m)})
             for ps in range(1,passes+1):
-                ids=np.asarray(streams[ps-1])[:NCH*CH];stats=[];t_pass=time.monotonic()
+                ids=np.asarray(streams[ps-1])[:NCH*CH];stats=[];t_pass=time.monotonic();cum_pass=0.0
                 mask=np.zeros(NCH*CH,dtype=bool);mask[:len(ids)-1]=True;seq=rt.seq(ids,mask=mask);pref_nat=rt.prefix(rt.base,seq);st_suf=clone_state(rt.state_suffix)
                 if cell!='native0':
                     t0=time.monotonic();Kh,Vh,_=self.record(ids);print(f'  recorded natural K,V ({Kh.nbytes*2/2**30:.1f} GiB host) in {time.monotonic()-t0:.0f}s',flush=True)
-                    sets=SETS.Sets(SETS.sentence_table(worlds[ps-1],swap,self.T.tok,gw,SP),seed,ps)
+                    sets=SETS.Sets(SETS.sentence_table(worlds[ps-1],swap,self.T.tok,gw,SP),seed,ps,getattr(self,'fill_frac',0.25))
+                    sets.fill_attn_cands=bool(getattr(self,'fill_attn_cands',False));sets.fill_no_o=bool(getattr(self,'fill_no_o',False))
+                    if getattr(self,'fill_size_from',None):
+                        rf=json.load(open(OUT/f'S3_{self.fill_size_from}_s{seed}_{"B" if swap else "A"}.saved.json'))['log'][ps]['chunks'];sets.fill_total={x['k']:int(x['n_masked']) for x in rf}
+                if cell in ('k6ctx','k6ctxq'):t0=time.monotonic();dl=self.ctx_deltas_w0(seq,pref_nat,ids);sel=SETS.select_by_ctx(dl,self.ctx_tau) if cell=='k6ctx' else SETS.select_by_ctx_quantile(dl,self.ctx_frac);print(f'  {cell} deltas at W0 in {time.monotonic()-t0:.0f}s, chunks masked whole {sum(sel)} ({"tau "+str(self.ctx_tau) if cell=="k6ctx" else "lowest "+str(self.ctx_frac)})',flush=True)
                 for k in range(nch):
                     t0=time.monotonic();old=m;c=rt.chunk(seq,k);pref_c=pref_nat[k*CH:(k+1)*CH];ex={}
                     if cell=='native0':   # flag off: the original native step (state and gradient from one forward)
                         newp,st_suf,gn,coef,ce=self.native_step(m,st_all,st_suf,c,pref_c)
                     else:
-                        S,fr=sets.chunk_set(cell,k);keep=sets.keep_vector(k,S);Kc,Vc=self.ctx_kv(Kh,Vh,k)
+                        S,fr=(sets.prefixall(k) if sel[k] else [],1.0) if cell in ('k6ctx','k6ctxq') else sets.chunk_set(cell,k);keep=sets.keep_vector(k,S);Kc,Vc=self.ctx_kv(Kh,Vh,k)
                         pref_w=self.prefix_masked(m,jnp.asarray(ids[k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep))
                         newp,gn,coef,ce=self.write_step(m,st_all,st_suf,c,pref_w,jnp.asarray(keep));st_suf=self.read_state(m,st_suf,c,pref_c)
                         ex={'n_masked':int(len(S)),'match_frac':float(fr)}
+                        if cell in ('k6','k6p'):nO=len(sets.oracle(k));ex.update(n_O=nO,has_O=bool(nO))
+                        if cell in ('k6ctx','k6ctxq'):nO=len(sets.oracle(k));ex.update(n_O=nO,has_O=bool(nO),ctx_delta=dl[k],selected=bool(sel[k]))
+                        if cell in ('sent','bg','noo'):nO=len(sets.oracle(k));ex.update(n_O=nO,has_O=bool(nO),types=sets.type_counts(k,S))
+                        if cell=='k3all':nO=len(sets.oracle(k));ex.update(n_O=nO,has_O=bool(nO),n_K3=len(sets.sentencecover(k)),**{'n_'+a_:b_ for a_,b_ in sets.k3all_parts(k)[1].items()})
+                        if cell in ('k3h','k3hc','k3r'):nO=len(sets.oracle(k));ex.update(n_O=nO,has_O=bool(nO),n_K3=len(sets.sentencecover(k)))
+                        if cell in ('op','kp','kx','kp_u','kx_u','kx_s','kx_o'):nO=len(sets.oracle(k));P_,X_=sets.pxsplit(k);ex.update(n_O=nO,has_O=bool(nO),n_K3=len(sets.sentencecover(k)),n_P=len(P_),n_X=len(X_))
+                        if cell in ('occ','frm','unif_occ'):O_,C_,F_=sets.kindsplit(k);ex.update(n_O=len(O_),has_O=bool(O_),n_OCC=len(C_),n_FRM=len(F_),n_K3=len(O_)+len(C_)+len(F_))
+                        if cell in ('k3','k3b','k3f'):nO=len(sets.oracle(k));ex.update(n_O=nO,has_O=bool(nO),n_sent=int(getattr(sets,'last_nsent',0)))
+                        if cell in ('oraclefill','randfill'):nO=len(sets.oracle(k));ex.update(n_O=nO,n_F=int(len(S)-nO) if cell=='oraclefill' else int(len(S)))
                     m=self.set_inner(m,newp)
-                    un=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=un
+                    un=sum(float(jnp.sum((a.astype(jnp.float32)-b.astype(jnp.float32))**2)) for a,b in zip(jax.tree.leaves(m.inner_parameters()),jax.tree.leaves(old.inner_parameters())))**0.5;cum+=un;cum_pass+=un
                     stats.append({'k':k,'gnorm':float(gn),'coef':float(coef),'update_norm':un,'ce':float(ce),'sec':time.monotonic()-t0,**ex})
                     if k%8==0:print(f'  {cell} {"B" if swap else "A"} pass {ps} chunk {k+1}/{nch} {stats[-1]["sec"]:.1f}s',flush=True)
                 cs=[s_['coef'] for s_ in stats]
-                log.append({'epoch':ps,'cum_update_norm':cum,'chunks':stats,'clip_bind_frac':sum(c_<1 for c_ in cs)/len(cs),'mean_coef':sum(cs)/len(cs),'n_masked_total':sum(s_.get('n_masked',0) for s_ in stats),
+                log.append({'epoch':ps,'lr_scale':float(getattr(self,'lr_scale',1.0)),'first_chunk_ce':stats[0]['ce'],'mean_update_norm':cum_pass/len(stats),'cum_update_norm':cum,'chunks':stats,'clip_bind_frac':sum(c_<1 for c_ in cs)/len(cs),'mean_coef':sum(cs)/len(cs),'n_masked_total':sum(s_.get('n_masked',0) for s_ in stats),
                             'stream_hash':hashlib.sha256(np.asarray(ids,np.int64).tobytes()).hexdigest(),'inner_hash':reuse._hash_pytree(m.inner_parameters())[0],'sec_pass':time.monotonic()-t_pass,'margins':self.ev(m)})
                 print(f'  {cell} {"B" if swap else "A"} pass {ps}: cum upd {cum:.3f}, clip binds {log[-1]["clip_bind_frac"]:.3f}, masked tokens {log[-1]["n_masked_total"]}, {log[-1]["sec_pass"]:.0f}s',flush=True)
                 if 'Kh' in dir():del Kh,Vh
@@ -187,32 +234,44 @@ def unit_diag(L,world_seed):
             res['chunks'].append(row);print(json.dumps(row),flush=True)
     return res
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['native0','native3','oracle','othent','randdist','recency','prefixall','oraclesub','othentsub'],default='oracle');ap.add_argument('--world-seed',type=int,default=101)
-    ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],default='save');ap.add_argument('--tag',default='');ap.add_argument('--passes',type=int,default=4);ap.add_argument('--keep',action='store_true')
-    ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true');ap.add_argument('--unit-diag',action='store_true')
-    a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True);assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
+    ap=argparse.ArgumentParser();ap.add_argument('--cell',choices=['native0','native3','oracle','othent','randdist','recency','prefixall','oraclesub','othentsub','oraclefill','randfill','k6','k6p','k3','k3b','k3f','k6ctx','k6ctxq','occ','frm','unif_occ','k3all','k3h','k3hc','k3r','op','kp','kx','kp_u','kx_u','kx_s','kx_o','sent','bg','noo'],default='oracle');ap.add_argument('--world-seed',type=int,default=101)
+    ap.add_argument('--worlds',default='AB');ap.add_argument('--mode',choices=['save','eval'],default='save');ap.add_argument('--tag',default='');ap.add_argument('--passes',type=int,default=4);ap.add_argument('--keep',action='store_true');ap.add_argument('--cells',default=None,help='E48: comma list of cells run one after the other in this process (one model load): per cell the files S3_<tag>_s<seed>_{A,B}.json as for a single call; a failing cell is reported and the next one still runs (exit code 3 at the end); --tags (same length, default <cell>_p<passes>)');ap.add_argument('--tags',default=None);ap.add_argument('--regold',action='store_true',help='E47: --mode eval only: re-score the saved states with the current ladder.evaluate (gold / foil span log-probs stored), keep the states, write <result>.regold.json next to the untouched original and compare the margins with it')
+    ap.add_argument('--canary-only',action='store_true');ap.add_argument('--smoke-chunks',type=int,default=None);ap.add_argument('--unit',action='store_true');ap.add_argument('--unit-diag',action='store_true');ap.add_argument('--fill-size-from',default=None,help='E41 U49: oraclefill total per chunk = n_masked of OUT/S3_<TAG>_s<seed>_<world>.saved.json (e.g. attnsel_p4), instead of fill-frac x window');ap.add_argument('--fill-no-o',action='store_true',help='oraclefill: chunks WITHOUT an oracle set are also filled uniformly (total = fill-size-from n_masked of that chunk, else fill-frac x window); needed to pair with attn-sel, which masks 40-50% in every chunk');ap.add_argument('--fill-attn-cands',action='store_true',help='oraclefill: draw the fill only from the attention cells candidate set (positions >= 4 and < chunk start - 128)');ap.add_argument('--fill-frac',type=float,default=0.25,help='E39: oraclefill/randfill target masked fraction of the write window');ap.add_argument('--lr-scale',type=float,default=1.0,help='E38: multiply the inner step size (after ilr multiplier, clip untouched); 1.0 = bit-identical to the old code')
+    ap.add_argument('--ctx-frac',type=float,default=0.30,help='k6ctxq: the fraction of chunks 1..62 with the lowest delta that are masked whole (n = round(frac x 62), ties -> lower chunk index)');ap.add_argument('--ctx-tau',type=float,default=-0.38,help='k6ctx: a chunk is masked whole (prefix-all, as K6\') when its window context gain delta (mean NLL with the 8K window - mean NLL alone, read at W0 on the pass stream) is below tau');a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True);assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     rt=Runtime()
     if a.unit_diag:
-        L=Ladder3(rt,a.world_seed,readout=False);L.build3();res=unit_diag(L,a.world_seed);json.dump(res,open(OUT/f's3_unit_diag_s{a.world_seed}.json','w'),indent=1);print('unit diag done');return
+        L=Ladder3(rt,a.world_seed,readout=False);L.lr_scale=a.lr_scale;L.build3();res=unit_diag(L,a.world_seed);json.dump(res,open(OUT/f's3_unit_diag_s{a.world_seed}.json','w'),indent=1);print('unit diag done');return
     if a.unit:
-        L=Ladder3(rt,a.world_seed,readout=False);L.build3();res=L.unit(a.world_seed);json.dump(res,open(OUT/f's3_unit_s{a.world_seed}.json','w'),indent=1);print('unit done');return
-    tag=a.tag or f'{a.cell}_p{a.passes}';lev='S3';SD=OUT/'states'/f'{lev}_{tag}_s{a.world_seed}'
-    L=Ladder3(rt,a.world_seed,readout=(a.mode!='save'),save_dir=SD);L.build3();L.canary_only=a.canary_only
-    if a.smoke_chunks:assert a.canary_only and 'smoke' in tag
-    if not a.smoke_chunks:json.dump({'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'clip':L.clip,'cell':a.cell,'passes':a.passes,'xla_flags':os.environ.get('XLA_FLAGS')},open(OUT/f'meta_{lev}_{tag}_s{a.world_seed}.json','w'),indent=1)
-    for w in a.worlds:
-        f=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.json';fs=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.saved.json'
-        if f.exists():print('exists',f);continue
-        if a.mode=='eval':
-            d=json.load(open(fs));t0=time.monotonic()
-            for e in d['log']:
-                if isinstance(e.get('margins'),dict) and '_file' in e['margins']:
-                    fn=e['margins']['_file'];h=e['margins']['_hash'];mm=L.load_state(fn)
-                    assert reuse._hash_pytree(mm.inner_parameters())[0]==h;e['margins']=L.evaluate(mm);e['hash']=h
-                    if not a.keep:os.remove(fn)
-            d['sec_eval']=time.monotonic()-t0;json.dump(d,open(f,'w'));print('scored',f,round(d['sec_eval']),'s',flush=True);continue
-        L.save_dir=SD/w;L._nsave=0;(SD/w).mkdir(parents=True,exist_ok=True)
-        if fs.exists():print('exists',fs);continue
-        t0=time.monotonic();log=L.run_cell(w=='B',a.cell,a.passes,a.smoke_chunks,seed=a.world_seed)
-        json.dump({'log':log,'sec':time.monotonic()-t0,'cell':a.cell,'passes':a.passes},open(fs,'w'));print('saved',fs,round(time.monotonic()-t0),'s',flush=True)
+        L=Ladder3(rt,a.world_seed,readout=False);L.lr_scale=a.lr_scale;L.build3();res=L.unit(a.world_seed);json.dump(res,open(OUT/f's3_unit_s{a.world_seed}.json','w'),indent=1);print('unit done');return
+    cells=[x for x in a.cells.split(',') if x] if a.cells else [a.cell];tags=[x for x in a.tags.split(',') if x] if a.tags else ([a.tag] if (a.tag and not a.cells) else [f'{c}_p{a.passes}' for c in cells]);assert len(cells)==len(tags),'--cells and --tags need the same number of entries';lev='S3'   # E48: several cells in one process (one model load / setup for the bundle); the default (--cell, --tag) is the old single-cell path
+    L=Ladder3(rt,a.world_seed,readout=(a.mode!='save'),save_dir=None);L.lr_scale=a.lr_scale;L.ctx_tau=a.ctx_tau;L.ctx_frac=a.ctx_frac;L.fill_frac=a.fill_frac;L.fill_size_from=a.fill_size_from;L.fill_attn_cands=a.fill_attn_cands;L.fill_no_o=a.fill_no_o;L.build3();L.canary_only=a.canary_only
+    failed=[]
+    for cell,tag in zip(cells,tags):
+      try:
+        SD=OUT/'states'/f'{lev}_{tag}_s{a.world_seed}'
+        if a.smoke_chunks:assert a.canary_only and 'smoke' in tag
+        if not a.smoke_chunks:json.dump({'items':L.items,'fam_sizes':{k:len(v) for k,v in L.fam.items()},'lr':L.lr,'lr_scale':a.lr_scale,'fill_frac':a.fill_frac,'clip':L.clip,'cell':cell,'passes':a.passes,'xla_flags':os.environ.get('XLA_FLAGS')},open(OUT/f'meta_{lev}_{tag}_s{a.world_seed}.json','w'),indent=1)
+        for w in a.worlds:
+            f=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.json';fs=OUT/f'{lev}_{tag}_s{a.world_seed}_{w}.saved.json'
+            if a.regold:
+                assert a.mode=='eval','--regold needs --mode eval';f_orig=f;f=f.with_name(f.stem+'.regold.json')   # E47: re-score saved states (never removed)
+            if f.exists():print('exists',f);continue
+            if a.mode=='eval':
+                d=json.load(open(fs));t0=time.monotonic()
+                for e in d['log']:
+                    if isinstance(e.get('margins'),dict) and '_file' in e['margins']:
+                        fn=e['margins']['_file'];h=e['margins']['_hash'];mm=L.load_state(fn)
+                        assert reuse._hash_pytree(mm.inner_parameters())[0]==h;e['margins']=L.evaluate(mm);e['hash']=h
+                        if not (a.keep or a.regold):os.remove(fn)
+                if a.regold:
+                    d['regold_check']=MS.regold_check(json.load(open(f_orig))['log'],d['log']) if f_orig.exists() else None;print('regold check vs the original result (max |diff| of the margins per epoch):',d['regold_check'],flush=True)
+                d['sec_eval']=time.monotonic()-t0;json.dump(d,open(f,'w'));print('scored',f,round(d['sec_eval']),'s',flush=True);continue
+            L.save_dir=SD/w;L._nsave=0;(SD/w).mkdir(parents=True,exist_ok=True)
+            if fs.exists():print('exists',fs);continue
+            t0=time.monotonic();log=L.run_cell(w=='B',cell,a.passes,a.smoke_chunks,seed=a.world_seed)
+            json.dump({'log':log,'sec':time.monotonic()-t0,'cell':cell,'passes':a.passes,'lr_scale':a.lr_scale},open(fs,'w'));print('saved',fs,round(time.monotonic()-t0),'s',flush=True)
+      except Exception as e:
+        import traceback;traceback.print_exc();failed.append((cell,tag,repr(e)));print('CELL FAILED',cell,tag,repr(e),'(finished cells and their result files are kept)',flush=True)
+        if len(cells)==1:raise
+    if failed:print('failed cells:',failed);sys.exit(3)
 if __name__=='__main__':main()
