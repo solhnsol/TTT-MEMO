@@ -6,13 +6,20 @@ The keep of the runner is keep[i, :WIN] = ~kw & ~qb[i], keep[i, WIN:] = natural 
 Row i of a chunk is the attention row whose output predicts token i+1 (tgt[i] == q_ids[i+1]): query-side masks are defined on ROWS i, labels on the predicted TOKEN i+1.
 Masks (names): ORCA_K (oracle sentences of window, rank 5 of e57_pod_masks.npz), C1_K (candidate 1, rank 1), RC1_K (same-amount random of C1, rank 3), RORCA_K (rank 6); ORCA_Q (rows predicting ORCA tokens of the chunk), GAIN_Q_M (top rows by window gain of job 287a, count = round(hidden window fraction of ORCA_K x 1024) i.e. the same number of hidden (query x key) pairs as ORCA_K), GAIN_Q_p5/10/15/25 (top p % rows), RAND_Q_M (random rows, same count as GAIN_Q_M), RAND_Q_p10, RAND_Q_p25, RAND_Q_ORCA (same count as ORCA_Q). Extra masks (e.g. concentration based after job 288) are added with --extra a file of the same key format. Chunk-part masks of the pod run (hidden CHUNK sentences) are NOT used: the closure is about window access.
 amount[m, k] = hidden (query x key) pairs / (1024 x 8192), saved as 'amt' [n_masks, 280]; the closure per token = (nll_mask - nll_win) / (nll_chunk - nll_win) is computed by the analysis after the run (not here).
-  python3 e57_closure_masks.py --bundle B --pod-masks e57_pod_masks.npz --gain E57_windowless_W0.npz --out e57_closure_masks.npz [--extra X.npz] | --selftest"""
-import sys,json,argparse,pathlib
+Determinism: the builder is deterministic (RNG seed 289, fixed order) for the key-side and the gain / ORCA masks; only RAND_Q_* depend on numpy's Generator stream. content_hashes(file) = (det, all): sha256 over the sorted keys, dtypes, shapes and bytes of the arrays (the .npz container itself is NOT hashed: zip time stamps differ), det excludes the RAND_Q_* masks. The builder writes <out>.contenthash.json; --verify FILE [--expect-det H] prints the hashes and exits 9 on a mismatch of det.
+  python3 e57_closure_masks.py --bundle B --pod-masks e57_pod_masks.npz --gain E57_windowless_W0.npz --out e57_closure_masks.npz [--extra X.npz] | --verify FILE [--expect-det H] | --selftest"""
+import sys,json,argparse,pathlib,hashlib
 import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent
 for p in (HERE,HERE/'e57',HERE.parents[1]/'scripts/exp04_what_ttt_retains',HERE.parents[1]/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
 CH=1024;NW=8;WIN=NW*CH;K0=8;K1=280
 KEY_MASKS={'ORCA_K':5,'C1_K':1,'RC1_K':3,'RORCA_K':6}
+def content_hashes(path):
+    Z=np.load(path);d=hashlib.sha256();a=hashlib.sha256()
+    for k in sorted(Z.files):
+        v=np.ascontiguousarray(Z[k]);h=f'{k}|{v.dtype}|{v.shape}|'.encode()+v.tobytes();a.update(h)
+        if '_RAND_Q_' not in k and not (k=='amt' or k=='names'):d.update(h)
+    return d.hexdigest(),a.hexdigest()
 def pk(b):return np.packbits(np.asarray(b,bool))
 def up(a,n):return np.unpackbits(a)[:n].astype(bool)
 def build_keep(keep1d,kw,qb):
@@ -40,7 +47,11 @@ def chunk_masks(k,hk_by_name,orca_tok,gain,lm,sid,rng):
     return out
 def amount(kw,qb):return (int(kw.sum())*CH+int(qb.sum())*WIN-int(kw.sum())*int(qb.sum()))/(CH*WIN)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--pod-masks');ap.add_argument('--gain');ap.add_argument('--out');ap.add_argument('--extra');ap.add_argument('--tokenizer');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--pod-masks');ap.add_argument('--gain');ap.add_argument('--out');ap.add_argument('--extra');ap.add_argument('--tokenizer');ap.add_argument('--selftest',action='store_true');ap.add_argument('--verify');ap.add_argument('--expect-det');a=ap.parse_args()
+    if a.verify:
+        det,al=content_hashes(a.verify);print(f'content sha256 det={det} all={al}',flush=True)
+        if a.expect_det and a.expect_det!=det:print(f'MISMATCH: expected det {a.expect_det}',flush=True);sys.exit(9)
+        return
     if a.selftest:selftest();return
     import gen_world_ctl as G,e55_uv as UVm,e57_reads as RD,e57_mask_stage as MS
     from tokenizers import Tokenizer
@@ -65,6 +76,7 @@ def main():
         assert sorted(M)==names,(k,sorted(M),names)
         for nm,(kw,qb) in M.items():buf[f'kw_{nm}_{k}']=pk(kw);buf[f'qb_{nm}_{k}']=pk(qb);amt.setdefault(nm,np.zeros(K1))[k]=amount(kw,qb)
     np.savez_compressed(a.out,names=np.asarray(names),amt=np.stack([amt[n] for n in names]),chunks=np.asarray([K0,K1]),**buf)
+    det,al=content_hashes(a.out);pathlib.Path(str(a.out)+'.contenthash.json').write_text(json.dumps(dict(det=det,all=al,names=names)));print(f'content sha256 det={det} all={al}')
     print('masks',names);print('mean hidden-pair amount per mask:',{n:round(float(amt[n][K0:K1].mean()),4) for n in names})
 def selftest():
     rng=np.random.default_rng(0);lm=np.ones(CH,bool);sid=np.zeros(CH,int);sid[:5]=-1
@@ -77,5 +89,9 @@ def selftest():
     kp=build_keep(np.ones(WIN+CH,bool),M['ORCA_K'][0],M['GAIN_Q_p5'][1]);qb=M['GAIN_Q_p5'][1]
     assert kp.shape==(CH,WIN+CH) and not kp[~qb][:,:2048].any() and kp[~qb][:,2048:WIN].all() and not kp[qb][:,:WIN].any() and kp[:,WIN:].all()
     assert np.array_equal(up(pk(M['ORCA_K'][0]),WIN),M['ORCA_K'][0]) and np.array_equal(up(pk(qb),CH),qb)
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        np.savez_compressed(pathlib.Path(t)/'a.npz',names=np.asarray(['X']),amt=np.zeros((1,3)),kw_X_9=pk(M['ORCA_K'][0]),kw_RAND_Q_M_9=pk(M['ORCA_K'][0]));np.savez(pathlib.Path(t)/'b.npz',names=np.asarray(['X']),amt=np.zeros((1,3)),kw_X_9=pk(M['ORCA_K'][0]),kw_RAND_Q_M_9=pk(M['RAND_Q_M'][0]))
+        da,aa=content_hashes(pathlib.Path(t)/'a.npz');db,ab=content_hashes(pathlib.Path(t)/'b.npz');assert da==db and aa!=ab,'det hash ignores RAND_Q_* and the container'
     print('e57_closure_masks selftest ok')
 if __name__=='__main__':main()
