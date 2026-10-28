@@ -1,5 +1,5 @@
 #!/bin/bash
-# JOB 292 = E57 NEWS GAINQ BAND WRITE ARMS GAINQ128 / GAINQ512 / GAINQ1024 (post-hoc, exploratory; Hans via the label-free-mask thread 07:04Z / 07:10Z "GainQ만 돌려봐", lab GPU): same run as job 291 (SELC1 engine, Adam 0.5 x NAT norm, one cycle, OUT / IN / canary reads at the cycle end, W0 reads of job 261 reused) but only the top p fraction of the query rows (p = $P, default 0.26, candidates 0.10 / 0.26 / 0.50; chosen PER CHUNK among the loss rows of chunks 8..279 by the window gain of the band, nll_band_k - nll_win of job 290) see only the previous k tokens (k = 128 / 512 / 1024; window AND chunk keys, prefix AND suffix layers); all other rows and chunks 1..7 are unmasked. Ties: stable sort, the lower row index wins. NOT APPROVED yet (needs Hans job name + commit + time + p). ESTIMATE ONLY, unmeasured, lab A100: model load 15 min + record 5 min + 3 arms x 6.5 min + reads (scorers 10-15 min + 1-2 min per arm) = about 0.9-1.0 h, independent of p; 3 states of 1.4 GB. (Header of the copied job 291 follows)
+# JOB 292 = E57 NEWS GAINQ BAND WRITE ARMS GAINQ128 / GAINQ512 / GAINQ1024 (post-hoc, exploratory; Hans via the label-free-mask thread 07:04Z / 07:10Z "GainQ만 돌려봐", lab GPU): same run as job 291 (SELC1 engine, Adam 0.5 x NAT norm, one cycle, OUT / IN / canary reads at the cycle end, W0 reads of job 261 reused) but only the top p fraction of the query rows (p = $P, default 0.26, candidates 0.10 / 0.26 / 0.50; chosen PER CHUNK among the loss rows of chunks 8..279 by the window gain of the band, nll_band_k - nll_win of job 290) see only the previous k tokens (k = 128 and 512 (GAINQ1024 dropped by Hans 07:26Z; the mask file still holds all three bands, ARMS selects the arms); window AND chunk keys, prefix AND suffix layers); all other rows and chunks 1..7 are unmasked. Ties: stable sort, the lower row index wins. NOT APPROVED yet (needs Hans job name + commit + time + p). ESTIMATE ONLY, unmeasured, lab A100: model load 15 min + record 5 min + 2 arms x 6.5 min + reads (scorers 10-15 min + 1-2 min per arm) = about 0.75-0.85 h, independent of p; 2 states of 1.4 GB. (Header of the copied job 291 follows)
 set -eo pipefail
 PY=$(realpath -s "$PY")
 case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
@@ -66,7 +66,7 @@ $PY $S/e57_reads.py --selftest
 $PY $S/e57_main_run.py --selftest | tail -1
 $PY $S/e57_qband_masks.py --selftest | tail -1
 $PY $S/e57_qband_run.py --selftest | tail -1
-BUNDLE=${BUNDLE:-$OUT/e57_news};  P=${P:-0.26}; MOUT=${MOUT:-$OUT/e57_gainq_p$P}; ARMS=${ARMS:-GAINQ128,GAINQ512,GAINQ1024}
+BUNDLE=${BUNDLE:-$OUT/e57_news};  P=${P:-0.26}; MOUT=${MOUT:-$OUT/e57_gainq_p$P}; ARMS=${ARMS:-GAINQ128,GAINQ512}
 [ -f "$BUNDLE/e57_bundle/bundle_store.pkl" ] && [ -f "$BUNDLE/e57_bank/bank_v1.json" ] || { echo "bundle store or frozen bank missing (exit 7)"; exit 7; }
 CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu $PY $S/e57_main_run.py --bundle "$BUNDLE" --out "$MOUT" --cycles 1 --arms NAT --check-only
 [ -n "$CPU_ONLY" ] && { echo "CPU_ONLY: done before any GPU step"; exit 0; }
