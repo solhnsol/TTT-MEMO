@@ -45,11 +45,12 @@ fetch_all(){ (
   overlay 5c835409e9a32b77829fdb20e4022a6547f06705 $D/e56/e56_text.py
   overlay 5c835409e9a32b77829fdb20e4022a6547f06705 $D/e57/e57_common.py
   overlay c9e5e6a6b60adad98bf917d00cd19678d8c4c1a6 $D/e57/e57_bank.py
-  overlay 42d6d65f58ef2f412ae40381ab284f756d01032f $D/e57_closure_masks.py
-  overlay 42d6d65f58ef2f412ae40381ab284f756d01032f $D/e57_qband_masks.py
-  overlay 42d6d65f58ef2f412ae40381ab284f756d01032f $D/e57_qband_run.py
-  overlay 42d6d65f58ef2f412ae40381ab284f756d01032f $J
-  [ "$(sha256sum $J | cut -d' ' -f1)" = 3e3bf1621881ee6820f5dacbd313b7c5bcfc2d443ae69701353ac7e2cf7e540e ]
+  overlay c605ec573ae39eaae3e1a1563bbca0870c5b4e97 $D/e57_closure_run.py
+  overlay c605ec573ae39eaae3e1a1563bbca0870c5b4e97 $D/e57_closure_masks.py
+  overlay c605ec573ae39eaae3e1a1563bbca0870c5b4e97 $D/e57_qband_masks.py
+  overlay c605ec573ae39eaae3e1a1563bbca0870c5b4e97 $D/e57_qband_run.py
+  overlay c605ec573ae39eaae3e1a1563bbca0870c5b4e97 $J
+  [ "$(sha256sum $J | cut -d' ' -f1)" = 669f437dc8afc96db8d107eb663cf8ba2d2c8229d2bc0a0eb5e94edb33812d88 ]
 ) }
 envinfo(){ date -u; uname -a; df -h /workspace | tail -1; nvidia-smi -L || echo "no gpu"; $PY -V; ls -la $X/e57_news/e57_bundle $X/e57_news/e57_bank | head -20; ls -la /workspace/TTT-MEMO/checkpoints/3b_ttt_e2e_finetune_books_128k_3x_cc/1949 | head -5; ls -la /workspace/TTT-MEMO/data/tokenizer/llama3/tokenizer.json; echo "out dir:"; ls $X/e57_randq256_p$PP 2>&1 | head -3; echo "job-278 dump (cross-check input):"; ls $X/e57_pod/e57_pod_masks.npz $X/e57_windowless/E57_windowless_W0.npz 2>&1 | head -10; echo PY=$PY; }
 stage envinfo envinfo
