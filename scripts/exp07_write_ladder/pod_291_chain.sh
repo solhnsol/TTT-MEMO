@@ -12,7 +12,7 @@ log(){ echo "$(date -u +%T) $*" >> $L/stages.log; }
 end(){ log "$1"; sleep $GRACE; exit ${2:-0}; }
 stage(){ local name=$1; shift; log "STAGE_START $name"; "$@" > $L/$name.log 2>&1; local rc=$?; log "STAGE_END $name rc=$rc"; if [ $rc -ne 0 ]; then log "last lines of $name:"; tail -8 $L/$name.log >> $L/stages.log; end "CHAIN_FAILED at $name (rc=$rc)" $rc; fi; }
 log "START mode=$MODE"
-if [ "$MODE" = serve ]; then (cd $X/e57_qband && sha256sum * > $L/sha256_closure.txt) 2>>$L/stages.log; ls -la $X/e57_qband >> $L/stages.log; for f in $X/e57_pod/e57_pod_masks.npz $X/e57_windowless/E57_windowless_W0.npz; do if [ -f $f ]; then echo "INPUT $(sha256sum $f)" >> $L/stages.log; else echo "INPUT MISSING $f" >> $L/stages.log; fi; done; ls $X/e57_news/e57_bundle $X/e57_news/e57_bank 2>&1 | head -5 >> $L/stages.log; end "SERVE_READY (waiting $GRACE s)" 0; fi
+if [ "$MODE" = serve ]; then (cd $X/e57_qband && find . -type f -exec sha256sum {} + > $L/sha256_all.txt) 2>>$L/stages.log; du -sh $X/e57_qband >> $L/stages.log; end "SERVE_READY (waiting $GRACE s)" 0; fi
 # per-job code tree (scripts/ is a private copy, everything else is linked to the shared tree), so jobs running at the same time on the volume cannot overwrite each other's pinned files
 C=/workspace/code_291
 if [ ! -d $C/scripts ]; then mkdir -p $C; for e in /workspace/TTT-MEMO/* /workspace/TTT-MEMO/.[!.]*; do b=$(basename $e); [ "$b" = scripts ] || ln -sfn $e $C/$b; done; cp -a /workspace/TTT-MEMO/scripts $C/scripts; fi
