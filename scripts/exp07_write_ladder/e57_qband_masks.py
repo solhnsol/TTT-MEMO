@@ -45,11 +45,12 @@ def build(chunk_iter,bands,p,band_gain=None,only_gain=False,seed=291,kinds=None)
         out[f'band_{a}']=np.asarray(int(''.join(ch for ch in a if ch.isdigit())));out[f'all_{a}']=np.asarray(int(a.startswith('ALLQ')))
     out['names']=np.asarray(arms);out['p']=np.asarray(p);out['chunks']=np.asarray([K0,K1]);return out
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--gain');ap.add_argument('--out');ap.add_argument('--p',type=float,default=0.26);ap.add_argument('--bands',default='128,512,1024');ap.add_argument('--band-npz');ap.add_argument('--only-gain',action='store_true');ap.add_argument('--allq-only',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--selftest',action='store_true');ap.add_argument('--verify');ap.add_argument('--expect-det');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--bundle');ap.add_argument('--gain');ap.add_argument('--out');ap.add_argument('--p',type=float,default=0.26);ap.add_argument('--bands',default='128,512,1024');ap.add_argument('--band-npz');ap.add_argument('--only-gain',action='store_true');ap.add_argument('--allq-only',action='store_true');ap.add_argument('--tokenizer');ap.add_argument('--selftest',action='store_true');ap.add_argument('--verify');ap.add_argument('--expect-det');ap.add_argument('--expect-all');ap.add_argument('--random-only',action='store_true',help='only the RANDQ arms (same banded-row count per chunk as GAINQ at the same p; fixed seed 291; bands --bands)');a=ap.parse_args()
     if a.selftest:selftest();return
     if a.verify:
         det,al=content_det(a.verify);print(f'content sha256 det={det} all={al}',flush=True)
         if a.expect_det and a.expect_det!=det:print(f'MISMATCH: expected det {a.expect_det}',flush=True);sys.exit(9)
+        if a.expect_all and a.expect_all!=al:print(f'MISMATCH: expected all {a.expect_all}',flush=True);sys.exit(9)
         return
     if a.allq_only:      # ALLQ arms need no per-chunk rows: no bundle, no 287a file
         out=build([],[int(x) for x in a.bands.split(',')],a.p,kinds=('ALLQ',));np.savez_compressed(a.out,**out);det,al=content_det(a.out);pathlib.Path(str(a.out)+'.contenthash.json').write_text(json.dumps(dict(det=det,all=al,names=[str(x) for x in out['names']])));print(f'content sha256 det={det} all={al}');print('arms',[str(x) for x in out['names']]);return
@@ -68,7 +69,7 @@ def main():
             _,hc=MS.oracle_hidden(k,ends,ids,tk,items,UVm,memo);orc=np.zeros(CH,bool)
             for i,(s_,e_) in enumerate(q):orc[s_:e_]=hc[i]
             yield k,Gz['lm'][k],sid,orc,Gz['nll_win'][k]
-    out=build(it(),bands,a.p,bg,a.only_gain);np.savez_compressed(a.out,**out)
+    out=build(it(),bands,a.p,bg,a.only_gain,kinds=(('RANDQ',) if a.random_only else None));np.savez_compressed(a.out,**out)
     det,al=content_det(a.out);pathlib.Path(str(a.out)+'.contenthash.json').write_text(json.dumps(dict(det=det,all=al,names=[str(x) for x in out['names']],p=a.p)))
     print(f'content sha256 det={det} all={al}');print('arms',[str(x) for x in out['names']])
     for nm in out['names']:
@@ -85,5 +86,8 @@ def selftest():
     with tempfile.TemporaryDirectory() as t:
         np.savez_compressed(pathlib.Path(t)/'a.npz',**o);o2=dict(o);o2['qb_RANDQ128_9']=CM.pk(np.zeros(CH,bool));np.savez(pathlib.Path(t)/'b.npz',**o2)
         assert content_det(pathlib.Path(t)/'a.npz')[0]==content_det(pathlib.Path(t)/'b.npz')[0] and content_det(pathlib.Path(t)/'a.npz')[1]!=content_det(pathlib.Path(t)/'b.npz')[1]
+    r1=build([(9,lm,sid,orc,nw),(10,lm,sid,orc,nw)],[128,512],0.26,kinds=('RANDQ',));r2=build([(9,lm,sid,orc,nw),(10,lm,sid,orc,nw)],[128,512],0.26,kinds=('RANDQ',))
+    assert [str(x) for x in r1['names']]==['RANDQ128','RANDQ512'] and all(np.array_equal(r1[k],r2[k]) for k in r1 if k!='names') and int(CM.up(r1['qb_RANDQ128_9'],CH).sum())==n and int(CM.up(r1['qb_RANDQ512_10'],CH).sum())==n
+    assert not np.array_equal(r1['qb_RANDQ128_9'],r1['qb_RANDQ512_9']) and not np.array_equal(r1['qb_RANDQ128_9'],r1['qb_RANDQ128_10']),'independent random draws per arm and chunk'
     print('e57_qband_masks selftest ok')
 if __name__=='__main__':main()
