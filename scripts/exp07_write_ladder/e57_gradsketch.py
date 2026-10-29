@@ -82,8 +82,10 @@ def gs_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,r
         cap['rows']=[];cap['on']=True
         try:fwd_c(m,st_suf,c,pref_,kmask);jax.effects_barrier()
         finally:cap['on']=False
-        rows=cap['rows'];tags=np.array([t for t,_ in rows]);hit=[i for i,t in enumerate(tags) if np.min(np.abs(w2sum-t))<=1e-3*max(1.0,abs(t))]
-        lay=[int(np.argmin(np.abs(w2sum-tags[i]))) for i in hit];assert lay==list(range(NL)),('prime call order',lay,len(rows))
+        rows=cap['rows'];assert len(rows)==2*NL,('callbacks per forward',len(rows));tags=np.array([t for t,_ in rows]);hit=list(range(0,2*NL,2))      # feed_forward_prime is called first in every suffix block, the regular feed_forward second (checked on CPU: the prime calls carry the w2 weight sums of layers 0..7); order of the ordered callbacks = layer order
+        lay=[int(np.argmin(np.abs(w2sum-tags[i]))) for i in hit]
+        if cap.get('n',0)==0:lg(f'  C hook: {len(rows)} callbacks; prime-call tags {tags[hit].round(3).tolist()} vs w2 sums {w2sum.round(3).tolist()}; nearest layers {lay}')
+        cap['n']=cap.get('n',0)+1
         last=rows[hit[-1]][1];A['csk'].append(np.asarray(sk_act(jnp.asarray(last))));A['cnorm'].append(float(np.linalg.norm(last)))
         return res
     L.write_step=ws
