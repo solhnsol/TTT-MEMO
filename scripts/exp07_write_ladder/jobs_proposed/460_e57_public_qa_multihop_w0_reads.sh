@@ -1,5 +1,5 @@
 #!/bin/bash
-# JOB 460 = E57 PUBLIC QA STAGE 2 (E57 section 122-P, 20:50 addendum; prepared, NOT APPROVED to run, needs Hans's new approval line): the read-only W0 reads of job 440 (OUT / IN, same tail, same E49 scores, e57_squad_w0_reads.squad_reads unchanged) for 1,000 HotpotQA-distractor-dev items (items sha256 458177aa…, content hash c993393b) and 448 MuSiQue-Ans-dev items (bfaf4b2c…, 291351ba), 16 candidates each, IN = the supporting paragraphs joined at the end of the tail. No state written. Output $OUT/e57_multihop_w0/E57_squad_w0_reads.json + E57_squad_w0_keys.json (~22 MB; file names as in job 440, written by the same code). ESTIMATE ONLY (scaled from the job 440 estimate by 23,168 / 16,000 rows): load 15 min + OUT 23,168 rows scorer prep ~3.2-3.9 h + OUT reads ~22 min + IN 1,448 contexts (~2-4 s each + 16 rows) ~1.2-2 h = ~4.9-6.5 h.
+# JOB 460 = E57 PUBLIC QA STAGE 2 (E57 section 122-P, 20:50 addendum; prepared, NOT APPROVED to run, needs Hans's new approval line): the read-only W0 reads of job 440 (OUT / IN, same tail, same E49 scores, e57_squad_w0_reads.squad_reads unchanged) for 1,000 HotpotQA-distractor-dev items (items sha256 458177aa…, content hash c993393b) and 448 MuSiQue-Ans-dev items (bfaf4b2c…, 291351ba), 16 candidates each, IN = the supporting paragraphs joined at the end of the tail. No state written. Output $OUT/e57_multihop_w0/E57_squad_w0_reads.json + E57_squad_w0_keys.json (~22 MB; file names as in job 440, written by the same code). IN scorer: KV-reuse (job 447: 3.1 s instead of 24.4 s per item) if $OUT/e57_kvreuse_check/PASSED exists, else the reference path (the estimate below is for the reference path; with KV-reuse the IN part is ~1.3 h and the total ~3.7-4.5 h). ESTIMATE ONLY (scaled from the job 440 estimate by 23,168 / 16,000 rows): load 15 min + OUT 23,168 rows scorer prep ~3.2-3.9 h + OUT reads ~22 min + IN 1,448 contexts (~2-4 s each + 16 rows) ~1.2-2 h = ~4.9-6.5 h.
 set -eo pipefail
 PY=$(realpath -s "$PY")
 case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
@@ -58,13 +58,14 @@ MANIFEST
 fi
 
 D=scripts/exp07_write_ladder; S=$D
-if [ -z "$NO_INSTALL" ]; then git cat-file -e e7caf2f273d53a86f159126ae4fb7e72db666c2a^{commit} && git cat-file -e f1b46a0e4d147059e3bd280173e2f2df4825d5bb^{commit} || { echo "commit e7caf2f or f1b46a0e4d147059e3bd280173e2f2df4825d5bb missing (exit 4)"; exit 4; }; git checkout e7caf2f273d53a86f159126ae4fb7e72db666c2a -- $D/e57_squad_w0_reads.py; git checkout f1b46a0e4d147059e3bd280173e2f2df4825d5bb -- $D/e57_multihop_w0_reads.py $D/e57_public_qa_build_multihop.py; fi
+if [ -z "$NO_INSTALL" ]; then git cat-file -e e7caf2f273d53a86f159126ae4fb7e72db666c2a^{commit} && git cat-file -e f1b46a0e4d147059e3bd280173e2f2df4825d5bb^{commit} || { echo "commit e7caf2f or f1b46a0e4d147059e3bd280173e2f2df4825d5bb missing (exit 4)"; exit 4; }; git checkout e7caf2f273d53a86f159126ae4fb7e72db666c2a -- $D/e57_squad_w0_reads.py; git checkout f1b46a0e4d147059e3bd280173e2f2df4825d5bb -- $D/e57_multihop_w0_reads.py $D/e57_public_qa_build_multihop.py; git cat-file -e 27345beb69201270ef174975e9f9211215af514b^{commit} && git checkout 27345beb69201270ef174975e9f9211215af514b -- $D/e57_fastin_reads.py $D/e57_squad_w0_resume.py $D/e57_kvreuse.py; fi
 for x in "3419b588f180 e57_t1t2_run.py" "d13a0ac9ee4a e57_main_run.py" "b19e986904ba e57_reads.py" "9ee4658ee168 e57_trial_run.py" "88076d1f3dd1 e57/e57_bank.py" "a0590cd53539 e57/e57_common.py" "f09dcb7e69eb e56/e56_text.py"; do set -- $x; G=$(sha256sum $D/$2 | cut -c1-12); [ "$G" = "$1" ] || { echo "VERSION MISMATCH $2: have $G, expected $1 (exit 5)"; exit 5; }; done
 $PY $D4/gen_facts.py --selftest | tail -1
 $PY $S/e55_swap.py | tail -1
 $PY $S/e57_reads.py --selftest
 $PY $S/e57_main_run.py --selftest | tail -1
 $PY $S/e57_multihop_w0_reads.py --selftest | tail -1
+$PY $S/e57_fastin_reads.py --selftest | tail -1
 [ $(sha256sum $D/e57_public_qa_build_multihop.py | cut -c1-8) = d64ff653 ] || { echo 'multihop builder differs from the project-library copy d64ff653 (exit 5)'; exit 5; }
 BUNDLE=${BUNDLE:-$OUT/e57_news}; TOUT=${TOUT:-$OUT/e57_multihop_w0}; IH_=$OUT/e57_public_qa/e57_public_qa_hotpot_items.json; IM_=$OUT/e57_public_qa/e57_public_qa_musique_items.json; ITEMS=${ITEMS:-$IH_,$IM_}
 [ -f "$BUNDLE/e57_bundle/bundle_store.pkl" ] && [ -f "$BUNDLE/e57_bank/bank_v1.json" ] && [ -f "$IH_" ] && [ -f "$IM_" ] || { echo "bundle store, bank_v1.json or an items file missing (exit 7)"; exit 7; }
@@ -74,6 +75,6 @@ mkdir -p "$TOUT"; CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu $PY $S/e57_main_run.py
 CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu $PY -c "import sys;sys.path.insert(0,'$S');import e57_multihop_w0_reads as Q;it,h=Q.load_multihop('$ITEMS');print('items file ok',len(it),h[:12])"
 [ -n "$CPU_ONLY" ] && { echo "CPU_ONLY: done before any GPU step"; exit 0; }
 [ -f "$TOUT/E57_squad_w0_reads.json" ] && [ -z "$RERUN" ] && { echo "E57_squad_w0_reads.json exists (exit 8; RERUN=1 to redo)"; exit 8; }
-$PY $S/e57_multihop_w0_reads.py --bundle "$BUNDLE" --out "$TOUT" --bank "$BUNDLE/e57_bank/bank_v1.json" --cycles 1 --npos 1 --canary-npos 1 --arms NAT --items-file "$ITEMS" ${NITEMS:+--n-items $NITEMS} --stage reads
+$PY $S/e57_fastin_reads.py --multihop --fast-if-exists "$OUT/e57_kvreuse_check/PASSED" --bundle "$BUNDLE" --out "$TOUT" --bank "$BUNDLE/e57_bank/bank_v1.json" --cycles 1 --npos 1 --canary-npos 1 --arms NAT --items-file "$ITEMS" ${NITEMS:+--n-items $NITEMS} --stage reads
 echo "outputs: $TOUT/E57_squad_w0_reads.json $TOUT/E57_squad_w0_keys.json"
 
