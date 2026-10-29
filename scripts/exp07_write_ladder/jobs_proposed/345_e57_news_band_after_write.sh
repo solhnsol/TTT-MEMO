@@ -79,6 +79,6 @@ PYE
 )
 WST="$J"
 WST=${WSTATES:-$WST}
-for F in $(echo "$WST" | tr ',' '\n' | sed 's/^[^=]*=//; s/:.*//' | grep .); do [ -f "$F" ] || { echo "state missing: $F (exit 7)"; exit 7; }; done
+for F in $(echo "$WST" | tr ',' '\n' | sed 's/^[^=]*=//; s/:.*//; s/@.*//' | grep .); do [ -f "$F" ] || { echo "state missing: $F (exit 7)"; exit 7; }; done
 ARGS="--bundle $BUNDLE --out $MOUT --cycles 1 --npos 1 --canary-npos 1 --arms NAT --smoke 0 --wstates $WST"
 $PY $S/e57_windowless_state_band_run.py $ARGS --stage arms
