@@ -1,5 +1,5 @@
 #!/bin/bash
-# JOB 480 (rerun of the cancelled job 440; resumes from the partial file of the cancelled run: OUT rows of all 1,000 items and the first 101 IN rows are taken over, the IN reads continue; Hans approved the cancel and the requeue at the end of the queue 13:30-13:36Z) = E57 PUBLIC QA STAGE 1 (E57 section 122-P; Hans decision 10:13Z "1. 제외, 2. 430 뒤에 두자"; NOT APPROVED to run yet, needs Hans's new approval line): read-only W0 reads of 1,000 SQuAD dev-v1.1 items (frozen by e57_public_qa_build_squad.py, rules hashed in the file, content hash d80f9987…, 16 candidates, Super_Bowl_50 and Warsaw excluded): OUT (the news jobs' 8192-token SQuAD tail, same tokens) and IN (the same tail with the item's own paragraph at its end, 8192 tokens) with the E49 summed log-prob and per-token mean scores (e57_squad_w0_reads.py). No state written. Output $OUT/e57_squad_w0/E57_squad_w0_reads.json (~15 MB) + E57_squad_w0_keys.json. ESTIMATE ONLY: load 15 min + OUT 16,000 rows scorer prep ~2.2-2.7 h + OUT reads ~15 min + IN 1,000 contexts (~2-4 s each + 16 rows) ~1-1.5 h = ~3.7-4.8 h.
+# JOB 480 (rerun of the cancelled job 440; resumes from the partial file of the cancelled run: OUT rows of all 1,000 items and the first 101 IN rows are taken over, the IN reads continue, with the KV-reuse IN scorer if $OUT/e57_kvreuse_check/PASSED exists (job 447 passed: 6 items, max abs diff 0, 3.1 s instead of 24.4 s per item), otherwise with the reference path; Hans approved the cancel and the requeue at the end of the queue 13:30-13:36Z) = E57 PUBLIC QA STAGE 1 (E57 section 122-P; Hans decision 10:13Z "1. 제외, 2. 430 뒤에 두자"; NOT APPROVED to run yet, needs Hans's new approval line): read-only W0 reads of 1,000 SQuAD dev-v1.1 items (frozen by e57_public_qa_build_squad.py, rules hashed in the file, content hash d80f9987…, 16 candidates, Super_Bowl_50 and Warsaw excluded): OUT (the news jobs' 8192-token SQuAD tail, same tokens) and IN (the same tail with the item's own paragraph at its end, 8192 tokens) with the E49 summed log-prob and per-token mean scores (e57_squad_w0_reads.py). No state written. Output $OUT/e57_squad_w0/E57_squad_w0_reads.json (~15 MB) + E57_squad_w0_keys.json. ESTIMATE ONLY: load 15 min + OUT 16,000 rows scorer prep ~2.2-2.7 h + OUT reads ~15 min + IN 1,000 contexts (~2-4 s each + 16 rows) ~1-1.5 h = ~3.7-4.8 h.
 set -eo pipefail
 PY=$(realpath -s "$PY")
 case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
@@ -58,13 +58,13 @@ MANIFEST
 fi
 
 D=scripts/exp07_write_ladder; S=$D
-if [ -z "$NO_INSTALL" ]; then git cat-file -e e7caf2f273d53a86f159126ae4fb7e72db666c2a^{commit} || { echo "commit e7caf2f273d53a86f159126ae4fb7e72db666c2a missing (exit 4)"; exit 4; }; git checkout e7caf2f273d53a86f159126ae4fb7e72db666c2a -- $D/e57_squad_w0_reads.py $D/e57_public_qa_build_squad.py; git cat-file -e 86fe77084bfe80dae73cb3fe3fd855bd4a8ebcaa^{commit} && git checkout 86fe77084bfe80dae73cb3fe3fd855bd4a8ebcaa -- $D/e57_squad_w0_resume.py; fi
+if [ -z "$NO_INSTALL" ]; then git cat-file -e e7caf2f273d53a86f159126ae4fb7e72db666c2a^{commit} || { echo "commit e7caf2f273d53a86f159126ae4fb7e72db666c2a missing (exit 4)"; exit 4; }; git checkout e7caf2f273d53a86f159126ae4fb7e72db666c2a -- $D/e57_squad_w0_reads.py $D/e57_public_qa_build_squad.py; git cat-file -e 27345beb69201270ef174975e9f9211215af514b^{commit} && git checkout 27345beb69201270ef174975e9f9211215af514b -- $D/e57_fastin_reads.py $D/e57_squad_w0_resume.py $D/e57_kvreuse.py; fi
 for x in "3419b588f180 e57_t1t2_run.py" "d13a0ac9ee4a e57_main_run.py" "b19e986904ba e57_reads.py" "9ee4658ee168 e57_trial_run.py" "88076d1f3dd1 e57/e57_bank.py" "a0590cd53539 e57/e57_common.py" "f09dcb7e69eb e56/e56_text.py"; do set -- $x; G=$(sha256sum $D/$2 | cut -c1-12); [ "$G" = "$1" ] || { echo "VERSION MISMATCH $2: have $G, expected $1 (exit 5)"; exit 5; }; done
 $PY $D4/gen_facts.py --selftest | tail -1
 $PY $S/e55_swap.py | tail -1
 $PY $S/e57_reads.py --selftest
 $PY $S/e57_main_run.py --selftest | tail -1
-$PY $S/e57_squad_w0_resume.py --selftest | tail -1
+$PY $S/e57_fastin_reads.py --selftest | tail -1
 BUNDLE=${BUNDLE:-$OUT/e57_news}; TOUT=${TOUT:-$OUT/e57_squad_w0}; ITEMS=${ITEMS:-$OUT/e57_public_qa/e57_public_qa_squad_items.json}
 [ -f "$BUNDLE/e57_bundle/bundle_store.pkl" ] && [ -f "$BUNDLE/e57_bank/bank_v1.json" ] && [ -f "$ITEMS" ] || { echo "bundle store, bank_v1.json or the items file missing (exit 7)"; exit 7; }
 IH=$(sha256sum "$ITEMS" | cut -c1-64); echo "items file sha256 $IH"; [ "$IH" = "79e842dbec77fe84ac7152bb26471d4a8127e47398301f998f32de277b1cb4ba" ] || { echo "items file differs from the frozen copy (exit 9)"; exit 9; }
@@ -73,5 +73,5 @@ mkdir -p "$TOUT"; CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu $PY $S/e57_main_run.py
 CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu $PY -c "import sys;sys.path.insert(0,'$S');import e57_squad_w0_reads as Q;it,h=Q.load_items_file('$ITEMS');print('items file ok',len(it),h[:12])"
 [ -n "$CPU_ONLY" ] && { echo "CPU_ONLY: done before any GPU step"; exit 0; }
 [ -f "$TOUT/E57_squad_w0_reads.json" ] && [ -z "$RERUN" ] && { echo "E57_squad_w0_reads.json exists (exit 8; RERUN=1 to redo)"; exit 8; }
-$PY $S/e57_squad_w0_resume.py --resume-from "$PART" --bundle "$BUNDLE" --out "$TOUT" --bank "$BUNDLE/e57_bank/bank_v1.json" --cycles 1 --npos 1 --canary-npos 1 --arms NAT --items-file "$ITEMS" ${NITEMS:+--n-items $NITEMS} --stage reads
+$PY $S/e57_fastin_reads.py --fast-if-exists "$OUT/e57_kvreuse_check/PASSED" --resume-from "$PART" --bundle "$BUNDLE" --out "$TOUT" --bank "$BUNDLE/e57_bank/bank_v1.json" --cycles 1 --npos 1 --canary-npos 1 --arms NAT --items-file "$ITEMS" ${NITEMS:+--n-items $NITEMS} --stage reads
 echo "outputs: $TOUT/E57_squad_w0_reads.json $TOUT/E57_squad_w0_keys.json"
