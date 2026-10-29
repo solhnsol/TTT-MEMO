@@ -10,7 +10,7 @@ def selftest():
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--masks');ap.add_argument('--ntg-from');ap.add_argument('--arms');ap.add_argument('--tag',default='synq');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
-    import e55_run as R55,e55_read as R,e55_gpu as RG,gen_world_ctl as G
+    import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
     import e57_syn_pass as SP
     seed=a.seed;OUT=pathlib.Path(a.out);OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');ro=[16,32,64,128];ri=[128];sv=[128];CH=1024
     masks={k:v for k,v in np.load(a.masks,allow_pickle=True).items()};ntg=[e['update_norm'] for e in json.load(open(a.ntg_from))['log']];assert len(ntg)>=128
