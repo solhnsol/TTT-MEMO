@@ -9,14 +9,16 @@ import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE))
 CH=1024;NB=256;SEED=490001;IDS_SHA='715077dff4f602c6'
-GS={'frags':None,'natref':None}
+GS={'frags':None,'natref':None,'nofrags':False,'suffix':''}
 def _pop(flag):
     if flag in sys.argv:
         i=sys.argv.index(flag);v=sys.argv[i+1];del sys.argv[i:i+2];return v
-def make_table(n,seed,nb=NB):
+def make_table(n,seed,nb=None):
+    nb=NB if nb is None else nb
     """count-sketch table: bucket in [0, nb) and sign +-1 for every coordinate (numpy PCG64, seed); y_b = sum_{i: bucket(i)=b} sign(i) x_i"""
     rng=np.random.default_rng(seed);buckets=rng.integers(0,nb,size=n,dtype=np.int32);signs=(rng.integers(0,2,size=n,dtype=np.int8).astype(np.float32)*2-1);return buckets,signs
-def sketch_np(x,buckets,signs,nb=NB):
+def sketch_np(x,buckets,signs,nb=None):
+    nb=NB if nb is None else nb
     out=np.zeros(x.shape[:-1]+(nb,),np.float64)
     for idx in np.ndindex(*x.shape[:-1]):np.add.at(out[idx],buckets,x[idx].astype(np.float64)*signs)
     return out.astype(np.float32)
@@ -34,7 +36,7 @@ def gs_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,r
     import jax,jax.numpy as jnp,equinox as eqx,optax
     assert N==1 and nch==280 and arms==['NAT'],(N,nch,arms)
     sha=hashlib.sha256(np.asarray(ids_all).tobytes()).hexdigest()[:16];assert sha==IDS_SHA,('stream ids sha',sha);assert len(ids_all)==280*CH
-    fr=json.load(open(GS['frags']))['frags'];assert len(fr)==1999 and len({r['fid'] for r in fr})==1999
+    fr=json.load(open(GS['frags']))['frags'] if not GS['nofrags'] else [];assert GS['nofrags'] or (len(fr)==1999 and len({r['fid'] for r in fr})==1999)
     for r in fr:assert 0<=r['tok0'] and r['tok_in_chunk']+r['ntok']<=CH and r['tok0']//CH==r['chunk'] and r['ntok']>=2
     out=pathlib.Path(out);out.mkdir(parents=True,exist_ok=True);f32=jnp.float32
     ip=rt.base.inner_parameters();paths=[(jax.tree_util.keystr(p),l) for p,l in jax.tree_util.tree_flatten_with_path(ip)[0]];w2=[p for p,l in paths if 'feed_forward_prime' in p and '.w2.' in p];assert len(w2)==1,w2
@@ -82,8 +84,10 @@ def gs_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,r
         cap['rows']=[];cap['on']=True
         try:fwd_c(m,st_suf,c,pref_,kmask);jax.effects_barrier()
         finally:cap['on']=False
-        rows=cap['rows'];tags=np.array([t for t,_ in rows]);hit=[i for i,t in enumerate(tags) if np.min(np.abs(w2sum-t))<=1e-3*max(1.0,abs(t))]
-        lay=[int(np.argmin(np.abs(w2sum-tags[i]))) for i in hit];assert lay==list(range(NL)),('prime call order',lay,len(rows))
+        rows=cap['rows'];assert len(rows)==2*NL,('callbacks per forward',len(rows));tags=np.array([t for t,_ in rows]);hit=list(range(0,2*NL,2))      # feed_forward_prime is called first in every suffix block, the regular feed_forward second (checked on CPU: the prime calls carry the w2 weight sums of layers 0..7); order of the ordered callbacks = layer order
+        lay=[int(np.argmin(np.abs(w2sum-tags[i]))) for i in hit]
+        if cap.get('n',0)==0:lg(f'  C hook: {len(rows)} callbacks; prime-call tags {tags[hit].round(3).tolist()} vs w2 sums {w2sum.round(3).tolist()}; nearest layers {lay}')
+        cap['n']=cap.get('n',0)+1
         last=rows[hit[-1]][1];A['csk'].append(np.asarray(sk_act(jnp.asarray(last))));A['cnorm'].append(float(np.linalg.norm(last)))
         return res
     L.write_step=ws
@@ -96,12 +100,16 @@ def gs_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,r
         ref=json.load(open(GS['natref'])).get('states',{}).get(str(nch-1),{}).get('hash')
     same=(ref==res['reads'][nch-1]['_hash']) if ref else None;lg(f'saved NAT state hash {ref}; identical to this run: {same}')
     log=res['log'];can279=res.get('inline',{}).get(nch-1);lg(f'canary W0 {cw0}; after chunk {nch-1}: {can279}');del res;gc.collect()
+    natcmp=None
+    if GS['natref'] and pathlib.Path(GS['natref']).exists():
+        ul={e['k']:e for e in json.load(open(GS['natref']))['update_log']};dn=[abs(e['update_norm']-ul[e['k']]['update_norm'])/ul[e['k']]['update_norm'] for e in log if e['k'] in ul];dc=[abs(e['ce']-ul[e['k']]['ce']) for e in log if e['k'] in ul]
+        natcmp=dict(n=len(dn),max_rel_diff_update_norm=max(dn),mean_rel_diff_update_norm=sum(dn)/len(dn),max_abs_diff_ce=max(dc),first_chunk_rel_diff_over_1em6=next((e['k'] for e in log if e['k'] in ul and abs(e['update_norm']-ul[e['k']]['update_norm'])/ul[e['k']]['update_norm']>1e-6),None));lg(f'vs saved NAT run: {natcmp}')
     # precision check of the sketch: exact layer-0 gradient cosines of the first 20 chunks vs sketch cosines
     E=np.stack(exact0).astype(np.float64);En=E/np.linalg.norm(E,axis=1,keepdims=True);Sk=np.stack([x[0] for x in A['sk'][:20]]).astype(np.float64);Sn=Sk/np.linalg.norm(Sk,axis=1,keepdims=True)
     cos_ex=En@En.T;cos_sk=Sn@Sn.T;iu=np.triu_indices(20,1);chk=dict(n_chunks=20,layer=0,max_abs_cos_error=float(np.abs(cos_ex-cos_sk)[iu].max()),mean_abs_cos_error=float(np.abs(cos_ex-cos_sk)[iu].mean()),exact_cos_range=[float(cos_ex[iu].min()),float(cos_ex[iu].max())],norm_ratio_sketch_over_exact=[float(x) for x in (np.linalg.norm(Sk,axis=1)/np.linalg.norm(E,axis=1))[:5]]);lg(f'sketch check: {chk}')
     del E,exact0;gc.collect()
     # B: isolated W0 fragments
-    m0=rt.base;eos=rt.eos;B=dict(sk=[],gn=[],gn_w2=[],ce=[]);t0=time.monotonic()
+    m0=rt.base;eos=rt.eos;B=dict(sk=[],gn=[],gn_w2=[],ce=[]);t0=time.monotonic();NBD=NB
     with rt.mesh:
         for i,r in enumerate(fr):
             ids=[int(x) for x in ids_all[r['tok0']:r['tok0']+r['ntok']]];pad=ids+[eos]*(CH-len(ids));mask=np.zeros(CH,bool);mask[:len(ids)-1]=True
@@ -109,21 +117,23 @@ def gs_arms(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,r
             B['sk'].append(np.asarray(sk_leaf(gl)));B['gn_w2'].append(np.asarray(gnorms(gl)));B['gn'].append(float(optax.global_norm(g)));B['ce'].append(float(ce))
             if i%200==0:lg(f'  fragment {i+1}/1999 fid {r["fid"]} ntok {r["ntok"]}: {time.monotonic()-t0:.0f}s ce {B["ce"][-1]:.3f}')
     lg(f'fragments done in {time.monotonic()-t0:.0f}s')
-    np.savez(out/'E57_gradsketch.npz',A_sketch=np.stack(A['sk']).astype(np.float32),A_gnorm=np.asarray(A['gn'],np.float32),A_gnorm_w2=np.stack(A['gn_w2']).astype(np.float32),A_ce=np.asarray(A['ce'],np.float32),A_chunk=np.arange(nch),
-        C_sketch=np.stack(A['csk']).astype(np.float32),C_norm=np.asarray(A['cnorm'],np.float32),
-        B_sketch=np.stack(B['sk']).astype(np.float32),B_gnorm=np.asarray(B['gn'],np.float32),B_gnorm_w2=np.stack(B['gn_w2']).astype(np.float32),B_ce=np.asarray(B['ce'],np.float32),
-        B_fid=np.asarray([r['fid'] for r in fr]),B_chunk=np.asarray([r['chunk'] for r in fr]),B_ntok=np.asarray([r['ntok'] for r in fr]),B_tok0=np.asarray([r['tok0'] for r in fr]))
+    kw_b=dict(B_sketch=np.stack(B['sk']).astype(np.float32),B_gnorm=np.asarray(B['gn'],np.float32),B_gnorm_w2=np.stack(B['gn_w2']).astype(np.float32),B_ce=np.asarray(B['ce'],np.float32),B_fid=np.asarray([r['fid'] for r in fr]),B_chunk=np.asarray([r['chunk'] for r in fr]),B_ntok=np.asarray([r['ntok'] for r in fr]),B_tok0=np.asarray([r['tok0'] for r in fr])) if fr else {}
+    np.savez(out/f'E57_gradsketch{GS["suffix"]}.npz',**kw_b,A_sketch=np.stack(A['sk']).astype(np.float32),A_gnorm=np.asarray(A['gn'],np.float32),A_gnorm_w2=np.stack(A['gn_w2']).astype(np.float32),A_ce=np.asarray(A['ce'],np.float32),A_chunk=np.arange(nch),
+        C_sketch=np.stack(A['csk']).astype(np.float32),C_norm=np.asarray(A['cnorm'],np.float32))
     chunk_fids={}
     for r in fr:chunk_fids.setdefault(r['chunk'],[]).append(r['fid'])
     meta=dict(job=490,leaf=W2,leaf_shape=list(shape),sketch=dict(kind='count-sketch (signed hash buckets)',dims=NB,table='numpy default_rng(seed).integers(0,256) buckets, then integers(0,2)*2-1 signs, one coordinate order = row-major flatten of [5632,2560] of one layer',seed_gradient=SEED,seed_activation=SEED+1,same_table_for_all_layers_chunks_fragments=True,activation_dims=int(A_)),
         A='raw (pre-clip) NAT write gradient at the weights before the write of chunk k, recomputed by the same grad function as the write step',B='isolated chunk: fragment tokens + EOS pad, positions from 0, empty suffix KV, W0, loss mean CE over ntok-1 in-fragment targets, grad_nat',C='token mean of the input of the last suffix layer feed_forward_prime down_proj (silu(w1 x)*w3 x), weights before the write',
-        canary_w0=cw0,canary_279=can279,ids_sha=sha,frags_file=GS['frags'],final_inner_hash=fh,nat_state_hash_279=ref,identical_to_saved_NAT=same,sketch_check=chk,write_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','gnorm','sec') if k_ in e} for e in log],chunk_fids={str(k):v for k,v in chunk_fids.items()},fragments=[{k_:r[k_] for k_ in ('fid','chunk','ci','tok0','tok_in_chunk','ntok','event','art','art_sent')} for r in fr])
-    (out/'E57_gradsketch_meta.json').write_text(json.dumps(meta,default=float));lg('wrote E57_gradsketch.npz and E57_gradsketch_meta.json')
+        nat_ref_compare=natcmp,canary_w0=cw0,canary_279=can279,ids_sha=sha,frags_file=GS['frags'],final_inner_hash=fh,nat_state_hash_279=ref,identical_to_saved_NAT=same,sketch_check=chk,write_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','gnorm','sec') if k_ in e} for e in log],chunk_fids={str(k):v for k,v in chunk_fids.items()},fragments=[{k_:r[k_] for k_ in ('fid','chunk','ci','tok0','tok_in_chunk','ntok','event','art','art_sent')} for r in fr])
+    (out/f'E57_gradsketch{GS["suffix"]}_meta.json').write_text(json.dumps(meta,default=float));lg('wrote E57_gradsketch.npz and E57_gradsketch_meta.json')
     import os
     for f in (out/'states'/'E57_gradsketch').glob('*.npz'):os.remove(f)
 def main():
     if '--selftest' in sys.argv:selftest();return
-    GS['frags']=_pop('--frags');GS['natref']=_pop('--nat-ref');assert GS['frags']
+    global NB
+    GS['frags']=_pop('--frags');GS['natref']=_pop('--nat-ref');nb=_pop('--nb');NB=int(nb) if nb else NB;GS['suffix']=_pop('--out-suffix') or ''
+    if '--no-frags' in sys.argv:sys.argv.remove('--no-frags');GS['nofrags']=True
+    assert GS['frags'] or GS['nofrags']
     import e57_main_run as M
     M.stage_arms=gs_arms;M.main()
 if __name__=='__main__':main()

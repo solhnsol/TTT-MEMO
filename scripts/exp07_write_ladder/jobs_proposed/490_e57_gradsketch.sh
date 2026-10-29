@@ -8,7 +8,7 @@ D=scripts/exp07_write_ladder
 : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}}"; export EXP07_OUT="$OUT"; mkdir -p "$OUT"
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_deterministic_ops=true}"
 S=$D
-if [ -z "$NO_INSTALL" ]; then git cat-file -e 28e35f403e644e153040c386039184c4f06bd6e1^{commit} || { echo "commit 28e35f403e644e153040c386039184c4f06bd6e1 missing (exit 4)"; exit 4; }; git checkout 28e35f403e644e153040c386039184c4f06bd6e1 -- $D/e57_gradsketch.py; fi
+if [ -z "$NO_INSTALL" ]; then git cat-file -e 77926fb5612e13e444c1caa19e7ce89180adc8f2^{commit} || { echo "commit 77926fb5612e13e444c1caa19e7ce89180adc8f2 missing (exit 4)"; exit 4; }; git checkout 77926fb5612e13e444c1caa19e7ce89180adc8f2 -- $D/e57_gradsketch.py; fi
 sha256sum $D/e57_gradsketch.py | cut -c1-16,65-
 $PY $S/e57_gradsketch.py --selftest | tail -1
 $PY $S/e57_reads.py --selftest
