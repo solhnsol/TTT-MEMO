@@ -8,7 +8,7 @@ D=scripts/exp07_write_ladder
 : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}}"; export EXP07_OUT="$OUT"; mkdir -p "$OUT"
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_deterministic_ops=true}"
 S=$D
-if [ -z "$NO_INSTALL" ]; then git cat-file -e c731db3d69ba47b5adedb56dd005f0dc4cf07561^{commit} && git cat-file -e 919d8e56b13069493c9aad889b95e11e7f59a0dd^{commit} && git cat-file -e bec3abe3094e31e7c6f490652471df33390fdca1^{commit} || { echo "commit c731db3 / 919d8e5 / bec3abe missing (exit 4)"; exit 4; }; git checkout c731db3d69ba47b5adedb56dd005f0dc4cf07561 -- $D/e57_gradsketch.py; git checkout 919d8e56b13069493c9aad889b95e11e7f59a0dd -- $D/e57_gradsketch_narrow.py; git checkout bec3abe3094e31e7c6f490652471df33390fdca1 -- $D/e57_gradsketch_shadow.py; fi
+if [ -z "$NO_INSTALL" ]; then git cat-file -e c731db3d69ba47b5adedb56dd005f0dc4cf07561^{commit} && git cat-file -e 919d8e56b13069493c9aad889b95e11e7f59a0dd^{commit} && git cat-file -e 1c708fe04ff861459c3c1c4f794da813c3de8954^{commit} || { echo "commit c731db3 / 919d8e5 / 1c708fe missing (exit 4)"; exit 4; }; git checkout c731db3d69ba47b5adedb56dd005f0dc4cf07561 -- $D/e57_gradsketch.py; git checkout 919d8e56b13069493c9aad889b95e11e7f59a0dd -- $D/e57_gradsketch_narrow.py; git checkout 1c708fe04ff861459c3c1c4f794da813c3de8954 -- $D/e57_gradsketch_shadow.py; fi
 sha256sum $D/e57_gradsketch.py $D/e57_gradsketch_narrow.py $D/e57_gradsketch_shadow.py | cut -c1-16,65-
 $PY $S/e57_gradsketch_shadow.py --selftest | tail -1
 $PY $S/e57_reads.py --selftest
@@ -18,7 +18,8 @@ BUNDLE=${BUNDLE:-$OUT/e57_news}; MOUT=${MOUT:-$OUT/e57_gradsketch_shadow}; SHT=$
 [ -f "$NATARMS" ] && [ -f "$FRAGS" ] || { echo "input missing: $NATARMS or $FRAGS (exit 7)"; exit 7; }
 [ "$(sha256sum "$FRAGS" | cut -c1-64)" = "4addd53e6f67f9beae3d1bb2f0b8a00b308134476683b45d8a3ca939588cdcf6" ] || { echo "fragment list differs from the frozen copy (exit 9)"; exit 9; }
 [ -f "$SHT" ] && [ -f "$STR" ] || { echo "input missing: $SHT or $STR (exit 7)"; exit 7; }
-[ "$(sha256sum "$SHT" | cut -c1-64)" = "3cc0e86068d29cea65edd2da0003a13e5d5d366e4922bfc19f723cb918d07043" ] || { echo "shadow mask table differs from the frozen copy (exit 9)"; exit 9; }
+echo "shadow mask table sha256 $(sha256sum "$SHT" | cut -c1-64)"
+[ "$(sha256sum "$SHT" | cut -c1-64)" = "f94e698b9e5f0cdca306e86e7ac704f7d99c1d674a00d8e04a7901a3986eba63" ] || { echo "shadow mask table differs from the frozen copy (exit 9)"; exit 9; }
 [ "$(sha256sum "$STR" | cut -c1-64)" = "38ef483747a28a9334e5fba9fc7c12bc6fa2bdd92f8919a33faebe007cb4e8b6" ] || { echo "stream fragment file differs from the frozen copy (exit 9)"; exit 9; }
 mkdir -p "$MOUT"
 CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu $PY $S/e57_main_run.py --bundle "$BUNDLE" --out "$MOUT" --cycles 1 --arms NAT --check-only
