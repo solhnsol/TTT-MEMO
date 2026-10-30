@@ -8,7 +8,7 @@ D=scripts/exp07_write_ladder
 : "${OUT:=${EXP07_OUT:-experiments/exp07_write_ladder}}"; export EXP07_OUT="$OUT"; mkdir -p "$OUT"
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_deterministic_ops=true}"
 S=$D
-if [ -z "$NO_INSTALL" ]; then git cat-file -e 15666eb^{commit} && git cat-file -e a2cd49e8e9b76328ba0031350fb2d0ad1a6bc051^{commit} || { echo "commit 15666eb or a2cd49e8e9b76328ba0031350fb2d0ad1a6bc051 missing (exit 4)"; exit 4; }; git checkout a2cd49e8e9b76328ba0031350fb2d0ad1a6bc051 -- $D/e57_gainq_focal_run.py $D/e57_t1t2_focal_run.py; git checkout 15666eb -- $D/e57_t1t2_run.py; fi
+if [ -z "$NO_INSTALL" ]; then git cat-file -e 15666eb^{commit} && git cat-file -e 83ca2584166829f1752c613ed14f286f53b90102^{commit} || { echo "commit 15666eb or 83ca2584166829f1752c613ed14f286f53b90102 missing (exit 4)"; exit 4; }; git checkout 83ca2584166829f1752c613ed14f286f53b90102 -- $D/e57_gainq_focal_run.py $D/e57_t1t2_focal_run.py; git checkout 15666eb -- $D/e57_t1t2_run.py; fi
 sha256sum $D/e57_gainq_focal_run.py $D/e57_t1t2_focal_run.py $D/e57_qcurve_run.py $D/e57_qband_run.py $D/e57_closure_masks.py | cut -c1-16,65-
 for x in "4123c9da29d6 e57_qcurve_run.py" "c48a57e093ed e57_qband_run.py" "091506dbe7b8 e57_closure_masks.py"; do set -- $x; H=$(sha256sum $D/$2 | cut -c1-12); [ "$H" = "$1" ] || { echo "VERSION MISMATCH $2: have $H, expected $1 (exit 5)"; exit 5; }; done
 $PY $S/e57_gainq_focal_run.py --selftest | tail -1
