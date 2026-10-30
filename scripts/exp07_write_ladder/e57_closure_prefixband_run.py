@@ -1,4 +1,4 @@
-"""E57 prefix-only band baseline (job 561; GPU forward only, W0 weights, chunks 8..279; post-hoc, exploratory). Same pass as e57_closure_run.py --bands (the stream is walked with the write step returning the parameters unchanged), but the band-k keep (CM.band_keep: every query sees only the previous k tokens, window AND chunk keys) is given to the PREFIX layers only (L.prefix_masked); the suffix layers keep the natural 1-D window keep. nll_win (natural) is recomputed as the control and compared with a reference npz. Output E57_prefixband_W0.npz: nll_win [280,1024], nll_prefixband [n_bands,280,1024], bands, chunks [8,280], lm, tgt.
+"""E57 prefix-only band baseline (job 561; GPU forward only, W0 weights, chunks 8..279; post-hoc, exploratory). Same pass as e57_closure_run.py --bands (the stream is walked with the write step returning the parameters unchanged), but the band-k keep (CM.band_keep: every query sees only the previous k tokens, window AND chunk keys) is given to the PREFIX layers only (L.prefix_masked); the suffix layers keep the natural 1-D window keep. nll_win (natural) is recomputed for chunks 8-15 only as the control and compared with a reference npz (no natural pass for chunks 16..279). Output E57_prefixband_W0.npz: nll_win [280,1024] (chunks 8-15 only, zeros elsewhere), nll_prefixband [n_bands,280,1024], bands, chunks [8,280], lm, tgt.
   python3 e57_closure_prefixband_run.py --bundle B --out O --cycles 1 --npos 1 --canary-npos 1 --arms NAT --smoke 0 [--bands 512] [--ref E57_closure_W0.npz] --stage arms   |   --selftest"""
 import sys,json,time,gc,hashlib,pathlib,os
 import numpy as np
@@ -7,7 +7,7 @@ sys.path.insert(0,str(HERE))
 import e57_closure_masks as CM
 def prefixband_stage(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,LD,s3,C,rt,can,cw0,lg,SM):
     import jax,jax.numpy as jnp,equinox as eqx
-    CH=1024;WIN_=8*CH;assert N==1 and arms==['NAT'],'one cycle, NAT only'
+    CH=1024;WIN_=8*CH;K_CTL=16;assert N==1 and arms==['NAT'],'one cycle, NAT only'
     bands=[int(x) for x in (getattr(a,'bands',None) or '512').split(',') if x];k0,k1=8,nch
     dummy_meta=[{'sents':[]} for _ in range(nch)];rc={}
     L0=C.Ladder55(rt,save_dir=out/'states'/'E57_prefixband_rec',canary=None);t0=time.monotonic()
@@ -24,7 +24,7 @@ def prefixband_stage(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,
         t1=time.monotonic();keep=np.asarray(keep,bool);assert keep.ndim==1 and keep.shape[0]==WIN_+CH,keep.shape
         if k<k0:return dict(nll=np.zeros(CH,np.float32),lm=np.asarray(ctx['c'].loss_masks,bool),tgt=np.asarray(ctx['c'].target_tokens,np.int32))
         with rt.mesh:
-            kn=jnp.asarray(keep);r=dict(nll=-np.asarray(logp_mask(m,ctx['st_w'],ctx['c'],ctx['pref_w'],kn),np.float64).astype(np.float32))      # natural control: prefix and suffix natural
+            kn=jnp.asarray(keep);r=dict(nll=(-np.asarray(logp_mask(m,ctx['st_w'],ctx['c'],ctx['pref_w'],kn),np.float64)).astype(np.float32) if k<K_CTL else np.zeros(CH,np.float32))      # natural pass only for the sanity chunks k0..K_CTL-1; prefix and suffix natural
             nb=[]
             for bk in bands:
                 pm=L.prefix_masked(m,jnp.asarray(ids_k,dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(CM.band_keep(keep,bk)))      # band in the prefix layers only
@@ -43,11 +43,11 @@ def prefixband_stage(a,out,items,bsrc,ids_all,n,N,nch,kks,rch,cch,arms,tk,tfile,
     np.savez_compressed(out/'E57_prefixband_W0.npz',chunks=np.asarray([k0,k1]),nll_win=nw,nll_prefixband=nb,bands=np.asarray(bands,int),lm=lm,tgt=tgt)
     ctl={}
     if getattr(a,'ref',None) and os.path.exists(a.ref):
-        R=np.load(a.ref);sl=slice(k0,k1);ctl['vs_ref_nll_win_max_abs']=float(np.abs(R['nll_win'][sl]-nw[sl]).max())
+        R=np.load(a.ref);sl=slice(k0,K_CTL);ctl['vs_ref_nll_win_max_abs_chunks_8_15']=float(np.abs(R['nll_win'][sl]-nw[sl]).max())
         if 'nll_band' in R.files and len(R['nll_band']):
             for i,b in enumerate(bands):
-                if b in [int(x) for x in R['bands']]:j=[int(x) for x in R['bands']].index(b);ctl[f'mean_nll_band{b}_both_layers']=float(R['nll_band'][j][sl][lm[sl]].mean())
-    (out/'E57_prefixband_W0.json').write_text(json.dumps(dict(bank=bsrc,n_chunks=nch,bands=bands,sec_total=time.monotonic()-t0,sec_forwards=tm[0],control=ctl,mean_nll_win=float(nw[k0:k1][lm[k0:k1]].mean()),mean_nll_prefixband={str(b):float(nb[i][k0:k1][lm[k0:k1]].mean()) for i,b in enumerate(bands)}),indent=1,default=float))
+                if b in [int(x) for x in R['bands']]:j=[int(x) for x in R['bands']].index(b);ctl[f'mean_nll_band{b}_both_layers']=float(R['nll_band'][j][k0:k1][lm[k0:k1]].mean())
+    (out/'E57_prefixband_W0.json').write_text(json.dumps(dict(bank=bsrc,n_chunks=nch,bands=bands,sec_total=time.monotonic()-t0,sec_forwards=tm[0],control=ctl,mean_nll_win_chunks_8_15=float(nw[k0:K_CTL][lm[k0:K_CTL]].mean()),mean_nll_prefixband={str(b):float(nb[i][k0:k1][lm[k0:k1]].mean()) for i,b in enumerate(bands)}),indent=1,default=float))
     lg(f'wrote {out/"E57_prefixband_W0.npz"}; control {ctl}')
 def main():
     import argparse,e57_main_run as M
