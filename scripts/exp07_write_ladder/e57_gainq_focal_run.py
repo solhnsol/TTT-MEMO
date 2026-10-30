@@ -82,11 +82,11 @@ def selftest():
     print('e57_gainq_focal_run selftest ok')
 def main():
     if '--selftest' in sys.argv:selftest();return
-    QC['masks']=QC._pop('--qband-masks');QC['ntg']=QC._pop('--ntg-from')
+    QC.QC['masks']=QC._pop('--qband-masks');QC.QC['ntg']=QC._pop('--ntg-from')
     QR.SelMaskQ=FocalSel
     import e57_main_run as M
-    names=[str(x) for x in np.load(QC['masks'])['names']] if QC['masks'] else []
+    names=[str(x) for x in np.load(QC.QC['masks'])['names']] if QC.QC['masks'] else []
     M.ARMS_ALL=tuple(M.ARMS_ALL)+tuple(names)+tuple(FOC);M.stage_arms=focal_arms;M.stage_reads=QC.qcurve_reads
-    if '--stage' in sys.argv and sys.argv[sys.argv.index('--stage')+1]=='arms':assert QC['masks'] and QC['ntg']
+    if '--stage' in sys.argv and sys.argv[sys.argv.index('--stage')+1]=='arms':assert QC.QC['masks'] and QC.QC['ntg']
     M.main()
 if __name__=='__main__':main()
