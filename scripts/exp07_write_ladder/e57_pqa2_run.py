@@ -26,8 +26,16 @@ def _pop(flag,default=None):
 def use_stream(sdir):
     """route the stream-id lookup of the news code to stream S (the sentences jsonl argument is not used)"""
     ids,sid,meta=S.load(sdir);V.stream_ids=lambda path,stream:ids;return ids,sid,meta
+def patch_segmented(log=print):
+    """622 chunks in one call is too large / slow (the one-call record of the whole stream ran at ~300 s per layer): use the segmented K,V record and prefix of the 6-cycle news run (e57_main_run.record_segmented / install_segmented_prefix; segments of 280 chunks + 192 chunks of context = the receptive field of 24 layers x 8192)"""
+    import e55_run as R,e57_main_run as M
+    LD,s3,C=R.lab();orig=C.Ladder55.record
+    def rec(self,ids,progress=None):
+        if getattr(self.rt,'_orig_prefix',None) is None:M.install_segmented_prefix(self.rt,seg_chunks=280,ctx_chunks=192,log=log)
+        Kh,Vh=M.record_segmented(self,self.rt,s3,LD,ids,seg_chunks=280,ctx_chunks=192,log=log);return Kh,Vh,None
+    C.Ladder55.record=rec
 def score_stage(a):
-    ids,sid,meta=use_stream(a['stream_dir']);G.score_stage(dict(out=a['out'],sentences=None))
+    ids,sid,meta=use_stream(a['stream_dir']);patch_segmented();G.score_stage(dict(out=a['out'],sentences=None))
 def mask_stage(a):
     out=pathlib.Path(a['out']);ids,sid,meta=S.load(a['stream_dir']);Z=np.load(out/'E57_v2B20_score_W0.npz');nch=Z['nll_win'].shape[0];assert nch==len(ids)//CH==sid.shape[0]
     M=LP.build_lowp(Z,sid,float(a.get('p') or 0.10));np.savez_compressed(out/'e57_pqa2_masks.npz',**M)
@@ -38,7 +46,7 @@ def write_stage(a):
     E.ADAM['NATADAMH']=('NAT',0.5,False)
     if 'NATADAMH' not in E.ARMS:E.ARMS.append('NATADAMH')
     LD,s3,C=R.lab();rt=LD.Runtime();can=R.Canary55(LD,rt);lg=lambda *x:print(*x,flush=True);cw0=can(rt.base);lg('canary W0',cw0)
-    ids,sid,meta=S.load(a['stream_dir']);nch=len(ids)//CH;n1=meta['chunks_per_cycle'][0];ends={n1-1,nch-1};lg(f'stream S: {len(ids)} tokens, {nch} chunks, cycle ends at chunk {sorted(ends)}, ids_sha {meta["ids_sha"]}')
+    patch_segmented();ids,sid,meta=S.load(a['stream_dir']);nch=len(ids)//CH;n1=meta['chunks_per_cycle'][0];ends={n1-1,nch-1};lg(f'stream S: {len(ids)} tokens, {nch} chunks, cycle ends at chunk {sorted(ends)}, ids_sha {meta["ids_sha"]}')
     masks={k:v for k,v in np.load(out/'e57_pqa2_masks.npz').items()};masks.update({'band_ALLQ128':np.asarray(128),'all_ALLQ128':np.asarray(1)})
     rc={};L0=C.Ladder55(rt,save_dir=out/'states'/'rec',canary=None);t0=time.monotonic()
     with rt.mesh:Kh0,Vh0,_h=L0.record(ids[:nch*CH])
