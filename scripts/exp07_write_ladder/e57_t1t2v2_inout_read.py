@@ -87,7 +87,7 @@ def read_stage(a):
                 order=[k for _,ii,_ in evs for k in ii];packs[(sm,cn)]=dict(events=evs,items=[new[k] for k in order],ntok=[ntok[k] for k in order],pres=pr)
             else:
                 ctx=out_tail if cn=='OUT' else W[sm]['ids'];packs[(sm,cn)]=dict(groups=group_rows(idx,ctx),items=[new[k] for k in idx],ntok=[ntok[k] for k in idx],pres=pres)
-        lg(f'  stream {sm}: {len(idx)} frames; end-window answer present {sum(pres.values())} / absent {len(pres)-sum(pres)}'+(f'; event-local windows {len(EW[sm])} (frames with the answer inside: {sum(w["n_present"] for w in EW[sm].values())})' if 'INEV' in names_c else ''))
+        lg(f'  stream {sm}: {len(idx)} frames; end-window answer present {sum(pres.values())} / absent {len(pres)-sum(pres.values())}'+(f'; event-local windows {len(EW[sm])} (frames with the answer inside: {sum(w["n_present"] for w in EW[sm].values())})' if 'INEV' in names_c else ''))
     def score(m,sm,cn):
         m32=rd.to_fp32(m);o=[]
         with LD.jax.default_matmul_precision('highest'):
