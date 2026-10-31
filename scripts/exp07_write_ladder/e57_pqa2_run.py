@@ -31,6 +31,7 @@ def patch_segmented(log=print):
     import e55_run as R,e57_main_run as M
     LD,s3,C=R.lab();orig=C.Ladder55.record
     def rec(self,ids,progress=None):
+        log(f'  segmented record of {len(ids)//CH} chunks starts',flush=True) if log is print else log('  segmented record starts')
         if getattr(self.rt,'_orig_prefix',None) is None:M.install_segmented_prefix(self.rt,seg_chunks=280,ctx_chunks=192,log=log)
         Kh,Vh=M.record_segmented(self,self.rt,s3,LD,ids,seg_chunks=280,ctx_chunks=192,log=log);return Kh,Vh,None
     C.Ladder55.record=rec
