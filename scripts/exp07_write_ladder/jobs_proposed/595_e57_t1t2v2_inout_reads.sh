@@ -31,7 +31,10 @@ for mf_,pre in ((o+'/e57_t1t2v2/e57_t1t2v2_states_manifest.json',None),(o+'/e57_
 add('GAINQ512P26_A','GAINQ512P26','A',o+'/e57_gainq_p0.26/E57_main_GAINQ512.arms.json','279','e3dc1ac6f5bc')
 add('RANDQ512P10_A','RANDQ512P10','A',o+'/e57_randq_p0.10/E57_main_RANDQ512.arms.json','279','8dafe402ff73')
 add('ALLQ512_A','ALLQ512','A',o+'/e57_allq512/E57_main_ALLQ512.arms.json','279','454c1658523b')
-for lab in ('GAINQ512P26','RANDQ512P10'):add(lab+'_B',lab,'B',o+f'/e57_t1t2v2_b512/E57_v2B20_{lab}.arms.json','285')
+for lab in ('GAINQ512P26','RANDQ512P10'):
+    pth=o+f'/e57_t1t2v2_b512/E57_v2B20_{lab}.arms.json'
+    if os.path.exists(pth):add(lab+'_B',lab,'B',pth,'285')
+    else:print('NOTE: job 590 output missing, B20 512 states not in the manifest:',pth)
 for k,v in m.items():
     if v['stream'] in ('A','B'):pass
 json.dump(m,open(mf,'w'),indent=1);print('manifest',len(m),{k:(v['stream'],v['hash'][:12]) for k,v in m.items()})
@@ -39,5 +42,5 @@ PYE
 CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu $PY $S/e57_t1t2v2_inout_read.py --cpu-check --frozen $IN/t1t2_v2_frozen.json --cands $IN/e57_t1t2v2d3_candidates.json --bank "$BANK" --manifest "$MAN" --sentences-a $IN/e57_stream_sentences.jsonl --sentences-b $IN/streamB20_stream_sentences.jsonl --out "$TOUT"
 [ -n "$CPU_ONLY" ] && { echo "CPU_ONLY: done before any GPU step"; exit 0; }
 [ -f "$TOUT/E57_t1t2v2_inout_scores.json" ] && [ -z "$RERUN" ] && { echo "scores exist (exit 8; RERUN=1 to redo)"; exit 8; }
-$PY $S/e57_t1t2v2_inout_read.py --frozen $IN/t1t2_v2_frozen.json --cands $IN/e57_t1t2v2d3_candidates.json --bank "$BANK" --manifest "$MAN" --sentences-a $IN/e57_stream_sentences.jsonl --sentences-b $IN/streamB20_stream_sentences.jsonl --out "$TOUT"
+$PY $S/e57_t1t2v2_inout_read.py --frozen $IN/t1t2_v2_frozen.json --cands $IN/e57_t1t2v2d3_candidates.json --bank "$BANK" --manifest "$MAN" --sentences-a $IN/e57_stream_sentences.jsonl --sentences-b $IN/streamB20_stream_sentences.jsonl --out "$TOUT" --conds OUT,IN
 echo "outputs: $TOUT/E57_t1t2v2_inout_scores.json $TOUT/E57_t1t2v2_inout_score_keys.json"
