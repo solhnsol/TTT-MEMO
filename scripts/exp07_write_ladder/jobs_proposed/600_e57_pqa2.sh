@@ -1,6 +1,7 @@
 #!/bin/bash
 # JOB 600 = E57 PUBLIC QA STAGE 2 (E57 122-Q; Hans 'reuse included, 2 cycles, no canary limit: experiment approved'): stream S = SQuAD dev without Super_Bowl_50 / Warsaw (46 docs, 1,964 paragraphs, doc order shuffled per cycle, 311 chunks per cycle, 622 chunks), arms NAT / NATQ / ALLQ128 / GAINQ128P10 / RANDQ128P10 (same engines and settings as jobs 570 / 585), 2 cycles in one continuous stream, state + canary (measured only, no stop threshold) at the end of cycle 1 and cycle 2; reads = the 1,000 frozen stage-1 items x 16 candidates, OUT (the stage-1 8192-token tail) with the KV-reuse scorer FastOUT. Order: (1) validation of FastOUT against the reference scorer (stored stage-1 OUT rows for all 1,000 items, a fresh reference run on 100 items, W0 and one trained state); (2) W0 score pass; (3) masks; (4) writes; (5) cycle-1 reads; (6) cycle-2 reads. New files e57_pqa2_stream.py / e57_pqa2_run.py; no existing e57_*.py edited, no git checkout.
 set -eo pipefail
+export PYTHONUNBUFFERED=1
 PY=$(realpath -s "$PY")
 case "$PY" in /*) ;; *) echo "PY not absolute: $PY" >&2; exit 3;; esac
 cd "$(dirname "$0")/../../.." 2>/dev/null || true
