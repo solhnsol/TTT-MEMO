@@ -72,11 +72,15 @@ def manifest(out,cycle):
     return m
 class FastOUT:
     """OUT scorer with KV reuse: one fixed 8192-token tail, one fixed set of packed candidate rows, many weight sets (the inner parameters change, the prefix layers do not)"""
-    def __init__(self,rt32,m32,tail_ids,raw_rows,GP=2,log=print):
+    def __init__(self,rt32,m32,tail_ids,raw_rows,GP=2,log=print,group=640):
         import e57_kvreuse as KR,packing as PK,jax,jax.numpy as jnp,equinox as eqx
         self.KR,self.PK,self.jax,self.jnp=KR,PK,jax,jnp;self.rt=rt32;self.tail=list(tail_ids);self.TL=TL=len(tail_ids);assert TL==8192;self.GP=GP;W=int(rt32.cfg.model.sliding_window_size)
         collect,resume=KR.make_prefix_fns(rt32);t0=time.monotonic()
-        self.chunks,self.where=PK.pack_rows(raw_rows,CH);n=len(self.chunks);padn=(-n)%GP
+        # packing in groups of `group` rows (stage 1: 40 items x 16 candidates): the prefix mask limits the window by the INDEX distance, so the tail tokens a row sees depend on its offset inside the packed chunk; the same grouping as stage 1 gives the same packed chunks
+        self.chunks=[];self.where=[]
+        for g0 in range(0,len(raw_rows),group):
+            ch_,wh_=PK.pack_rows(raw_rows[g0:g0+group],CH);o=len(self.chunks);self.chunks+=ch_;self.where+=[(c+o,a,b) for c,a,b in wh_]
+        n=len(self.chunks);padn=(-n)%GP
         ids=np.stack([c[0] for c in self.chunks]+[self.chunks[-1][0]]*padn);seg=np.stack([c[1] for c in self.chunks]+[self.chunks[-1][1]]*padn);loc=np.stack([c[2] for c in self.chunks]+[self.chunks[-1][2]]*padn)
         self.ids,self.seg,self.loc=ids,seg,loc;self.nchunk=n
         with rt32.mesh,jax.default_matmul_precision('highest'):
@@ -84,8 +88,8 @@ class FastOUT:
             pref=[]
             for j in range(ids.shape[0]):
                 sf=np.concatenate([np.full(TL,-2,np.int32),seg[j]]);mask=KR._attn_mask_np(sf,W)[TL:,:]
-                pref.append(resume(m32,jnp.asarray(ids[j]),jnp.asarray(TL+loc[j]),jnp.asarray(mask),K,V_))
-            self.pref1=jnp.stack(pref);jax.block_until_ready(self.pref1)
+                pref.append(np.asarray(resume(m32,jnp.asarray(ids[j]),jnp.asarray(TL+loc[j]),jnp.asarray(mask),K,V_)))
+            self.pref1=np.stack(pref)           # host copy: the device holds only the group being scored
             self.tailseq=rt32.seq(self.tail+[rt32.eos]*CH)
             qs=[rt32.seq(list(x)) for x in ids];self.tg=jnp.stack([q.target_tokens for q in qs]);self.mk=jnp.stack([q.loss_masks for q in qs])
             self.idsj,self.segj,self.locj=jnp.asarray(ids),jnp.asarray(seg),jnp.asarray(loc)
@@ -103,12 +107,12 @@ class FastOUT:
         self.lp_packed=lp_packed
     def score(self,m32):
         """summed log-prob of the span of every row (same order as the raw rows)"""
-        rt=self.rt;jax=self.jax;from core import clone_state
+        rt=self.rt;jax=self.jax;jnp=self.jnp;from core import clone_state
         with rt.mesh,jax.default_matmul_precision('highest'):
             st=clone_state(rt.state_suffix)
             for j in range(self.TL//CH):st,_=rt.chunk_logp(m32,st,rt.chunk(self.tailseq,j),self.H[j*CH:(j+1)*CH])
             out=[];GP=self.GP
-            for g in range(0,self.ids.shape[0],GP):out.append(np.asarray(self.lp_packed(m32,st,self.idsj[g:g+GP],self.tg[g:g+GP],self.mk[g:g+GP],self.pref1[g:g+GP],self.segj[g:g+GP],self.locj[g:g+GP])))
+            for g in range(0,self.ids.shape[0],GP):out.append(np.asarray(self.lp_packed(m32,st,self.idsj[g:g+GP],self.tg[g:g+GP],self.mk[g:g+GP],jnp.asarray(self.pref1[g:g+GP]),self.segj[g:g+GP],self.locj[g:g+GP])))
         lp=np.concatenate(out);return np.asarray([lp[c,a:b].sum() for c,a,b in self.where])
 def setup_read(a,lg):
     """model, fp32 reader, items, rows, OUT tail (as stage 1)"""
@@ -172,11 +176,14 @@ def read_stage(a):
     out=pathlib.Path(a['out']);out.mkdir(parents=True,exist_ok=True);lg=lambda *x:print(*x,flush=True);tag=a['tag']
     LD,rt,rt32,rd,items,h,raw,ntok,out_tail,tsha=setup_read(a,lg);man=json.load(open(a['manifest']));m32w0=rd.to_fp32(rt.base)
     t0=time.monotonic();fo=FastOUT(rt32,m32w0,out_tail,raw,log=lg);tim={'prep':time.monotonic()-t0};rows={};part=out/f'E57_pqa2_reads_{tag}_partial.json'
-    t0=time.monotonic();rows['W0']=rows_of(items,ntok,fo.score(m32w0),'W0');tim['W0']=time.monotonic()-t0;lg(f'  W0 read: {tim["W0"]:.0f}s acc_mean {np.mean([r["acc_mean"] for r in rows["W0"]]):.3f}')
+    t0=time.monotonic();f0=fo.score(m32w0);rows['W0']=rows_of(items,ntok,f0,'W0');tim['W0']=time.monotonic()-t0
+    ref1=json.load(open(a.get('stage1') or 'experiments/exp07_write_ladder/e57_squad_w0/E57_squad_w0_reads.json'))['rows'];ref1=np.concatenate([np.asarray(r['cand_lp'],np.float64) for r in ref1 if r['condition']=='OUT']);d1=np.abs(f0-ref1)
+    rr=rows_of(items,ntok,ref1,'R');chk=dict(max_abs_diff=float(d1.max()),mean_abs_diff=float(d1.mean()),acc_sum_flips=int(sum(x['acc_sum']!=y['acc_sum'] for x,y in zip(rows['W0'],rr))),acc_mean_flips=int(sum(x['acc_mean']!=y['acc_mean'] for x,y in zip(rows['W0'],rr))),rank_sum_changes=int(sum(x['rank_sum']!=y['rank_sum'] for x,y in zip(rows['W0'],rr))))
+    lg('  FastOUT W0 vs stored stage-1 OUT rows (all 1000 items):',json.dumps(chk));lg(f'  W0 read: {tim["W0"]:.0f}s acc_mean {np.mean([r["acc_mean"] for r in rows["W0"]]):.3f}')
     for name,s in man.items():
         t0=time.monotonic();m=rd.load_state(s['file'],expect_hash=s['hash']);rows[s['label']]=rows_of(items,ntok,fo.score(rd.to_fp32(m)),s['label']);del m
         tim[name]=time.monotonic()-t0;lg(f'  {name} read: {tim[name]:.0f}s acc_mean {np.mean([r["acc_mean"] for r in rows[s["label"]]]):.3f}');part.write_text(json.dumps(dict(done=list(tim),rows=rows),default=float))
-    kn=keys_paired(rows);meta=dict(items_sha256=h,out_tail_sha=tsha,scorer='FastOUT (KV reuse)',states=man,timings=tim,primary_score='cand_mean = cand_lp / cand_ntok (E49 convention, sum as the second)')
+    kn=keys_paired(rows);meta=dict(items_sha256=h,out_tail_sha=tsha,scorer='FastOUT (KV reuse, packed in groups of 640 rows as stage 1)',w0_vs_stage1_stored=chk,states=man,timings=tim,primary_score='cand_mean = cand_lp / cand_ntok (E49 convention, sum as the second)')
     (out/f'E57_pqa2_reads_{tag}.json').write_text(json.dumps(dict(meta=meta,rows=rows),default=float));(out/f'E57_pqa2_keys_{tag}.json').write_text(json.dumps(dict(meta=meta,keys=kn),indent=1,default=float))
     lg('wrote',out/f'E57_pqa2_reads_{tag}.json');lg(json.dumps({l:(round(v['ALL']['acc_sum']['mean'],3),round(v['ALL']['acc_mean']['mean'],3)) for l,v in kn.items()}))
 def selftest():
