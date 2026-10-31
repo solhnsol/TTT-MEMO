@@ -84,8 +84,8 @@ class FastOUT:
             pref=[]
             for j in range(ids.shape[0]):
                 sf=np.concatenate([np.full(TL,-2,np.int32),seg[j]]);mask=KR._attn_mask_np(sf,W)[TL:,:]
-                pref.append(resume(m32,jnp.asarray(ids[j]),jnp.asarray(TL+loc[j]),jnp.asarray(mask),K,V_))
-            self.pref1=jnp.stack(pref);jax.block_until_ready(self.pref1)
+                pref.append(np.asarray(resume(m32,jnp.asarray(ids[j]),jnp.asarray(TL+loc[j]),jnp.asarray(mask),K,V_)))
+            self.pref1=np.stack(pref)           # host copy: the device holds only the group being scored
             self.tailseq=rt32.seq(self.tail+[rt32.eos]*CH)
             qs=[rt32.seq(list(x)) for x in ids];self.tg=jnp.stack([q.target_tokens for q in qs]);self.mk=jnp.stack([q.loss_masks for q in qs])
             self.idsj,self.segj,self.locj=jnp.asarray(ids),jnp.asarray(seg),jnp.asarray(loc)
@@ -103,12 +103,12 @@ class FastOUT:
         self.lp_packed=lp_packed
     def score(self,m32):
         """summed log-prob of the span of every row (same order as the raw rows)"""
-        rt=self.rt;jax=self.jax;from core import clone_state
+        rt=self.rt;jax=self.jax;jnp=self.jnp;from core import clone_state
         with rt.mesh,jax.default_matmul_precision('highest'):
             st=clone_state(rt.state_suffix)
             for j in range(self.TL//CH):st,_=rt.chunk_logp(m32,st,rt.chunk(self.tailseq,j),self.H[j*CH:(j+1)*CH])
             out=[];GP=self.GP
-            for g in range(0,self.ids.shape[0],GP):out.append(np.asarray(self.lp_packed(m32,st,self.idsj[g:g+GP],self.tg[g:g+GP],self.mk[g:g+GP],self.pref1[g:g+GP],self.segj[g:g+GP],self.locj[g:g+GP])))
+            for g in range(0,self.ids.shape[0],GP):out.append(np.asarray(self.lp_packed(m32,st,self.idsj[g:g+GP],self.tg[g:g+GP],self.mk[g:g+GP],jnp.asarray(self.pref1[g:g+GP]),self.segj[g:g+GP],self.locj[g:g+GP])))
         lp=np.concatenate(out);return np.asarray([lp[c,a:b].sum() for c,a,b in self.where])
 def setup_read(a,lg):
     """model, fp32 reader, items, rows, OUT tail (as stage 1)"""
