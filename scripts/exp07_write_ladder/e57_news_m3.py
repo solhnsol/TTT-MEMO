@@ -44,7 +44,7 @@ def write_stage(a):
         cn=can(m);traj.append(dict(chunk=int(k),canary=cn));lg(f'  {tag} chunk {k}: canary rise gen {cn["_gen_nll"]-cw0["_gen_nll"]:+.4f} tail {cn["_tail_nll"]-cw0["_tail_nll"]:+.4f}');return {'ok':True}
     t0=time.monotonic()
     res=L.run_stream('SELC1',1,ids,nch=nch,tag=f'news{tag}',log=lg,read_hook=hook,hook_chunks=set(saves),read_chunks=set(saves),chunks_meta=[{'sents':[]} for _ in range(nch)],norm_targets=ntg,uv=uv);log=res['log']
-    ref_f=out/'E57_news_M3W8Q128.arms.json' if arm!='ALLQ128' else EXP/'e57_t1t2v2/streamA/E57_v2A_ALLQ128.arms.json';rh=json.load(open(ref_f))['states'][str(nch-1)]['hash'];nh=next((v['_hash'] for k,v in res['reads'].items() if int(k)==nch-1),None)
+    ref_f=EXP/'e57_news_m3/E57_news_M3W8Q128.arms.json' if arm!='ALLQ128' else EXP/'e57_t1t2v2/streamA/E57_v2A_ALLQ128.arms.json';rh=json.load(open(ref_f))['states'][str(nch-1)]['hash'];nh=next((v['_hash'] for k,v in res['reads'].items() if int(k)==nch-1),None)
     (out/f'E57_news_{tag}.arms.json').write_text(json.dumps(dict(arm=tag,engine='SELC1',stream='A',n_chunks=nch,ids_sha=V.STREAM_SHA['A'],weight=w if arm!='ALLQ128' else 1.0,band=BAND,p_deciding=P,canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,end_state_hash=nh,original_end_state_hash=rh,end_state_hash_equal=bool(nh==rh),
         update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys','q_banded','q_band','n_deciding') if k_ in e} for e in log],norm_source='E57_main_NAT first cycle x 0.5 (engine SELC1)'),default=float));lg('wrote',out/f'E57_news_{tag}.arms.json','end-state hash equal to the original:',nh==rh)
 def merge_stage(a):
