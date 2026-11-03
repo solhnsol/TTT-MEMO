@@ -34,7 +34,8 @@ def read_stage(a):
     f1=T1.load_frozen(str(EXP/'e57_news/e57_t1t2/t1t2_v1.json'));new1=T1.make_items(f1,out);f2=V.load_frozen(str(EXP/'e57_t1t2v2_in/t1t2_v2_frozen.json'));c2=json.load(open(EXP/'e57_t1t2v2_in/e57_t1t2v2d3_candidates.json'));new2=V.make_items(f2,c2,out)
     sets={'v1':new1,'v2A':[it for it in new2 if it['stream']=='A'],'v2B':[it for it in new2 if it['stream']=='B']};reg=registry();state_sets={'v1':'A','v2A':'A','v2B':'B'};packs={};meta={}
     if a.get('sets'):sets={k:v for k,v in sets.items() if k in a['sets'].split(',')}
-    if a.get('extra'):lab_,fn_,h_=a['extra'].split(',');reg={'A':{lab_:(fn_,h_)},'B':{}}                    # one extra state only (job 770): W0 is read again as the reproduction check
+    state_sets={k:v for k,v in state_sets.items() if k in sets}
+    if a.get('extra'):reg={'A':{x.split(',')[0]:(x.split(',')[1],x.split(',')[2]) for x in a['extra'].split(';')},'B':{}}                    # one extra state only (job 770): W0 is read again as the reproduction check
     for sn,its in sets.items():
         raw,ntok,bad=RD.build_rows(rt.tok,its);assert not bad,bad;groups=[];o=0;tokids=[]
         for g0 in range(0,len(its),40):

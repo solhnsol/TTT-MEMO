@@ -1,5 +1,5 @@
 #!/bin/bash
-# JOB 790 = E57 PUBLIC QA STAGE 15, BUNDLE EPISODES WITH 17 EXPOSURES (QA thread; Hans 11/03 13:21 KST '노출 더 늘려볼까 ... 일단 일부 문단만 빠르게 재서술' and 23:34 KST '병렬 작성으로 처리해'): the bundles 5 / 8 / 9 / 10 / 12 of job 640 (50 paragraphs, 73 items) with 16 re-descriptions per paragraph (rewrites_16_subset.json, sha256 9ee1c6da...): orig -> rw1 -> ... -> rw16 (17 sections of 10 paragraphs, SQuAD filler completion), arms NATQ, ALLQ128 (NAT norm source) and GAINQ512 p.10; read points n = 1 / 3 / 5 / 9 / 13 / 17; reads: 16-candidate question read (A, B) and the closed same-bundle read (A, B_bundle), per-token log-probs; reproduction checks against job 640 (update norms before the n = 9 chunk, W0 rows). New file e57_pqa15_run.py (uses the stages of e57_pqa6_run.py / e57_pqa7_run.py unchanged on the new directory); no existing e57_*.py edited, no git checkout.
+# JOB 790 = E57 PUBLIC QA STAGE 15, BUNDLE EPISODES WITH 17 EXPOSURES (QA thread; Hans 11/03 13:21 KST '노출 더 늘려볼까 ... 일단 일부 문단만 빠르게 재서술' and 23:34 KST '병렬 작성으로 처리해'): the bundles 5 / 8 / 9 / 10 / 12 of job 640 (50 paragraphs, 73 items) with 16 re-descriptions per paragraph (rewrites_16_subset.json, sha256 9ee1c6da...): orig -> rw1 -> ... -> rw16 (17 sections of 10 paragraphs, SQuAD filler completion), arms NATQ, ALLQ128 (NAT norm source) (GAINQ512 p.10 dropped on Hans' instruction 'GAINQ는 빼자'); read points n = 1 / 3 / 5 / 9 / 13 / 17; reads: 16-candidate question read (A, B) and the closed same-bundle read (A, B_bundle), per-token log-probs; reproduction checks against job 640 (update norms before the n = 9 chunk, W0 rows). New file e57_pqa15_run.py (uses the stages of e57_pqa6_run.py / e57_pqa7_run.py unchanged on the new directory); no existing e57_*.py edited, no git checkout.
 set -eo pipefail
 export PYTHONUNBUFFERED=1
 PY=$(realpath -s "$PY")
@@ -19,8 +19,6 @@ for f in $ITEMS $BANK $ST1 $ASG $IN/subset.json $D610/data/paragraphs.json $D650
 [ -n "$CPU_ONLY" ] && { echo "CPU_ONLY: done before any GPU step"; exit 0; }
 [ -f "$TOUT/e57_qa_n17.json" ] && [ -z "$RERUN" ] && { echo "e57_qa_n17.json exists (exit 8; RERUN=1 to redo)"; exit 8; }
 [ -f "$TOUT/e57_pqa6_writes.json" ] || $PY $S/e57_pqa6_run.py --stage write --out "$TOUT"
-[ -f "$TOUT/e57_pqa7_masks.npz" ] || $PY $S/e57_pqa7_run.py --stage score --out "$TOUT" --src640 "$TOUT"
-[ -f "$TOUT/e57_pqa7_writes.json" ] || $PY $S/e57_pqa7_run.py --stage write --out "$TOUT" --src640 "$TOUT" --arms GAINQ512P10
 [ -f "$TOUT/e57_pqa15_read_meta.json" ] || $PY $S/e57_pqa15_run.py --stage read --out "$TOUT" --src640 "$S640" --items-file $ITEMS --bank "$BANK" --assign $ASG --stage1 $ST1
 $PY $S/e57_pqa15_run.py --stage analyze --out "$TOUT" --items-file $ITEMS --json "$TOUT/e57_qa_n17.json"
 echo "outputs: $TOUT/e57_qa_n17.json $TOUT/E57_pqa15_rows_*.json $TOUT/e57_pqa15_tokens.json $TOUT/e57_pqa15_read_meta.json"

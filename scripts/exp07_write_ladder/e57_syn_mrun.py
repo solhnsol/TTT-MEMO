@@ -12,7 +12,7 @@ for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/ex
 import e57_qband_run as QR
 import e57_closure_masks as CM
 CH=1024;WIN=8*CH;K0=8
-ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'M3W4NALL':('M3',4,'NALL')}
+ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'KL16W8N05':('KL16',8,'N05'),'KL64W8N05':('KL64',8,'N05'),'M3W4NALL':('M3',4,'NALL')}
 class UVDeciding:
     """UV-compatible keep object: ALLQ256 for every row from chunk K0; M2H: the deciding rows additionally lose the window keys; for M3 only the deciding-row vector of the chunk is published in holder['dec'] for the weighted gradient"""
     def __init__(self,kind,masks,holder,log=print):self.kind=kind;self.m=masks;self.holder=holder;self.log=log
@@ -24,6 +24,9 @@ class UVDeciding:
         kp=np.broadcast_to(base,(CH,WIN+CH)).copy();bk=CM.band_keep(base,256);kp[:]=bk
         if self.kind=='M2H':kp[dec,:WIN]=False
         if self.kind in ('M2H64','M4'):b64=CM.band_keep(base,64);kp[dec]=b64[dec]       # deciding rows see only the previous 64 tokens (chunk and window keys), all other rows ALLQ256
+        if self.kind in ('KL16','KL64'):           # key-level: the deciding rows see the natural window minus their top-m ALLV far keys (W0 key-mass dump), all other rows ALLQ256
+            rows=np.where(dec)[0];idx=self.m[f'qk_ALLV{self.kind[2:]}_{k}'];assert idx.shape[0]==len(rows);kp[rows]=base[None,:]
+            for r,ix in zip(rows,idx):kp[r,ix[ix>=0].astype(np.int64)]=False
         if k%16==0:self.log(f'  {self.kind} chunk {k}: deciding rows {int(dec.sum())}, window-less {int(dec.sum()) if self.kind=="M2H" else 0}')
         return kp,{'uv_arm':self.kind,'q_banded':CH,'q_band':256,'n_deciding':int(dec.sum()),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
 def install_weighted_grad(L,s3,holder,weight):
@@ -51,16 +54,16 @@ def selftest():
     kp3,_=UVDeciding('M2H64',masks,{},log=lambda *x:None).keep(9,None,None,None,None,nat);b64=CM.band_keep(nat,64);assert np.array_equal(kp3[dec],b64[dec]) and np.array_equal(kp3[~dec],allq[~dec]) and kp3[dec].sum(1).max()==64
     print('e57_syn_mrun selftest ok')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--out');ap.add_argument('--m30');ap.add_argument('--ntg-nat');ap.add_argument('--ntg-allq');ap.add_argument('--arms');ap.add_argument('--tag',default='synq');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--save-apps',default='128');ap.add_argument('--out');ap.add_argument('--m30');ap.add_argument('--ntg-nat');ap.add_argument('--ntg-allq');ap.add_argument('--arms');ap.add_argument('--tag',default='synq');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
     import e57_syn_pass as SP
-    seed=a.seed;OUT=pathlib.Path(a.out);OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');ro=[16,32,64,128];ri=[128];sv=[128];CH_=1024
+    seed=a.seed;OUT=pathlib.Path(a.out);OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');ro=[16,32,64,128];ri=[128];sv=[int(x) for x in a.save_apps.split(',')];CH_=1024
     for ar in arms:assert ar in ARMS,ar
     masks={k:v for k,v in np.load(a.m30,allow_pickle=True).items()};ntgN=[e['update_norm'] for e in json.load(open(a.ntg_nat))['log']];ntgA=[e['update_norm']/0.5 for e in json.load(open(a.ntg_allq))['log']] if a.ntg_allq else None;assert len(ntgN)>=128 and (ntgA is None or len(ntgA)>=128)
     LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     lg=lambda *x:print(*x,flush=True)
-    enc,w,tf=R55.build(SP.synth_args(seed,a.cell),seed,read_apps=set(ro)|set(ri)|set(sv),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];p=w['p'];
+    enc,w,tf=R55.build(SP.synth_args(seed,a.cell),seed,read_apps=set(ro)|set(ri)|{128},arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];p=w['p'];
     ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w)),'stream hash mismatch'
     P=R.plan(w,enc);items=P['items'];reads=[a_*p-1 for a_ in sv] if not a.smoke else [nch-1];canary_chunks=reads
     tok=rt.tok;raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=R55.out_tail_8192(LD,tok,rt.bos,R55.forbid_list(w))
@@ -70,7 +73,7 @@ def main():
         if fn.exists() and not a.rerun:lg('exists, reused:',fn);continue
         kind,weight,nrm=ARMS[ar];ntg=ntgN if nrm=='N05' else ntgA;holder={'dec':np.zeros(CH_,np.float32)}
         uv=UVDeciding(kind,masks,holder,lg);L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_{ar}_s{seed}',canary=can);got={}
-        if kind in ('M3','M3NM','M4'):install_weighted_grad(L,s3,holder,float(weight))
+        if kind in ('M3','M3NM','M4','KL16','KL64'):install_weighted_grad(L,s3,holder,float(weight))
         def partial(k,m,ar=ar,got=got):
             x=R_.at((k+1)//p,m);got[(k+1)//p]=x
             rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':False})[ar];json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{seed}.read.partial.json','w'))

@@ -19,6 +19,15 @@ def arms_s61():
     for p_ in sorted((EXP/'e57_synq').glob('E55_synq_*_s61.saved.json')):                  # arms of e57_syn_mrun.py on seed 61 (job 760)
         a=p_.name.split('_')[2];d=json.load(open(p_));r=list(d['reads'].values())[-1];out[a]=dict(file=r['_file'],hash=r['_hash'],read_json=str(EXP/f'e57_synq/E55_synq_{a}_s61.read.json'))
     return out
+def arms_curve(seed,tag,only=None):
+    """all saved states (every save point) of the arms written with --save-apps by e57_syn_mrun.py under the tag -> {arm@c<chunk>: ...}"""
+    out={}
+    for p_ in sorted((EXP/'e57_synq').glob(f'E55_{tag}_*_s{seed}.saved.json')):
+        a=p_.name.split('_')[2]
+        if only and a not in only.split(','):continue
+        d=json.load(open(p_))
+        for ch,r in d['reads'].items():out[f'{a}@c{ch}']=dict(file=r['_file'],hash=r['_hash'],read_json=str(EXP/f'e57_synq/E55_{tag}_{a}_s{seed}.read.json'),chunk=int(ch))
+    return out
 def r1_tokens(P,rt,m):
     """per-row arrays of the token log-probs of the packed scorer (the same computation as packing.Packed.r1)"""
     from core import clone_state
@@ -32,7 +41,8 @@ def r1_tokens(P,rt,m):
 def read_stage(a):
     out=pathlib.Path(a['out']);out.mkdir(parents=True,exist_ok=True);seed=int(a['seed']);import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
     cell,arms={64:('v3_16_1',arms_s64()),61:('v3_64_4',arms_s61())}[seed];lg=lambda *x:print(*x,flush=True)
-    if a.get('arms'):arms={k:v for k,v in arms.items() if k in a['arms'].split(',')};assert arms,'no arm selected'
+    if a.get('tag'):arms=arms_curve(seed,a['tag'],a.get('arms'))
+    elif a.get('arms'):arms={k:v for k,v in arms.items() if k in a['arms'].split(',')};assert arms,'no arm selected'
     LD,s3,C=R55.lab();rt=LD.Runtime();rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     args=types.SimpleNamespace(cell=cell,seed=seed,tokenizer_file=None,bg='pool',decoy='names',stub=False,arms='NAT')
     enc,w,tf=R55.build(args,seed,read_apps={16,32,64,128},arms=['NAT']);P_=R.plan(w,enc);items=P_['items'];tok=rt.tok;raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=R55.out_tail_8192(LD,tok,rt.bos,R55.forbid_list(w))
@@ -42,7 +52,9 @@ def read_stage(a):
     res={'seed':seed,'cell':cell,'n_items':len(items),'tokids':tokids,'W0':tokens(rt.base),'arms':{}};chk={}
     for ar,s in arms.items():
         t0=time.monotonic();m=rd.load_state(s['file'],expect_hash=s['hash']);res['arms'][ar]=tokens(m);del m
-        ref=json.load(open(s['read_json']));sm=np.asarray([sum(x) for x in res['arms'][ar]]).reshape(-1,G.NCAND);rm=np.asarray(ref['read']['128']['out'],np.float64)
+        ref=json.load(open(s['read_json']));sm=np.asarray([sum(x) for x in res['arms'][ar]]).reshape(-1,G.NCAND);app=str((s['chunk']+1)//w['p']) if 'chunk' in s else '128'
+        if app not in ref['read']:chk[ar]=dict(state=None,W0=None,n_rows=int(sm.shape[0]),note='no inline read at this save point');lg(f'  {ar}: {time.monotonic()-t0:.0f}s (no stored inline read to compare)');continue
+        rm=np.asarray(ref['read'][app]['out'],np.float64)
         w0s=np.asarray([sum(x) for x in res['W0']]).reshape(-1,G.NCAND);w0r=np.asarray(ref['W0']['out'],np.float64);chk[ar]=dict(state=float(np.abs(sm-rm).max()),W0=float(np.abs(w0s-w0r).max()),n_rows=int(rm.shape[0]))
         lg(f'  {ar}: {time.monotonic()-t0:.0f}s, max|diff| to the stored read: state {chk[ar]["state"]:.2e}, W0 {chk[ar]["W0"]:.2e}')
     res['reproduction']=chk;(out/f'e57_syn_tokread_s{seed}.json').write_text(json.dumps(res))
@@ -94,6 +106,6 @@ def selftest():
 def main():
     if '--selftest' in sys.argv:selftest();return
     g=lambda k:sys.argv[sys.argv.index(k)+1];st=g('--stage')
-    if st=='read':read_stage(dict(out=g('--out'),seed=g('--seed'),arms=g('--arms') if '--arms' in sys.argv else None))
+    if st=='read':read_stage(dict(out=g('--out'),seed=g('--seed'),arms=g('--arms') if '--arms' in sys.argv else None,tag=g('--tag') if '--tag' in sys.argv else None))
     else:analyze(dict(out=g('--out')))
 if __name__=='__main__':main()
