@@ -30,6 +30,7 @@ def r1_tokens(P,rt,m):
 def read_stage(a):
     out=pathlib.Path(a['out']);out.mkdir(parents=True,exist_ok=True);seed=int(a['seed']);import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
     cell,arms={64:('v3_16_1',arms_s64()),61:('v3_64_4',arms_s61())}[seed];lg=lambda *x:print(*x,flush=True)
+    if a.get('arms'):arms={k:v for k,v in arms.items() if k in a['arms'].split(',')};assert arms,'no arm selected'
     LD,s3,C=R55.lab();rt=LD.Runtime();rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     args=types.SimpleNamespace(cell=cell,seed=seed,tokenizer_file=None,bg='pool',decoy='names',stub=False,arms='NAT')
     enc,w,tf=R55.build(args,seed,read_apps={16,32,64,128},arms=['NAT']);P_=R.plan(w,enc);items=P_['items'];tok=rt.tok;raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=R55.out_tail_8192(LD,tok,rt.bos,R55.forbid_list(w))
@@ -91,6 +92,6 @@ def selftest():
 def main():
     if '--selftest' in sys.argv:selftest();return
     g=lambda k:sys.argv[sys.argv.index(k)+1];st=g('--stage')
-    if st=='read':read_stage(dict(out=g('--out'),seed=g('--seed')))
+    if st=='read':read_stage(dict(out=g('--out'),seed=g('--seed'),arms=g('--arms') if '--arms' in sys.argv else None))
     else:analyze(dict(out=g('--out')))
 if __name__=='__main__':main()
