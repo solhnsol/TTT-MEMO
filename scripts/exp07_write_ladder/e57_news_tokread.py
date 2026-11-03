@@ -33,6 +33,8 @@ def read_stage(a):
     bank=RD.load_items(str(EXP/'e57_news/e57_bank/bank_v1.json'));forbid=sorted({s for it in bank for s in it['variants']+[it['cands'][0]] if len(s)>=4 and not any(ch.isdigit() for ch in s)});out_tail=R55.out_tail_8192(LD,rt.tok,rt.bos,forbid)
     f1=T1.load_frozen(str(EXP/'e57_news/e57_t1t2/t1t2_v1.json'));new1=T1.make_items(f1,out);f2=V.load_frozen(str(EXP/'e57_t1t2v2_in/t1t2_v2_frozen.json'));c2=json.load(open(EXP/'e57_t1t2v2_in/e57_t1t2v2d3_candidates.json'));new2=V.make_items(f2,c2,out)
     sets={'v1':new1,'v2A':[it for it in new2 if it['stream']=='A'],'v2B':[it for it in new2 if it['stream']=='B']};reg=registry();state_sets={'v1':'A','v2A':'A','v2B':'B'};packs={};meta={}
+    if a.get('sets'):sets={k:v for k,v in sets.items() if k in a['sets'].split(',')}
+    if a.get('extra'):lab_,fn_,h_=a['extra'].split(',');reg={'A':{lab_:(fn_,h_)},'B':{}}                    # one extra state only (job 770): W0 is read again as the reproduction check
     for sn,its in sets.items():
         raw,ntok,bad=RD.build_rows(rt.tok,its);assert not bad,bad;groups=[];o=0;tokids=[]
         for g0 in range(0,len(its),40):
@@ -81,6 +83,7 @@ KEYS=('rr_branch','rr_first','rr_full','top1_branch','top1_first','top1_full','g
 def analyze(a):
     out=pathlib.Path(a['out']);d=json.load(open(out/'e57_news_tokread.json'));ov=json.load(open(EXP/'e57_news/e57_t1t2/e57_t1t2_overlap.json'));zero={it['id'] for it in ov['items'] if it['stream']['1']==0};res={'reproduction':d['reproduction'],'overlap_excluded_definition':'frames with zero stream overlap at k = 1 (strict) of e57_t1t2_overlap.json: %d frames'%len(zero)}
     for sn in ('v1','v2A','v2B'):
+        if sn not in d['meta']:continue
         meta=d['meta'][sn];T=d['tokens'][sn];M={lab:{w:[frame_metrics(t,m_,w) for t,m_ in zip(tl,meta)] for w in ('all','hard')} for lab,tl in T.items()};groups=sorted({m_['group'] for m_ in meta});subsets={'ALL':np.ones(len(meta),bool)}
         for gname in groups:subsets[gname]=np.asarray([m_['group']==gname for m_ in meta])
         if sn=='v1':subsets['no_overlap100']=np.asarray([m_['id'] in zero for m_ in meta])
@@ -90,7 +93,7 @@ def analyze(a):
             for which in ('all','hard'):
                 for ss,mk in subsets.items():
                     arr={k:np.asarray([f[k] for f in M[lab][which]]) for k in KEYS};w0={k:np.asarray([f[k] for f in M['W0'][which]]) for k in KEYS};ref={k:np.asarray([f[k] for f in M['NAT'][which]]) for k in KEYS} if 'NAT' in M else None
-                    e[f'{which}|{ss}']=dict(value={k:boot(arr[k][mk]) for k in KEYS},minus_W0={k:boot((arr[k]-w0[k])[mk]) for k in KEYS},**({'minus_NAT':{k:boot((arr[k]-ref[k])[mk]) for k in KEYS}} if ref is not None and lab not in ('W0','NAT') else {}))
+                    e[f'{which}|{ss}']=dict(value={k:boot(arr[k][mk]) for k in KEYS},minus_W0={k:boot((arr[k]-w0[k])[mk]) for k in KEYS},**({'minus_NAT':{k:boot((arr[k]-ref[k])[mk]) for k in KEYS}} if ref is not None and lab not in ('W0','NAT') else {}),**{f'minus_{rn}':{k:boot((arr[k]-np.asarray([f[k] for f in M[rn][which]]))[mk]) for k in KEYS} for rn in ('ALLQ128','NATQ') if rn in M and lab not in ('W0',rn)})
             res[sn]['states'][lab]=e
     (out/'e57_news_tokread_keys.json').write_text(json.dumps(res,indent=1,default=float))
 def selftest():
@@ -101,6 +104,7 @@ def selftest():
 def main():
     if '--selftest' in sys.argv:selftest();return
     g=lambda k:sys.argv[sys.argv.index(k)+1];st=g('--stage')
-    if st=='read':read_stage(dict(out=g('--out')))
+    opt=lambda k:sys.argv[sys.argv.index(k)+1] if k in sys.argv else None
+    if st=='read':read_stage(dict(out=g('--out'),sets=opt('--sets'),extra=opt('--extra')))
     else:analyze(dict(out=g('--out')))
 if __name__=='__main__':main()
