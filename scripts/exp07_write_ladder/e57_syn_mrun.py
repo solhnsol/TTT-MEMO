@@ -54,16 +54,16 @@ def selftest():
     kp3,_=UVDeciding('M2H64',masks,{},log=lambda *x:None).keep(9,None,None,None,None,nat);b64=CM.band_keep(nat,64);assert np.array_equal(kp3[dec],b64[dec]) and np.array_equal(kp3[~dec],allq[~dec]) and kp3[dec].sum(1).max()==64
     print('e57_syn_mrun selftest ok')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--out');ap.add_argument('--m30');ap.add_argument('--ntg-nat');ap.add_argument('--ntg-allq');ap.add_argument('--arms');ap.add_argument('--tag',default='synq');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--save-apps',default='128');ap.add_argument('--out');ap.add_argument('--m30');ap.add_argument('--ntg-nat');ap.add_argument('--ntg-allq');ap.add_argument('--arms');ap.add_argument('--tag',default='synq');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
     import e57_syn_pass as SP
-    seed=a.seed;OUT=pathlib.Path(a.out);OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');ro=[16,32,64,128];ri=[128];sv=[128];CH_=1024
+    seed=a.seed;OUT=pathlib.Path(a.out);OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');ro=[16,32,64,128];ri=[128];sv=[int(x) for x in a.save_apps.split(',')];CH_=1024
     for ar in arms:assert ar in ARMS,ar
     masks={k:v for k,v in np.load(a.m30,allow_pickle=True).items()};ntgN=[e['update_norm'] for e in json.load(open(a.ntg_nat))['log']];ntgA=[e['update_norm']/0.5 for e in json.load(open(a.ntg_allq))['log']] if a.ntg_allq else None;assert len(ntgN)>=128 and (ntgA is None or len(ntgA)>=128)
     LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     lg=lambda *x:print(*x,flush=True)
-    enc,w,tf=R55.build(SP.synth_args(seed,a.cell),seed,read_apps=set(ro)|set(ri)|set(sv),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];p=w['p'];
+    enc,w,tf=R55.build(SP.synth_args(seed,a.cell),seed,read_apps=set(ro)|set(ri)|{128},arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];p=w['p'];
     ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w)),'stream hash mismatch'
     P=R.plan(w,enc);items=P['items'];reads=[a_*p-1 for a_ in sv] if not a.smoke else [nch-1];canary_chunks=reads
     tok=rt.tok;raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=R55.out_tail_8192(LD,tok,rt.bos,R55.forbid_list(w))

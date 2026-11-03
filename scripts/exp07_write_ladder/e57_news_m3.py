@@ -29,21 +29,24 @@ def masks_stage(a):
     res['chunks']=np.asarray([K0,len(ids)//CH]);res['p']=np.asarray(P);res['band']=np.asarray(BAND);fn=out/'news_m30_masks.npz';np.savez_compressed(fn,**res)
     s={k:float(np.mean([x[k] for x in st])) for k in st[0] if k!='chunk'};fn.with_suffix('.json').write_text(json.dumps(dict(summary=s,chunks=st,out_sha=hashlib.sha256(open(fn,'rb').read()).hexdigest()[:16])));print(json.dumps(s))
 def write_stage(a):
-    out=pathlib.Path(a['out']);out.mkdir(parents=True,exist_ok=True);w=float(a['weight']);tag=f'M3W{int(w)}Q128'
-    import e55_run as R,e57_t1t2v2_run as V,e57_syn_mrun as MR
+    out=pathlib.Path(a['out']);out.mkdir(parents=True,exist_ok=True);w=float(a['weight']);arm=a.get('arm') or f'M3W{int(w)}Q128';saves=[int(x) for x in a['saves'].split(',')] if a.get('saves') else None;tag=arm+('C' if saves else '')
+    import e55_run as R,e57_t1t2v2_run as V,e57_syn_mrun as MR,e57_qband_run as QR
     LD,s3,C=R.lab();rt=LD.Runtime();can=R.Canary55(LD,rt);lg=lambda *x:print(*x,flush=True);cw0=can(rt.base);lg('canary W0',cw0)
-    ids=V.stream_ids(a['sentences'],'A');nch=len(ids)//CH;lg(f'stream A: {len(ids)} tokens, {nch} chunks, ids sha ok')
+    ids=V.stream_ids(a['sentences'],'A');nch=len(ids)//CH;lg(f'stream A: {len(ids)} tokens, {nch} chunks, ids sha ok');saves=saves or [nch-1]
     masks={k:v for k,v in np.load(out/'news_m30_masks.npz',allow_pickle=True).items()};ntg=list(json.load(open(a['nat_ref']))['norm_targets'][:nch]);assert len(ntg)==nch
     L0=C.Ladder55(rt,save_dir=out/'states'/'rec',canary=None);t0=time.monotonic()
     with rt.mesh:Kh0,Vh0,_h=L0.record(ids[:nch*CH])
     del _h;rc={(hashlib.sha256(np.asarray(ids[:nch*CH],np.int64).tobytes()).hexdigest(),nch):(Kh0,Vh0)};lg(f'  natural K,V recorded in {time.monotonic()-t0:.0f}s');del L0;gc.collect();LD.jax.clear_caches()
-    holder={'dec':np.zeros(CH,np.float32)};uv=UVNewsM3(masks,holder,lg);L=C.Ladder55(rt,save_dir=out/'states'/f'E57_news_{tag}',canary=None);L.rec_cache=rc;MR.install_weighted_grad(L,s3,holder,w);traj=[]
+    holder={'dec':np.zeros(CH,np.float32)};L=C.Ladder55(rt,save_dir=out/'states'/f'E57_news_{tag}',canary=None);L.rec_cache=rc;traj=[]
+    if arm=='ALLQ128':uv=QR.SelMaskQ('ALLQ128',{'band_ALLQ128':np.asarray(128),'all_ALLQ128':np.asarray(1)},lg)    # the original ALLQ128 write of job 570 (ordinary loss)
+    else:uv=UVNewsM3(masks,holder,lg);MR.install_weighted_grad(L,s3,holder,w)
     def hook(k,m):
         cn=can(m);traj.append(dict(chunk=int(k),canary=cn));lg(f'  {tag} chunk {k}: canary rise gen {cn["_gen_nll"]-cw0["_gen_nll"]:+.4f} tail {cn["_tail_nll"]-cw0["_tail_nll"]:+.4f}');return {'ok':True}
     t0=time.monotonic()
-    res=L.run_stream('SELC1',1,ids,nch=nch,tag=f'news{tag}',log=lg,read_hook=hook,hook_chunks={nch-1},read_chunks={nch-1},chunks_meta=[{'sents':[]} for _ in range(nch)],norm_targets=ntg,uv=uv);log=res['log']
-    (out/f'E57_news_{tag}.arms.json').write_text(json.dumps(dict(arm=tag,engine='SELC1',stream='A',n_chunks=nch,ids_sha=V.STREAM_SHA['A'],weight=w,band=BAND,p_deciding=P,canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,
-        update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys','q_banded','q_band','n_deciding') if k_ in e} for e in log],norm_source='E57_main_NAT first cycle x 0.5 (engine SELC1)'),default=float));lg('wrote',out/f'E57_news_{tag}.arms.json')
+    res=L.run_stream('SELC1',1,ids,nch=nch,tag=f'news{tag}',log=lg,read_hook=hook,hook_chunks=set(saves),read_chunks=set(saves),chunks_meta=[{'sents':[]} for _ in range(nch)],norm_targets=ntg,uv=uv);log=res['log']
+    ref_f=out/'E57_news_M3W8Q128.arms.json' if arm!='ALLQ128' else EXP/'e57_t1t2v2/streamA/E57_v2A_ALLQ128.arms.json';rh=json.load(open(ref_f))['states'][str(nch-1)]['hash'];nh=next((v['_hash'] for k,v in res['reads'].items() if int(k)==nch-1),None)
+    (out/f'E57_news_{tag}.arms.json').write_text(json.dumps(dict(arm=tag,engine='SELC1',stream='A',n_chunks=nch,ids_sha=V.STREAM_SHA['A'],weight=w if arm!='ALLQ128' else 1.0,band=BAND,p_deciding=P,canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,end_state_hash=nh,original_end_state_hash=rh,end_state_hash_equal=bool(nh==rh),
+        update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys','q_banded','q_band','n_deciding') if k_ in e} for e in log],norm_source='E57_main_NAT first cycle x 0.5 (engine SELC1)'),default=float));lg('wrote',out/f'E57_news_{tag}.arms.json','end-state hash equal to the original:',nh==rh)
 def merge_stage(a):
     """job 677 v1 tokens (all stored states) + the new state read in this job -> <out>/merged/e57_news_tokread.json (analyze of e57_news_tokread.py then compares every state, paired per frame)"""
     out=pathlib.Path(a['out']);old=json.load(open(a['old']));new=json.load(open(out/'read'/'e57_news_tokread.json'));mo=old['meta']['v1'];mn=new['meta']['v1'];assert [m['id'] for m in mo]==[m['id'] for m in mn] and all(x['tokids']==y['tokids'] for x,y in zip(mo,mn)),'frames or token ids differ'
@@ -57,6 +60,6 @@ def selftest():
     print('e57_news_m3 selftest ok')
 def main():
     if '--selftest' in sys.argv:selftest();return
-    ap=argparse.ArgumentParser();ap.add_argument('--stage');ap.add_argument('--out');ap.add_argument('--sentences',default=str(EXP/'e57_t1t2v2_in/e57_stream_sentences.jsonl'));ap.add_argument('--nat-ref',default=str(EXP/'e57_main/E57_main_NAT.arms.json'));ap.add_argument('--weight',default='8');ap.add_argument('--old',default=str(EXP/'e57_news_tokread/e57_news_tokread.json'));a=ap.parse_args()
-    {'masks':masks_stage,'write':write_stage,'merge':merge_stage}[a.stage](dict(out=a.out,sentences=a.sentences,nat_ref=a.nat_ref,weight=a.weight,old=a.old))
+    ap=argparse.ArgumentParser();ap.add_argument('--stage');ap.add_argument('--out');ap.add_argument('--sentences',default=str(EXP/'e57_t1t2v2_in/e57_stream_sentences.jsonl'));ap.add_argument('--nat-ref',default=str(EXP/'e57_main/E57_main_NAT.arms.json'));ap.add_argument('--weight',default='8');ap.add_argument('--arm');ap.add_argument('--saves');ap.add_argument('--old',default=str(EXP/'e57_news_tokread/e57_news_tokread.json'));a=ap.parse_args()
+    {'masks':masks_stage,'write':write_stage,'merge':merge_stage}[a.stage](dict(out=a.out,sentences=a.sentences,nat_ref=a.nat_ref,weight=a.weight,old=a.old,arm=a.arm,saves=a.saves))
 if __name__=='__main__':main()

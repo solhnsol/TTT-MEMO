@@ -35,7 +35,7 @@ def read_stage(a):
     sets={'v1':new1,'v2A':[it for it in new2 if it['stream']=='A'],'v2B':[it for it in new2 if it['stream']=='B']};reg=registry();state_sets={'v1':'A','v2A':'A','v2B':'B'};packs={};meta={}
     if a.get('sets'):sets={k:v for k,v in sets.items() if k in a['sets'].split(',')}
     state_sets={k:v for k,v in state_sets.items() if k in sets}
-    if a.get('extra'):lab_,fn_,h_=a['extra'].split(',');reg={'A':{lab_:(fn_,h_)},'B':{}}                    # one extra state only (job 770): W0 is read again as the reproduction check
+    if a.get('extra'):reg={'A':{x.split(',')[0]:(x.split(',')[1],x.split(',')[2]) for x in a['extra'].split(';')},'B':{}}                    # one extra state only (job 770): W0 is read again as the reproduction check
     for sn,its in sets.items():
         raw,ntok,bad=RD.build_rows(rt.tok,its);assert not bad,bad;groups=[];o=0;tokids=[]
         for g0 in range(0,len(its),40):
