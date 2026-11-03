@@ -21,8 +21,7 @@ import json,os,pathlib
 O=pathlib.Path(os.environ['EXP07_OUT']);res={}
 for a in ('M3W1N05','M3W8N05'):
     n=json.load(open(O/f'e57_synq/E55_synqc_{a}_s64.saved.json'))['reads'];o=json.load(open(O/f'e57_synq/E55_synq_{a}_s64.saved.json'))['reads'];ch=str(max(int(k) for k in o));res[a]=dict(end_chunk=int(ch),end_state_hash_new=n[ch]['_hash'],end_state_hash_original=o[ch]['_hash'],equal=n[ch]['_hash']==o[ch]['_hash'])
-print('end-state hash check',res);json.dump(res,open(''.replace('$O','') or '/dev/null','w')) if False else None
-(pathlib.Path(os.environ.get('TT_DIR','.'))/'x').parent
+print('end-state hash check',res);json.dump(res,open(O/f'e57_syn_curve_s64'/'e57_hash_check_s64.json','w'))
 PYE
 [ -f "$TT/e57_syn_tokread_s64.json" ] || $PY $S/e57_syn_tokread.py --stage read --seed 64 --out "$TT" --tag synqc
 $PY $S/e57_curve_report.py --kind syn --seed 64 --tokread $TT/e57_syn_tokread_s64.json --out $TT/e57_curve_s64.json
