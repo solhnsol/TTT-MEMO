@@ -16,6 +16,8 @@ def arms_s61():
     out={}
     for a in ('NAT','SENTPQ','SENTPQADAMH'):
         d=json.load(open(EXP/f'E55_d64_{a}_s61.saved.json'));out[a]=dict(file=str(EXP/f'states/E55_d64s_{a}_s61/state_dc{a}_511.npz'),hash=d['final_hash'],read_json=str(EXP/f'E55_d64_{a}_s61.read.json'))
+    for p_ in sorted((EXP/'e57_synq').glob('E55_synq_*_s61.saved.json')):                  # arms of e57_syn_mrun.py on seed 61 (job 760)
+        a=p_.name.split('_')[2];d=json.load(open(p_));r=list(d['reads'].values())[-1];out[a]=dict(file=r['_file'],hash=r['_hash'],read_json=str(EXP/f'e57_synq/E55_synq_{a}_s61.read.json'))
     return out
 def r1_tokens(P,rt,m):
     """per-row arrays of the token log-probs of the packed scorer (the same computation as packing.Packed.r1)"""

@@ -12,12 +12,13 @@ def selftest():
     rng=np.random.default_rng(0);elig=rng.random(CH)<.8;g=rng.standard_normal(CH);m=deciding(g,elig);n=int(round(.30*elig.sum()));assert int(m.sum())==n and not (m&~elig).any()
     assert np.allclose(np.sort(g[m])[::-1],np.sort(g[elig])[::-1][:n]);print('e57_syn_mmasks selftest ok')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--dir');ap.add_argument('--out');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--dir');ap.add_argument('--out');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     import e55_run as R55,e55_uv as UVm
     import e57_syn_pass as SP
-    enc,w,tf=R55.build(SP.synth_args(a.seed),a.seed,arms=['NAT']);S=R55.streams(w,enc);ids,sha=S['A'];ends=UVm.sentence_ends(UVm.tokenizer(tf),ids)
+    enc,w,tf=R55.build(SP.synth_args(a.seed,a.cell),a.seed,arms=['NAT']);S=R55.streams(w,enc);ids,sha=S['A'];ends=UVm.sentence_ends(UVm.tokenizer(tf),ids)
     Z=np.load(pathlib.Path(a.dir)/f'syn_s{a.seed}_nll.npz');bl=list(Z['bands']);b=bl.index(256);out={};st=[]
+    K1=int(Z['lm'].shape[0])
     for k in range(K0,K1):
         q=UVm.chunk_sents(ends,k,CH);sid=np.full(CH,-1)
         for i,(s_,e_) in enumerate(q):sid[s_:e_]=i

@@ -12,7 +12,7 @@ for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/ex
 import e57_qband_run as QR
 import e57_closure_masks as CM
 CH=1024;WIN=8*CH;K0=8
-ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W4NALL':('M3',4,'NALL')}
+ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M3W4NALL':('M3',4,'NALL')}
 class UVDeciding:
     """UV-compatible keep object: ALLQ256 for every row from chunk K0; M2H: the deciding rows additionally lose the window keys; for M3 only the deciding-row vector of the chunk is published in holder['dec'] for the weighted gradient"""
     def __init__(self,kind,masks,holder,log=print):self.kind=kind;self.m=masks;self.holder=holder;self.log=log
@@ -51,16 +51,16 @@ def selftest():
     kp3,_=UVDeciding('M2H64',masks,{},log=lambda *x:None).keep(9,None,None,None,None,nat);b64=CM.band_keep(nat,64);assert np.array_equal(kp3[dec],b64[dec]) and np.array_equal(kp3[~dec],allq[~dec]) and kp3[dec].sum(1).max()==64
     print('e57_syn_mrun selftest ok')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--m30');ap.add_argument('--ntg-nat');ap.add_argument('--ntg-allq');ap.add_argument('--arms');ap.add_argument('--tag',default='synq');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--out');ap.add_argument('--m30');ap.add_argument('--ntg-nat');ap.add_argument('--ntg-allq');ap.add_argument('--arms');ap.add_argument('--tag',default='synq');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
     import e57_syn_pass as SP
     seed=a.seed;OUT=pathlib.Path(a.out);OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');ro=[16,32,64,128];ri=[128];sv=[128];CH_=1024
     for ar in arms:assert ar in ARMS,ar
-    masks={k:v for k,v in np.load(a.m30,allow_pickle=True).items()};ntgN=[e['update_norm'] for e in json.load(open(a.ntg_nat))['log']];ntgA=[e['update_norm']/0.5 for e in json.load(open(a.ntg_allq))['log']];assert len(ntgN)>=128 and len(ntgA)>=128
+    masks={k:v for k,v in np.load(a.m30,allow_pickle=True).items()};ntgN=[e['update_norm'] for e in json.load(open(a.ntg_nat))['log']];ntgA=[e['update_norm']/0.5 for e in json.load(open(a.ntg_allq))['log']] if a.ntg_allq else None;assert len(ntgN)>=128 and (ntgA is None or len(ntgA)>=128)
     LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     lg=lambda *x:print(*x,flush=True)
-    enc,w,tf=R55.build(SP.synth_args(seed),seed,read_apps=set(ro)|set(ri)|set(sv),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];p=w['p'];assert p==1
+    enc,w,tf=R55.build(SP.synth_args(seed,a.cell),seed,read_apps=set(ro)|set(ri)|set(sv),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];p=w['p'];
     ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w)),'stream hash mismatch'
     P=R.plan(w,enc);items=P['items'];reads=[a_*p-1 for a_ in sv] if not a.smoke else [nch-1];canary_chunks=reads
     tok=rt.tok;raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=R55.out_tail_8192(LD,tok,rt.bos,R55.forbid_list(w))
@@ -73,17 +73,17 @@ def main():
         if kind in ('M3','M3NM'):install_weighted_grad(L,s3,holder,float(weight))
         def partial(k,m,ar=ar,got=got):
             x=R_.at((k+1)//p,m);got[(k+1)//p]=x
-            rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':'v3_16_1','seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':False})[ar];json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{seed}.read.partial.json','w'))
+            rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':False})[ar];json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{seed}.read.partial.json','w'))
             return {c_:'ok' for c_ in x}
         hook_chunks=[a_*p-1 for a_ in sorted(set(ro)|set(ri))] if not a.smoke else [nch-1]
         t0=time.monotonic();lg(f'== seed {seed} {ar} ({kind}, weight {weight}, norms {nrm}): {nch} chunks, reads out {ro} in {ri}')
         r=L.run_stream('SELC1',p,ids,decoy_ids=S['decoy'][0] if 'decoy' in S else None,bg_ids=S['nofact'][0] if 'nofact' in S else (S['bg'][0] if 'bg' in S else None),read_chunks=reads,canary_chunks=canary_chunks,nch=nch,tag=ar+f'_s{seed}',log=lg,read_hook=partial,hook_chunks=hook_chunks,norm_targets=ntg,chunks_meta=w['chunks'],uv=uv);r.pop('model',None)
         lgs=r['log'];r['summary']={'mean_update_norm':float(np.mean([e['update_norm'] for e in lgs])),'clip_bind_frac':r['clip_bind_frac'],'cum_update_norm':r['cum_update_norm'],'mean_ce':float(np.mean([e['ce'] for e in lgs])),'mean_scale':float(np.mean([e.get('scale',1.0) for e in lgs]))}
-        r.update(stream_sha=sha,world_seed=seed,cell='v3_16_1',read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,k=w['k'],n=w['n'],bank=w['bank_kind'],engine='SELC1',mrun=True,arm=ar,mkind=kind,weight=weight,norm_source=nrm)
+        r.update(stream_sha=sha,world_seed=seed,cell=a.cell,read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,k=w['k'],n=w['n'],bank=w['bank_kind'],engine='SELC1',mrun=True,arm=ar,mkind=kind,weight=weight,norm_source=nrm)
         w0=r['canary_w0']
         for k,e in r['reads'].items():
             if 'canary' in e:
                 for key in ('_gen_nll','_tail_nll'):lg(f'  canary {key} at chunk {k}: {e["canary"][key]-w0[key]:+.4f}')
-        rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':'v3_16_1','seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':True,'place_len':w['place_len']})[ar];fr=OUT/f'E55_{a.tag}_{ar}_s{seed}.read.json';json.dump(rec,open(fr,'w'));json.dump(r,open(fn,'w'),default=float)
+        rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':True,'place_len':w['place_len']})[ar];fr=OUT/f'E55_{a.tag}_{ar}_s{seed}.read.json';json.dump(rec,open(fr,'w'));json.dump(r,open(fn,'w'),default=float)
         lg('wrote',fn,f'{time.monotonic()-t0:.0f}s');gc.collect();LD.jax.clear_caches()
 if __name__=='__main__':main()
