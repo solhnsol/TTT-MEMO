@@ -12,7 +12,8 @@ import e57_pqa3_stream as S3
 import e57_pqa6_run as P6
 import e57_pqa7_run as P7
 import e57_pqa12_run as P12
-CH=1024;NREAD=[1,3,5,9,13,17];BUNDLES=[5,8,9,10,12];ARMS=['NATQ','ALLQ128','GAINQ512P10'];REW16_SHA='9ee1c6da057089f68f627410733b8524f281307eaf3182e04f759813a0a92c35'
+CH=1024;NREAD=[1,3,5,9,13,17];BUNDLES=[5,8,9,10,12];ARMS=['NATQ','ALLQ128'];                    # GAINQ512 p.10 dropped (Hans 11/03 24:23 KST 'GAINQ는 빼자'); the stages of job 650 are still available for it
+REW16_SHA='9ee1c6da057089f68f627410733b8524f281307eaf3182e04f759813a0a92c35'
 def build(a):
     out=pathlib.Path(a['out']);out.mkdir(parents=True,exist_ok=True);raw=open(a['rew16'],'rb').read();assert hashlib.sha256(raw).hexdigest()==REW16_SHA,'rewrites_16_subset.json sha256 differs'
     r16=json.loads(raw);sub=json.load(open(a['subset']));assert sub['bundles']==BUNDLES and sub['paragraphs']==50 and sub['items']==73
@@ -40,7 +41,7 @@ def build(a):
     print('groups',[(g['gid'],g['n_chunks'],g['read_chunks']) for g in groups],'filler tokens',[g['filler_tokens'] for g in groups])
 def tok_ids(r_,k,n):return [[int(x) for x in r_[k*n+j][0][r_[k*n+j][1][0]+1:r_[k*n+j][1][1]+1]] for j in range(n)]
 def read_stage(a):
-    out=pathlib.Path(a['out']);lg=lambda *x:print(*x,flush=True);meta,_=P6.load_groups(out);W={'640':json.load(open(out/'e57_pqa6_writes.json')),'650':json.load(open(out/'e57_pqa7_writes.json'))};W640=json.load(open(pathlib.Path(a['src640'])/'e57_pqa6_writes.json'))
+    out=pathlib.Path(a['out']);lg=lambda *x:print(*x,flush=True);meta,_=P6.load_groups(out);W={'640':json.load(open(out/'e57_pqa6_writes.json')),'650':json.load(open(out/'e57_pqa7_writes.json')) if (out/'e57_pqa7_writes.json').exists() else {}};W640=json.load(open(pathlib.Path(a['src640'])/'e57_pqa6_writes.json'))
     G=meta['groups'];LD,rt,rt32,rd,items,h,raw0,ntok0,out_tail,tsha=P2.setup_read(a,lg);import e57_reads as RD
     byid={it['id']:it for it in items};asg=json.load(open(a['assign']))['assignment'];q={it['id']:it['prefix'] for it in items};golds={i:it['cands'][0] for i,it in byid.items()};grows=[];gits=[];gcount=[];tokids={'A':{},'B':{},'BUN':{}};lay={}
     for g in G:
@@ -150,8 +151,8 @@ def analyze(a):
             for arm in ARMS:
                 e[arm]={'state_abs':{k:stats(A[(kind,f'{arm}@n{n}')][k]) for k in ('A_first','A_second','A_rest','rr_first','top1_first','rr_branch','top1_branch')},'dA_vs_W0':{k:stats(v) for k,v in D[arm].items()}}
             e['W0']={k:stats(W0[k]) for k in ('A_first','A_second','A_rest','rr_first','top1_first','rr_branch','top1_branch')}
-            e['extra']={f'{a1}-NATQ':{k:stats(D[a1][k]-D['NATQ'][k]) for k in D[a1]} for a1 in ('ALLQ128','GAINQ512P10')}
-            e['extra_by_type']={f'{a1}-NATQ':{t:{k:stats(D[a1][k]-D['NATQ'][k],np.asarray([typ[i]==t for i in ids])) for k in ('dA_first_lp','dAB_first_lp')} for t in ('LOW','CAP','NUM','DATE') if any(typ[i]==t for i in ids)} for a1 in ('ALLQ128','GAINQ512P10')}
+            e['extra']={f'{a1}-NATQ':{k:stats(D[a1][k]-D['NATQ'][k]) for k in D[a1]} for a1 in [x for x in ('ALLQ128','GAINQ512P10') if x in ARMS]}
+            e['extra_by_type']={f'{a1}-NATQ':{t:{k:stats(D[a1][k]-D['NATQ'][k],np.asarray([typ[i]==t for i in ids])) for k in ('dA_first_lp','dAB_first_lp')} for t in ('LOW','CAP','NUM','DATE') if any(typ[i]==t for i in ids)} for a1 in [x for x in ('ALLQ128','GAINQ512P10') if x in ARMS]}
             res['by_n'][str(n)][kind]=e
     fn=pathlib.Path(a['json']);fn.write_text(json.dumps(res,indent=1,default=float));print('wrote',fn)
 def selftest():
