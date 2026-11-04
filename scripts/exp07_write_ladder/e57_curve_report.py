@@ -11,7 +11,7 @@ def pairs(arms,ref,mid,top):
     """arm pairs (x, y) -> y minus x: every other arm minus the reference arm, and the top arm minus the middle arm; two arms of the first curve jobs: (the first, the second) as before"""
     if len(arms)==2 and ref not in arms:return [tuple(arms)]
     out=[(ref,a) for a in arms if a!=ref and ref in arms]
-    if top in arms and mid in arms:out.append((mid,top))
+    if mid in arms:out+=[(mid,a) for a in arms if a not in (ref,mid)]
     return out
 def syn(a):
     import e57_syn_tokread as TR

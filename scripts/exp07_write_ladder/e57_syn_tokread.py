@@ -11,7 +11,9 @@ S64=sorted(p.name.split('_')[2] for p in (EXP/'e57_synq').glob('E55_synq_*_s64.s
 def arms_s64():
     out={}
     for a in S64:
-        d=json.load(open(EXP/f'e57_synq/E55_synq_{a}_s64.saved.json'));r=list(d['reads'].values())[-1];out[a]=dict(file=r['_file'],hash=r['_hash'],read_json=str(EXP/f'e57_synq/E55_synq_{a}_s64.read.json'))
+        d=json.load(open(EXP/f'e57_synq/E55_synq_{a}_s64.saved.json'))
+        if 'reads' not in d:continue
+        r=list(d['reads'].values())[-1];out[a]=dict(file=r['_file'],hash=r['_hash'],read_json=str(EXP/f'e57_synq/E55_synq_{a}_s64.read.json'))
     return out
 def arms_s61():
     out={}
@@ -27,6 +29,7 @@ def arms_curve(seed,tag,only=None):
         a=p_.name.split('_')[2]
         if only and a not in only.split(','):continue
         d=json.load(open(p_))
+        if 'reads' not in d:continue          # aborted arm
         for ch,r in d['reads'].items():out[f'{a}@c{ch}']=dict(file=r['_file'],hash=r['_hash'],read_json=str(EXP/f'e57_synq/E55_{tag}_{a}_s{seed}.read.json'),chunk=int(ch))
     return out
 def r1_tokens(P,rt,m):
