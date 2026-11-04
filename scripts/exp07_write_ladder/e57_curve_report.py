@@ -7,6 +7,12 @@ sys.path.insert(0,str(HERE))
 EXP=ROOT/'experiments/exp07_write_ladder'
 def split_label(l):
     a,c=l.split('@c');return a,int(c)
+def pairs(arms,ref,mid,top):
+    """arm pairs (x, y) -> y minus x: every other arm minus the reference arm, and the top arm minus the middle arm; two arms of the first curve jobs: (the first, the second) as before"""
+    if len(arms)==2 and ref not in arms:return [tuple(arms)]
+    out=[(ref,a) for a in arms if a!=ref and ref in arms]
+    if top in arms and mid in arms:out.append((mid,top))
+    return out
 def syn(a):
     import e57_syn_tokread as TR
     d=json.load(open(a.tokread));rj=json.load(open(next(iter(TR.arms_curve(a.seed,a.tag).values()))['read_json']));meta=rj['meta'];tokids=d['tokids'];W0=TR.metrics(d['W0'],tokids,meta);facts=sorted(W0);M={l:TR.metrics(t,tokids,meta) for l,t in d['arms'].items()};res={'seed':a.seed,'reproduction':d['reproduction'],'curve':{}}
@@ -15,12 +21,11 @@ def syn(a):
     for l,m in M.items():
         arm,ch=split_label(l);e={'chunk':ch,**{f'rr_{k}':TR.boot([m[f][f'rank_{k}']/16.0 for f in facts]) for k in ('branch','first','full')},**{f'top1_{k}':TR.boot([float(m[f][f'rank_{k}']==1) for f in facts]) for k in ('branch','first')}}
         dA,dB=dl(m,'first');e['first_dA']=TR.boot(dA);e['first_dA_minus_dB']=TR.boot(dA-dB);dA,dB=dl(m,'full');e['full_dA_minus_dB']=TR.boot(dA-dB);res['curve'].setdefault(arm,{})[str(ch)]=e
-    arms=sorted(res['curve']);res['paired']={}
-    if len(arms)==2:
-        x,y=arms
+    arms=sorted(res['curve']);res['paired']={};prs=pairs(arms,'M3W1N05','M3W8N05','M4W8N05')
+    for x,y in prs:
         for ch in sorted({int(c) for c in res['curve'][x]},key=int):
             lx,ly=f'{x}@c{ch}',f'{y}@c{ch}'
-            if lx in M and ly in M:res['paired'][str(ch)]={f'{y}_minus_{x}':{'rr_branch':TR.boot([(M[ly][f]['rank_branch']-M[lx][f]['rank_branch'])/16.0 for f in facts]),'rr_first':TR.boot([(M[ly][f]['rank_first']-M[lx][f]['rank_first'])/16.0 for f in facts]),'first_dA':TR.boot(dl(M[ly],'first')[0]-dl(M[lx],'first')[0])}}
+            if lx in M and ly in M:res['paired'].setdefault(str(ch),{})[f'{y}_minus_{x}']={'rr_branch':TR.boot([(M[ly][f]['rank_branch']-M[lx][f]['rank_branch'])/16.0 for f in facts]),'rr_first':TR.boot([(M[ly][f]['rank_first']-M[lx][f]['rank_first'])/16.0 for f in facts]),'first_dA':TR.boot(dl(M[ly],'first')[0]-dl(M[lx],'first')[0])}
     pathlib.Path(a.out).write_text(json.dumps(res,indent=1,default=float));print('wrote',a.out)
 def news(a):
     import e57_news_tokread as NT
@@ -29,15 +34,14 @@ def news(a):
     for l in F:
         res['curve'][l]={ss:{k:NT.boot(arr(l,k)[mk]) for k in ('rr_branch','rr_first','rr_full','top1_branch','top1_first','gold_first','gold_full')} for ss,mk in subs.items()}
     cl=sorted({split_label(l)[1] for l in F if '@c' in l});arms=sorted({split_label(l)[0] for l in F if '@c' in l})
-    if len(arms)==2:
-        x,y=arms
+    for x,y in pairs(arms,'ALLQ128','M3W8Q128','M4W8Q128'):
         for ch in cl:
             lx,ly=f'{x}@c{ch}',f'{y}@c{ch}'
-            res['paired'][str(ch)]={ss:{k:NT.boot((arr(ly,k)-arr(lx,k))[mk]) for k in ('rr_branch','rr_first','rr_full','top1_branch','gold_first')} for ss,mk in subs.items()}
+            if lx in F and ly in F:res['paired'].setdefault(str(ch),{})[f'{y}_minus_{x}']={ss:{k:NT.boot((arr(ly,k)-arr(lx,k))[mk]) for k in ('rr_branch','rr_first','rr_full','top1_branch','gold_first')} for ss,mk in subs.items()}
     res['reference']={l:res['curve'][l] for l in ('W0','NATQ','ALLQ128','M3W8Q128') if l in res['curve']}
     pathlib.Path(a.out).write_text(json.dumps(res,indent=1,default=float));print('wrote',a.out)
 def selftest():
-    assert split_label('M3W8N05@c63')==('M3W8N05',63);print('e57_curve_report selftest ok')
+    assert split_label('M3W8N05@c63')==('M3W8N05',63) and pairs(['A','B'],'R','M','T')==[('A','B')] and pairs(['M3W1N05','M3W8N05','M4W8N05'],'M3W1N05','M3W8N05','M4W8N05')==[('M3W1N05','M3W8N05'),('M3W1N05','M4W8N05'),('M3W8N05','M4W8N05')];print('e57_curve_report selftest ok')
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--kind');ap.add_argument('--seed',type=int,default=64);ap.add_argument('--tag',default='synqc');ap.add_argument('--tokread');ap.add_argument('--out');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return

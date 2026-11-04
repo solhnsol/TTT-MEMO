@@ -6,16 +6,17 @@ HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics',ROOT/'e2e'):sys.path.insert(0,str(p))
 EXP=ROOT/'experiments/exp07_write_ladder'
 import e57_closure_masks as CM
-CH=1024;WIN=8*CH;K0=8;P=0.30;BAND=128
+CH=1024;WIN=8*CH;K0=8;P=0.30;BAND=128;DEC_BAND_M4=32
 def deciding(gain,elig,p=P):
     n=int(round(p*elig.sum()));return CM.top_rows(gain,elig,n)
 class UVNewsM3:
     """UV-compatible keep object: ALLQ128 for every row from chunk K0; publishes the deciding-row vector of the chunk in holder['dec'] for the weighted gradient"""
-    def __init__(self,masks,holder,log=print):self.m=masks;self.holder=holder;self.log=log
+    def __init__(self,masks,holder,log=print,dec_band=None):self.m=masks;self.holder=holder;self.log=log;self.dec_band=dec_band
     def keep(self,k,m,Kc,Vc,ids_k,keep_all):
         base=np.asarray(keep_all,bool);self.holder['dec']=np.zeros(CH,np.float32)
         if k<K0:return base,{'uv_arm':'M3Q128','q_banded':0,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
         dec=CM.up(self.m[f'qb_TOP30_{k}'],CH);self.holder['dec']=dec.astype(np.float32);kp=np.broadcast_to(base,(CH,WIN+CH)).copy();kp[:]=CM.band_keep(base,BAND)
+        if self.dec_band:kp[dec]=CM.band_keep(base,self.dec_band)[dec]        # M4: the deciding rows see only the previous dec_band tokens (window AND chunk keys)
         if k%16==0:self.log(f'  M3Q128 chunk {k}: deciding rows {int(dec.sum())}')
         return kp,{'uv_arm':'M3Q128','q_banded':CH,'q_band':BAND,'n_deciding':int(dec.sum()),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
 def masks_stage(a):
@@ -39,14 +40,14 @@ def write_stage(a):
     del _h;rc={(hashlib.sha256(np.asarray(ids[:nch*CH],np.int64).tobytes()).hexdigest(),nch):(Kh0,Vh0)};lg(f'  natural K,V recorded in {time.monotonic()-t0:.0f}s');del L0;gc.collect();LD.jax.clear_caches()
     holder={'dec':np.zeros(CH,np.float32)};L=C.Ladder55(rt,save_dir=out/'states'/f'E57_news_{tag}',canary=None);L.rec_cache=rc;traj=[]
     if arm=='ALLQ128':uv=QR.SelMaskQ('ALLQ128',{'band_ALLQ128':np.asarray(128),'all_ALLQ128':np.asarray(1)},lg)    # the original ALLQ128 write of job 570 (ordinary loss)
-    else:uv=UVNewsM3(masks,holder,lg);MR.install_weighted_grad(L,s3,holder,w)
+    else:uv=UVNewsM3(masks,holder,lg,dec_band=DEC_BAND_M4 if arm.startswith('M4') else None);MR.install_weighted_grad(L,s3,holder,w)
     def hook(k,m):
         cn=can(m);traj.append(dict(chunk=int(k),canary=cn));lg(f'  {tag} chunk {k}: canary rise gen {cn["_gen_nll"]-cw0["_gen_nll"]:+.4f} tail {cn["_tail_nll"]-cw0["_tail_nll"]:+.4f}');return {'ok':True}
     t0=time.monotonic()
     res=L.run_stream('SELC1',1,ids,nch=nch,tag=f'news{tag}',log=lg,read_hook=hook,hook_chunks=set(saves),read_chunks=set(saves),chunks_meta=[{'sents':[]} for _ in range(nch)],norm_targets=ntg,uv=uv);log=res['log']
-    ref_f=EXP/'e57_news_m3/E57_news_M3W8Q128.arms.json' if arm!='ALLQ128' else EXP/'e57_t1t2v2/streamA/E57_v2A_ALLQ128.arms.json';rh=json.load(open(ref_f))['states'][str(nch-1)]['hash'];nh=next((v['_hash'] for k,v in res['reads'].items() if int(k)==nch-1),None)
-    (out/f'E57_news_{tag}.arms.json').write_text(json.dumps(dict(arm=tag,engine='SELC1',stream='A',n_chunks=nch,ids_sha=V.STREAM_SHA['A'],weight=w if arm!='ALLQ128' else 1.0,band=BAND,p_deciding=P,canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,end_state_hash=nh,original_end_state_hash=rh,end_state_hash_equal=bool(nh==rh),
-        update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys','q_banded','q_band','n_deciding') if k_ in e} for e in log],norm_source='E57_main_NAT first cycle x 0.5 (engine SELC1)'),default=float));lg('wrote',out/f'E57_news_{tag}.arms.json','end-state hash equal to the original:',nh==rh)
+    ref_f=None if arm.startswith('M4') else (EXP/'e57_news_m3/E57_news_M3W8Q128.arms.json' if arm!='ALLQ128' else EXP/'e57_t1t2v2/streamA/E57_v2A_ALLQ128.arms.json');rh=json.load(open(ref_f))['states'][str(nch-1)]['hash'] if ref_f else None;nh=next((v['_hash'] for k,v in res['reads'].items() if int(k)==nch-1),None)
+    (out/f'E57_news_{tag}.arms.json').write_text(json.dumps(dict(arm=tag,engine='SELC1',stream='A',n_chunks=nch,ids_sha=V.STREAM_SHA['A'],weight=w if arm!='ALLQ128' else 1.0,band=BAND,p_deciding=P,canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,end_state_hash=nh,original_end_state_hash=rh,end_state_hash_equal=bool(nh==rh) if rh else None,dec_band=DEC_BAND_M4 if arm.startswith('M4') else None,
+        update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys','q_banded','q_band','n_deciding') if k_ in e} for e in log],norm_source='E57_main_NAT first cycle x 0.5 (engine SELC1)'),default=float));lg('wrote',out/f'E57_news_{tag}.arms.json','end-state hash equal to the original:',(nh==rh) if rh else 'no original')
 def merge_stage(a):
     """job 677 v1 tokens (all stored states) + the new state read in this job -> <out>/merged/e57_news_tokread.json (analyze of e57_news_tokread.py then compares every state, paired per frame)"""
     out=pathlib.Path(a['out']);old=json.load(open(a['old']));new=json.load(open(out/'read'/'e57_news_tokread.json'));mo=old['meta']['v1'];mn=new['meta']['v1'];assert [m['id'] for m in mo]==[m['id'] for m in mn] and all(x['tokids']==y['tokids'] for x,y in zip(mo,mn)),'frames or token ids differ'
@@ -57,6 +58,7 @@ def selftest():
     import e57_syn_mrun as MR;MR.selftest()
     rng=np.random.default_rng(0);dec=rng.random(CH)<.3;holder={};u=UVNewsM3({'qb_TOP30_9':CM.pk(dec)},holder,log=lambda *x:None);nat=np.ones(WIN+CH,bool);kp,info=u.keep(9,None,None,None,None,nat)
     assert np.array_equal(kp,CM.band_keep(nat,128)) and info['n_deciding']==int(dec.sum()) and np.array_equal(holder['dec']>0,dec);kp0,_=u.keep(3,None,None,None,None,nat);assert kp0.ndim==1 and not holder['dec'].any()
+    u4=UVNewsM3({'qb_TOP30_9':CM.pk(dec)},{},log=lambda *x:None,dec_band=32);kp4,_=u4.keep(9,None,None,None,None,nat);b32=CM.band_keep(nat,32);b128=CM.band_keep(nat,128);assert np.array_equal(kp4[dec],b32[dec]) and np.array_equal(kp4[~dec],b128[~dec])
     print('e57_news_m3 selftest ok')
 def main():
     if '--selftest' in sys.argv:selftest();return
