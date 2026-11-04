@@ -13,6 +13,7 @@ def run(a):
     enc,w,tf=R55.build(SP.synth_args(a.seed,a.cell),a.seed,arms=['NAT']);S=R55.streams(w,enc);ids,sha=S['A'];nch=a.smoke or w['n_chunks'];ids=np.asarray(ids)[:nch*CH];assert len(ids)==nch*CH
     lg(f'seed {a.seed} cell {a.cell}: stream sha {sha[:12]}, {nch} chunks, bands {bands}')
     LD,s3,C=R55.lab();rt=LD.Runtime()
+    if a.segmented:import e57_pqa2_run as P2;P2.patch_segmented(log=lg)         # 1024 chunks in one call: the K,V record runs at ~300 s per layer; segmented record / prefix as in the 6-cycle news run
     @eqx.filter_jit
     def logp_mask(m,st,c,pref,kmask):
         s3.S3SUF['kmask']=kmask
@@ -46,7 +47,7 @@ def run(a):
     fn_=out/f'syn_s{a.seed}_nll.npz';np.savez_compressed(fn_,nll_win=nwin,nll_band=nband,bands=np.asarray(bands),lm=lm,tgt=tgt,chunks=np.asarray([K0,nch]))
     g=(nband[0]-nwin)[lm];fn_.with_suffix('.json').write_text(json.dumps(dict(seed=a.seed,cell=a.cell,stream_sha=sha[:16],n_chunks=nch,bands=bands,mean_window_gain_band0=float(g.mean()),mean_nll_win=float(nwin[lm].mean()),sec=time.monotonic()-t0)));lg('wrote',fn_)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--out');ap.add_argument('--bands',default='256');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--out');ap.add_argument('--bands',default='256');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--segmented',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:print('e57_syn_w0pass selftest ok');return
     run(a)
 if __name__=='__main__':main()
