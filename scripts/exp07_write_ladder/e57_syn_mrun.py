@@ -12,7 +12,7 @@ for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/ex
 import e57_qband_run as QR
 import e57_closure_masks as CM
 CH=1024;WIN=8*CH;K0=8
-ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'KL16W8N05':('KL16',8,'N05'),'M3NMW1N05':('M3NM',1,'N05'),'KL64W8N05':('KL64',8,'N05'),'M3W4NALL':('M3',4,'NALL')}
+ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'KL16W8N05':('KL16',8,'N05'),'M3NMW1N05':('M3NM',1,'N05'),'M3B128W1N05':('M3B128',1,'N05'),'KL64W8N05':('KL64',8,'N05'),'M3W4NALL':('M3',4,'NALL')}
 class UVDeciding:
     """UV-compatible keep object: ALLQ256 for every row from chunk K0; M2H: the deciding rows additionally lose the window keys; for M3 only the deciding-row vector of the chunk is published in holder['dec'] for the weighted gradient"""
     def __init__(self,kind,masks,holder,log=print):self.kind=kind;self.m=masks;self.holder=holder;self.log=log
@@ -21,14 +21,14 @@ class UVDeciding:
         if k<K0:return base,{'uv_arm':self.kind,'q_banded':0,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
         dec=CM.up(self.m[f'qb_TOP30_{k}'],CH);self.holder['dec']=dec.astype(np.float32)
         if self.kind=='M3NM':return base,{'uv_arm':self.kind,'q_banded':0,'n_deciding':int(dec.sum()),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}     # no mask at all: natural window for every row, only the loss weight on the deciding rows
-        kp=np.broadcast_to(base,(CH,WIN+CH)).copy();bk=CM.band_keep(base,256);kp[:]=bk
+        kp=np.broadcast_to(base,(CH,WIN+CH)).copy();bk=CM.band_keep(base,128 if self.kind=='M3B128' else 256);kp[:]=bk
         if self.kind=='M2H':kp[dec,:WIN]=False
         if self.kind in ('M2H64','M4'):b64=CM.band_keep(base,64);kp[dec]=b64[dec]       # deciding rows see only the previous 64 tokens (chunk and window keys), all other rows ALLQ256
         if self.kind in ('KL16','KL64'):           # key-level: the deciding rows see the natural window minus their top-m ALLV far keys (W0 key-mass dump), all other rows ALLQ256
             rows=np.where(dec)[0];idx=self.m[f'qk_ALLV{self.kind[2:]}_{k}'];assert idx.shape[0]==len(rows);kp[rows]=base[None,:]
             for r,ix in zip(rows,idx):kp[r,ix[ix>=0].astype(np.int64)]=False
         if k%16==0:self.log(f'  {self.kind} chunk {k}: deciding rows {int(dec.sum())}, window-less {int(dec.sum()) if self.kind=="M2H" else 0}')
-        return kp,{'uv_arm':self.kind,'q_banded':CH,'q_band':256,'n_deciding':int(dec.sum()),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
+        return kp,{'uv_arm':self.kind,'q_banded':CH,'q_band':128 if self.kind=='M3B128' else 256,'n_deciding':int(dec.sum()),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
 def install_weighted_grad(L,s3,holder,weight):
     """replace L.grad_mask (used by the Adam engines) by the gradient of the loss with the weight `weight` on the deciding rows"""
     import jax,jax.numpy as jnp,equinox as eqx
@@ -73,7 +73,7 @@ def main():
         if fn.exists() and not a.rerun:lg('exists, reused:',fn);continue
         kind,weight,nrm=ARMS[ar];ntg=ntgN if nrm=='N05' else ntgA;holder={'dec':np.zeros(CH_,np.float32)}
         uv=UVDeciding(kind,masks,holder,lg);L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_{ar}_s{seed}',canary=can);got={}
-        if kind in ('M3','M3NM','M4','KL16','KL64'):install_weighted_grad(L,s3,holder,float(weight))
+        if kind in ('M3','M3NM','M3B128','M4','KL16','KL64'):install_weighted_grad(L,s3,holder,float(weight))
         def partial(k,m,ar=ar,got=got):
             x=R_.at((k+1)//p,m);got[(k+1)//p]=x
             rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':False})[ar];json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{seed}.read.partial.json','w'))

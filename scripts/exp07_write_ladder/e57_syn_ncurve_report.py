@@ -42,14 +42,15 @@ def main():
             ok2,dA2,dB2=ddsr(SR[l],W0s,f'A_{nm}',f'B_{nm}');e[f'{nm}_dA']=TR.boot(dA2);e[f'{nm}_dA_minus_dB']=TR.boot(dA2-dB2);vals[(l,f'{nm}_dA')]=(ok2,dA2)
         vals[(l,'rr_first_improvement')]=(facts,np.asarray([(W0[f]['rank_first']-m[f]['rank_first'])/16.0 for f in facts]));vals[(l,'rr_branch_improvement')]=(facts,np.asarray([(W0[f]['rank_branch']-m[f]['rank_branch'])/16.0 for f in facts]))
         res['curve'].setdefault(l.split('@c')[0],{})[l.split('@c')[1]]=e
-    nat='M3NMW1N05';allq='M3W1N05'
-    for ch in sorted({int(l.split('@c')[1]) for l in labels}):
-        lx,ly=f'{nat}@c{ch}',f'{allq}@c{ch}'
-        if lx in M and ly in M:
-            x={}
-            for k in ('first_dA','first_dAB','second_dA','rest_dA','rr_first_improvement','rr_branch_improvement'):
-                (okx,vx),(oky,vy)=vals[(lx,k)],vals[(ly,k)];assert okx==oky;x[k]=TR.boot(vy-vx)
-            res['extra'][str(ch)]=x
+    nat='M3NMW1N05'
+    for allq,nm_ in (('M3W1N05','ALLQ256'),('M3B128W1N05','ALLQ128')):
+        for ch in sorted({int(l.split('@c')[1]) for l in labels}):
+            lx,ly=f'{nat}@c{ch}',f'{allq}@c{ch}'
+            if lx in M and ly in M:
+                x={}
+                for k in ('first_dA','first_dAB','second_dA','rest_dA','rr_first_improvement','rr_branch_improvement'):
+                    (okx,vx),(oky,vy)=vals[(lx,k)],vals[(ly,k)];assert okx==oky;x[k]=TR.boot(vy-vx)
+                res['extra'].setdefault(f'{nm_}-NATQ',{})[str(ch)]=x
     if a.ref676:
         o=json.load(open(a.ref676));rep={}
         for new,old in (('M3NMW1N05','NATQ'),('M3W1N05','ALLQ256')):
