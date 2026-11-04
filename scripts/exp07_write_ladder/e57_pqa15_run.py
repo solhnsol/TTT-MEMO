@@ -41,7 +41,7 @@ def build(a):
     print('groups',[(g['gid'],g['n_chunks'],g['read_chunks']) for g in groups],'filler tokens',[g['filler_tokens'] for g in groups])
 def tok_ids(r_,k,n):return [[int(x) for x in r_[k*n+j][0][r_[k*n+j][1][0]+1:r_[k*n+j][1][1]+1]] for j in range(n)]
 def read_stage(a):
-    out=pathlib.Path(a['out']);lg=lambda *x:print(*x,flush=True);meta,_=P6.load_groups(out);W={'640':json.load(open(out/'e57_pqa6_writes.json')),'650':json.load(open(out/'e57_pqa7_writes.json')) if (out/'e57_pqa7_writes.json').exists() else {}};W640=json.load(open(pathlib.Path(a['src640'])/'e57_pqa6_writes.json'))
+    out=pathlib.Path(a['out']);lg=lambda *x:print(*x,flush=True);meta,_=P6.load_groups(out);W={'640':json.load(open(out/'e57_pqa6_writes.json')),'650':json.load(open(out/'e57_pqa7_writes.json')) if (out/'e57_pqa7_writes.json').exists() else {}};W640=json.load(open(pathlib.Path(a['src640'])/'e57_pqa6_writes.json')) if not a.get('skip_repro') else {}
     G=meta['groups'];LD,rt,rt32,rd,items,h,raw0,ntok0,out_tail,tsha=P2.setup_read(a,lg);import e57_reads as RD
     byid={it['id']:it for it in items};asg=json.load(open(a['assign']))['assignment'];q={it['id']:it['prefix'] for it in items};golds={i:it['cands'][0] for i,it in byid.items()};grows=[];gits=[];gcount=[];tokids={'A':{},'B':{},'BUN':{}};lay={}
     for g in G:
@@ -72,19 +72,21 @@ def read_stage(a):
         lg(f'  bundle {g["gid"]} read: {time.monotonic()-t0:.0f}s (total {time.monotonic()-t00:.0f}s)')
     for c in R:
         for l in labels:(out/f'E57_pqa15_rows_{c}_{l.replace("@","_")}.json').write_text(json.dumps(R[c][l]))
-    chk={'update_norm_prefix_vs_job640':{},'W0_rows_vs_job640':{}}                                          # reproduction checks against job 640
-    for g in G:
-        gid=str(g['gid']);rc9=int(g['read_chunks_job640']['9'])
-        for arm in ('NAT','NATQ','ALLQ128'):
-            x=np.asarray(W['640'][gid][arm]['update_norms']);y=np.asarray(W640[gid][arm]['update_norms']);k=min(rc9,int(g['read_chunks']['9']));chk['update_norm_prefix_vs_job640'][f'{gid}:{arm}']=dict(n_chunks_compared=int(k),max_abs_diff=float(np.abs(x[:k]-y[:k]).max()) if k else None)
-    src=pathlib.Path(a['src640'])
-    for c,f in (('A','A'),('B','B')):
-        ref={r['id']:r for r in json.load(open(src/f'E57_pqa6_rows_{f}_W0.json'))};chk['W0_rows_vs_job640'][c]=float(max(np.abs(np.asarray(r['cand_lp'])-np.asarray(ref[r['id']]['cand_lp'])).max() for r in R[c]['W0']))
-    n9={}
-    for arm in ('NATQ','ALLQ128'):
-        for c in ('A','B'):
-            ref={r['id']:r for r in json.load(open(src/f'E57_pqa6_rows_{c}_{arm}_n9.json'))};d=np.asarray([np.asarray(r['cand_lp'][0])-np.asarray(ref[r['id']]['cand_lp'][0]) for r in R[c][f'{arm}@n9']]);n9[f'{arm}:{c}']=dict(mean_diff_gold_lp=float(d.mean()),mean_abs_diff=float(np.abs(d).mean()),max_abs_diff=float(np.abs(d).max()))
-    chk['n9_state_vs_job640_gold_lp']=n9;lg('reproduction checks:',json.dumps(chk)[:800])
+    chk={}
+    if not a.get('skip_repro'):
+        chk={'update_norm_prefix_vs_job640':{},'W0_rows_vs_job640':{}}                                          # reproduction checks against job 640
+        for g in G:
+            gid=str(g['gid']);rc9=int(g['read_chunks_job640']['9'])
+            for arm in ('NAT','NATQ','ALLQ128'):
+                x=np.asarray(W['640'][gid][arm]['update_norms']);y=np.asarray(W640[gid][arm]['update_norms']);k=min(rc9,int(g['read_chunks']['9']));chk['update_norm_prefix_vs_job640'][f'{gid}:{arm}']=dict(n_chunks_compared=int(k),max_abs_diff=float(np.abs(x[:k]-y[:k]).max()) if k else None)
+        src=pathlib.Path(a['src640'])
+        for c,f in (('A','A'),('B','B')):
+            ref={r['id']:r for r in json.load(open(src/f'E57_pqa6_rows_{f}_W0.json'))};chk['W0_rows_vs_job640'][c]=float(max(np.abs(np.asarray(r['cand_lp'])-np.asarray(ref[r['id']]['cand_lp'])).max() for r in R[c]['W0']))
+        n9={}
+        for arm in ('NATQ','ALLQ128'):
+            for c in ('A','B'):
+                ref={r['id']:r for r in json.load(open(src/f'E57_pqa6_rows_{c}_{arm}_n9.json'))};d=np.asarray([np.asarray(r['cand_lp'][0])-np.asarray(ref[r['id']]['cand_lp'][0]) for r in R[c][f'{arm}@n9']]);n9[f'{arm}:{c}']=dict(mean_diff_gold_lp=float(d.mean()),mean_abs_diff=float(np.abs(d).mean()),max_abs_diff=float(np.abs(d).max()))
+        chk['n9_state_vs_job640_gold_lp']=n9;lg('reproduction checks:',json.dumps(chk)[:800])
     (out/'e57_pqa15_read_meta.json').write_text(json.dumps(dict(items_sha256=h,out_tail_sha=tsha,labels=labels,item_ids=[i for g in G for i in g['item_ids']],groups=[g['gid'] for g in G],reproduction=chk,timings_s=time.monotonic()-t00)))
 def content_lps(tl,ti,dec):
     """per candidate: log-probs of its content tokens (space-only tokens dropped) and the matching token ids"""
@@ -151,8 +153,9 @@ def analyze(a):
             for arm in ARMS:
                 e[arm]={'state_abs':{k:stats(A[(kind,f'{arm}@n{n}')][k]) for k in ('A_first','A_second','A_rest','rr_first','top1_first','rr_branch','top1_branch')},'dA_vs_W0':{k:stats(v) for k,v in D[arm].items()}}
             e['W0']={k:stats(W0[k]) for k in ('A_first','A_second','A_rest','rr_first','top1_first','rr_branch','top1_branch')}
-            e['extra']={f'{a1}-NATQ':{k:stats(D[a1][k]-D['NATQ'][k]) for k in D[a1]} for a1 in [x for x in ('ALLQ128','GAINQ512P10') if x in ARMS]}
-            e['extra_by_type']={f'{a1}-NATQ':{t:{k:stats(D[a1][k]-D['NATQ'][k],np.asarray([typ[i]==t for i in ids])) for k in ('dA_first_lp','dAB_first_lp')} for t in ('LOW','CAP','NUM','DATE') if any(typ[i]==t for i in ids)} for a1 in [x for x in ('ALLQ128','GAINQ512P10') if x in ARMS]}
+            e['extra']={f'{a1}-NATQ':{k:stats(D[a1][k]-D['NATQ'][k]) for k in D[a1]} for a1 in [x for x in ARMS if x!='NATQ']}
+            e['extra'].update({f'{a1}-ALLQ128':{k:stats(D[a1][k]-D['ALLQ128'][k]) for k in D[a1]} for a1 in ARMS if a1 not in ('NATQ','ALLQ128') and 'ALLQ128' in ARMS})
+            e['extra_by_type']={f'{a1}-NATQ':{t:{k:stats(D[a1][k]-D['NATQ'][k],np.asarray([typ[i]==t for i in ids])) for k in ('dA_first_lp','dAB_first_lp')} for t in ('LOW','CAP','NUM','DATE') if any(typ[i]==t for i in ids)} for a1 in [x for x in ARMS if x!='NATQ']}
             res['by_n'][str(n)][kind]=e
     fn=pathlib.Path(a['json']);fn.write_text(json.dumps(res,indent=1,default=float));print('wrote',fn)
 def selftest():
