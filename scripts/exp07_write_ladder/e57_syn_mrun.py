@@ -80,25 +80,33 @@ def selftest():
     kp3,_=UVDeciding('M2H64',masks,{},log=lambda *x:None).keep(9,None,None,None,None,nat);b64=CM.band_keep(nat,64);assert np.array_equal(kp3[dec],b64[dec]) and np.array_equal(kp3[~dec],allq[~dec]) and kp3[dec].sum(1).max()==64
     print('e57_syn_mrun selftest ok')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--save-apps',default='128');ap.add_argument('--no-inline',action='store_true');ap.add_argument('--out');ap.add_argument('--m30');ap.add_argument('--ntg-nat');ap.add_argument('--ntg-allq');ap.add_argument('--arms');ap.add_argument('--tag',default='synq');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--save-apps',default='128');ap.add_argument('--no-inline',action='store_true');ap.add_argument('--segmented',action='store_true');ap.add_argument('--out');ap.add_argument('--m30');ap.add_argument('--ntg-nat');ap.add_argument('--ntg-allq');ap.add_argument('--arms');ap.add_argument('--tag',default='synq');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
     import e57_syn_pass as SP
     seed=a.seed;OUT=pathlib.Path(a.out);OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');ro=[16,32,64,128];ri=[128];sv=[int(x) for x in a.save_apps.split(',')];CH_=1024
     for ar in arms:assert ar in ARMS,ar
     masks={k:v for k,v in np.load(a.m30,allow_pickle=True).items()};ntgN=None if a.ntg_nat=='auto' else [e['update_norm'] for e in json.load(open(a.ntg_nat))['log']];ntgA=[e['update_norm']/0.5 for e in json.load(open(a.ntg_allq))['log']] if a.ntg_allq else None;assert (ntgN is None or len(ntgN)>=128) and (ntgA is None or len(ntgA)>=128)
-    LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);can_w0=can(rt.base);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
+    LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);can_w0=can(rt.base)
+    if a.segmented:import e57_pqa2_run as P2;P2.patch_segmented()         # segmented K,V record / prefix for the 1024-chunk stream
+    rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     lg=lambda *x:print(*x,flush=True)
     enc,w,tf=R55.build(SP.synth_args(seed,a.cell),seed,read_apps=set(ro)|set(ri)|{128},arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];p=w['p'];
     ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w)),'stream hash mismatch'
     P=R.plan(w,enc);items=P['items'];reads=[a_*p-1 for a_ in sv] if not a.smoke else [nch-1];canary_chunks=reads
     tok=rt.tok;raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=R55.out_tail_8192(LD,tok,rt.bos,R55.forbid_list(w))
     R_=None if a.no_inline else RG.Reads(rd,raw,len(items),G.NCAND,P['read'],out_tail,rt.base,ro,ri,log=lambda *x:lg(*x));lg(f'seed {seed}: W0 read done' if R_ else f'seed {seed}: inline reads off')
+    rc={}
+    if a.segmented:             # long stream: record the natural K,V once (segmented) and share it between the arms
+        L0=C.Ladder55(rt,save_dir=OUT/'states'/f'rec_{a.tag}_s{seed}',canary=None);t_rec=time.monotonic()
+        with rt.mesh:Kh0,Vh0,_h=L0.record(ids[:nch*CH])
+        import hashlib as _H;rc[(_H.sha256(np.asarray(ids[:nch*CH],np.int64).tobytes()).hexdigest(),nch)]=(Kh0,Vh0);del L0,_h;gc.collect();LD.jax.clear_caches();lg(f'  natural K,V recorded once in {time.monotonic()-t_rec:.0f}s')
     for ar in arms:
         fn=OUT/f'E55_{a.tag}_{ar}_s{seed}.saved.json'
         if fn.exists() and not a.rerun:lg('exists, reused:',fn);continue
         kind,weight,nrm=ARMS[ar];ntg=None if kind=='NATSGD' else (ntgN if nrm=='N05' else ntgA);engine='NAT' if kind=='NATSGD' else 'SELC1';assert kind=='NATSGD' or nrm!='N05' or ntgN is not None,'NATSGD (norm source) must run first with --ntg-nat auto';holder={'dec':np.zeros(CH_,np.float32)}
         uv=None if kind=='NATSGD' else UVDeciding(kind,masks,holder,lg);L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_{ar}_s{seed}',canary=can);got={}
+        if rc:L.rec_cache=rc
         if kind in ('M3','M3NM','M3B128','M4','KL16','KL64','M3PB05','M3PB10'):install_weighted_grad(L,s3,holder,float(weight))
         if kind.startswith('M3PB'):
             holder['L']=L;install_contrast_grad(L,s3,holder,float(weight),0.5 if kind=='M3PB05' else 1.0)
