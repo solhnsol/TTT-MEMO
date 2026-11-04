@@ -6,11 +6,14 @@ import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
 EXP=ROOT/'experiments/exp07_write_ladder'
+import e57_longcell      # registers the cell v3_16_1_L1024 (long synthetic stream)
 S64=sorted(p.name.split('_')[2] for p in (EXP/'e57_synq').glob('E55_synq_*_s64.saved.json'))
 def arms_s64():
     out={}
     for a in S64:
-        d=json.load(open(EXP/f'e57_synq/E55_synq_{a}_s64.saved.json'));r=list(d['reads'].values())[-1];out[a]=dict(file=r['_file'],hash=r['_hash'],read_json=str(EXP/f'e57_synq/E55_synq_{a}_s64.read.json'))
+        d=json.load(open(EXP/f'e57_synq/E55_synq_{a}_s64.saved.json'))
+        if 'reads' not in d:continue
+        r=list(d['reads'].values())[-1];out[a]=dict(file=r['_file'],hash=r['_hash'],read_json=str(EXP/f'e57_synq/E55_synq_{a}_s64.read.json'))
     return out
 def arms_s61():
     out={}
@@ -26,6 +29,7 @@ def arms_curve(seed,tag,only=None):
         a=p_.name.split('_')[2]
         if only and a not in only.split(','):continue
         d=json.load(open(p_))
+        if 'reads' not in d:continue          # aborted arm
         for ch,r in d['reads'].items():out[f'{a}@c{ch}']=dict(file=r['_file'],hash=r['_hash'],read_json=str(EXP/f'e57_synq/E55_{tag}_{a}_s{seed}.read.json'),chunk=int(ch))
     return out
 def r1_tokens(P,rt,m):
@@ -41,6 +45,7 @@ def r1_tokens(P,rt,m):
 def read_stage(a):
     out=pathlib.Path(a['out']);out.mkdir(parents=True,exist_ok=True);seed=int(a['seed']);import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
     cell,arms={64:('v3_16_1',arms_s64()),61:('v3_64_4',arms_s61())}[seed];lg=lambda *x:print(*x,flush=True)
+    if a.get('cell'):cell=a['cell']
     if a.get('tag'):arms=arms_curve(seed,a['tag'],a.get('arms'))
     elif a.get('arms'):arms={k:v for k,v in arms.items() if k in a['arms'].split(',')};assert arms,'no arm selected'
     LD,s3,C=R55.lab();rt=LD.Runtime();rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
@@ -106,6 +111,6 @@ def selftest():
 def main():
     if '--selftest' in sys.argv:selftest();return
     g=lambda k:sys.argv[sys.argv.index(k)+1];st=g('--stage')
-    if st=='read':read_stage(dict(out=g('--out'),seed=g('--seed'),arms=g('--arms') if '--arms' in sys.argv else None,tag=g('--tag') if '--tag' in sys.argv else None))
+    if st=='read':read_stage(dict(out=g('--out'),seed=g('--seed'),arms=g('--arms') if '--arms' in sys.argv else None,tag=g('--tag') if '--tag' in sys.argv else None,cell=g('--cell') if '--cell' in sys.argv else None))
     else:analyze(dict(out=g('--out')))
 if __name__=='__main__':main()
