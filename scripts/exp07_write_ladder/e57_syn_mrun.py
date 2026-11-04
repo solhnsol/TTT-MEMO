@@ -13,7 +13,7 @@ import e57_qband_run as QR
 import e57_closure_masks as CM
 import e57_longcell      # registers the cell v3_16_1_L1024 (long synthetic stream)
 CH=1024;WIN=8*CH;K0=8
-ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'KL16W8N05':('KL16',8,'N05'),'M3NMW1N05':('M3NM',1,'N05'),'M3PB05W8N05':('M3PB05',8,'N05'),'M3PB10W8N05':('M3PB10',8,'N05'),'NATSGD':('NATSGD',1,'-'),'M3B128W1N05':('M3B128',1,'N05'),'KL64W8N05':('KL64',8,'N05'),'M3W4NALL':('M3',4,'NALL')}
+ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'KL16W8N05':('KL16',8,'N05'),'M3NMW1N05':('M3NM',1,'N05'),'M3PB05W8N05':('M3PB05',8,'N05'),'M3PB10W8N05':('M3PB10',8,'N05'),'M3PBC05W8N05':('M3PBC05',8,'N05'),'M3PBC10W8N05':('M3PBC10',8,'N05'),'NATSGD':('NATSGD',1,'-'),'M3B128W1N05':('M3B128',1,'N05'),'KL64W8N05':('KL64',8,'N05'),'M3W4NALL':('M3',4,'NALL')}
 class UVDeciding:
     """UV-compatible keep object: ALLQ256 for every row from chunk K0; M2H: the deciding rows additionally lose the window keys; for M3 only the deciding-row vector of the chunk is published in holder['dec'] for the weighted gradient"""
     def __init__(self,kind,masks,holder,log=print):self.kind=kind;self.m=masks;self.holder=holder;self.log=log
@@ -48,7 +48,7 @@ def install_weighted_grad(L,s3,holder,weight):
     def grad_mask(m,st_suf,c,pref_,kmask):
         valid=jnp.asarray(c.loss_masks,jnp.float32);dec=jnp.asarray(holder['dec'],jnp.float32);w=valid*(1.0+(weight-1.0)*dec)/jnp.maximum(valid.sum(),1e-10);return grad_w(m,st_suf,c,pref_,kmask,w)
     L.grad_mask=grad_mask
-def install_contrast_grad(L,s3,holder,weight,beta,log=print):
+def install_contrast_grad(L,s3,holder,weight,beta,log=print,cap=None):
     """after install_weighted_grad: the loss  sum_i w_i nll_i - beta * sum_{i in D} w_i nll'_i  with w_i = valid (1 + (weight - 1) dec_i) / n_valid and nll' = the NLL of the same rows in a second suffix forward in which each row sees only its own position (band 1, holder['kmask2'], holder['pref2'] set by UVDeciding.keep); chunks without a contrast mask (k < K0) use the plain weighted loss. The mean nll' over the deciding rows is stored in holder['nll2']."""
     import jax,jax.numpy as jnp,equinox as eqx
     S3SUF=s3.S3SUF;base_gm=L.grad_mask
@@ -60,7 +60,7 @@ def install_contrast_grad(L,s3,holder,weight,beta,log=print):
             finally:S3SUF.clear()
             lp=jax.nn.log_softmax(out.logits.astype(jnp.float32),axis=-1);return -jnp.take_along_axis(lp,c.target_tokens[:,None],axis=-1)[:,0]
         def total(mm):
-            nll=fwd(mm,pref_,kmask);nll2=fwd(mm,pref2,kmask2);return jnp.sum(w*nll)-beta*jnp.sum(w2*nll2),(nll,nll2)
+            nll=fwd(mm,pref_,kmask);nll2=fwd(mm,pref2,kmask2);nll2c=nll2 if cap is None else jnp.minimum(nll2,cap);return jnp.sum(w*nll)-beta*jnp.sum(w2*nll2c),(nll,nll2)
         (_l,(nll,nll2)),grads=eqx.filter_value_and_grad(total,has_aux=True)(m);valid=c.loss_masks.astype(jnp.float32);ce=jnp.sum(valid*nll)/jnp.maximum(jnp.sum(valid),1e-10);m2=jnp.sum(w2*nll2)/jnp.maximum(jnp.sum(w2),1e-30)
         return grads.inner_parameters(),ce,m2
     def grad_mask(m,st_suf,c,pref_,kmask):
@@ -107,9 +107,9 @@ def main():
         kind,weight,nrm=ARMS[ar];ntg=None if kind=='NATSGD' else (ntgN if nrm=='N05' else ntgA);engine='NAT' if kind=='NATSGD' else 'SELC1';assert kind=='NATSGD' or nrm!='N05' or ntgN is not None,'NATSGD (norm source) must run first with --ntg-nat auto';holder={'dec':np.zeros(CH_,np.float32)}
         uv=None if kind=='NATSGD' else UVDeciding(kind,masks,holder,lg);L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_{ar}_s{seed}',canary=can);got={}
         if rc:L.rec_cache=rc
-        if kind in ('M3','M3NM','M3B128','M4','KL16','KL64','M3PB05','M3PB10'):install_weighted_grad(L,s3,holder,float(weight))
+        if kind in ('M3','M3NM','M3B128','M4','KL16','KL64') or kind.startswith('M3PB'):install_weighted_grad(L,s3,holder,float(weight))
         if kind.startswith('M3PB'):
-            holder['L']=L;install_contrast_grad(L,s3,holder,float(weight),0.5 if kind=='M3PB05' else 1.0)
+            holder['L']=L;install_contrast_grad(L,s3,holder,float(weight),0.5 if kind.endswith('05') else 1.0,cap=8.0 if kind.startswith('M3PBC') else None)
             _cn=L.canary
             def canary_checked(mm,_cn=_cn):
                 cn=_cn(mm)
