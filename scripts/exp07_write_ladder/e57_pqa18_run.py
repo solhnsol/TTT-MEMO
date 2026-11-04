@@ -51,7 +51,7 @@ class UVRep:
                 ids2[f*FRAG:(f+1)*FRAG]=self.ids[p-FRAG+2:p+2];mk[f*FRAG+FRAG-2]=True        # 63 context tokens (positions 0..62) + the next token (position 63); the loss row is position 62
             L=self.holder['L'];pref2=L.prefix_masked(m,jnp.asarray(ids2,dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(kp2));c2=self.rt.chunk(self.rt.seq(ids2,mask=mk),0);self.holder['rep']=(pref2,jnp.asarray(kp2),c2,len(fr))
         return kp,{'uv_arm':'REP','q_banded':CH,'q_band':128,'n_frag':len(fr),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
-def install_rep_grad(L,s3,holder):
+def install_rep_grad(L,s3,holder,rep_w=1.0):
     import jax,jax.numpy as jnp,equinox as eqx
     S3SUF=s3.S3SUF;orig=L.grad_mask
     @eqx.filter_jit
@@ -62,14 +62,14 @@ def install_rep_grad(L,s3,holder):
             finally:S3SUF.clear()
             lp=jax.nn.log_softmax(out.logits.astype(jnp.float32),axis=-1);return -jnp.take_along_axis(lp,seq.target_tokens[:,None],axis=-1)[:,0]
         def total(mm):
-            nll=fwd(mm,c,pref_,kmask);nll2=fwd(mm,c2,pref2,kmask2);v1=c.loss_masks.astype(jnp.float32);v2=c2.loss_masks.astype(jnp.float32);n=jnp.maximum(v1.sum()+v2.sum(),1e-10)
-            return (jnp.sum(v1*nll)+jnp.sum(v2*nll2))/n,(nll,nll2)
+            nll=fwd(mm,c,pref_,kmask);nll2=fwd(mm,c2,pref2,kmask2);v1=c.loss_masks.astype(jnp.float32);v2=c2.loss_masks.astype(jnp.float32);n=jnp.maximum(v1.sum()+rep_w*v2.sum(),1e-10)
+            return (jnp.sum(v1*nll)+rep_w*jnp.sum(v2*nll2))/n,(nll,nll2)
         (_l,(nll,nll2)),g=eqx.filter_value_and_grad(total,has_aux=True)(m);v1=c.loss_masks.astype(jnp.float32);v2=c2.loss_masks.astype(jnp.float32)
         return g.inner_parameters(),jnp.sum(v1*nll)/jnp.maximum(v1.sum(),1e-10),jnp.sum(v2*nll2)/jnp.maximum(v2.sum(),1e-10),v1.sum(),v2.sum()
     def grad_mask(m,st_suf,c,pref_,kmask):
         rep=holder.get('rep')
         if rep is None:holder['last']=None;return orig(m,st_suf,c,pref_,kmask)
-        pref2,kmask2,c2,nf=rep;g,ce,ce2,n1,n2=grad_r(m,st_suf,c,pref_,kmask,pref2,kmask2,c2);holder.setdefault('log',[]).append(dict(n_frag=int(nf),n_loss_main=float(n1),n_loss_rep=float(n2),nll_rep_mean=float(ce2),nll_main_mean=float(ce)));return g,ce
+        pref2,kmask2,c2,nf=rep;g,ce,ce2,n1,n2=grad_r(m,st_suf,c,pref_,kmask,pref2,kmask2,c2);holder.setdefault('log',[]).append(dict(n_frag=int(nf),n_loss_main=float(n1),n_loss_rep=float(n2),rep_weight=rep_w,rep_loss_share=float(rep_w*n2/(n1+rep_w*n2)),nll_rep_mean=float(ce2),nll_main_mean=float(ce)));return g,ce
     L.grad_mask=grad_mask
 def plan_stage(a):
     out=pathlib.Path(a['out']);out.mkdir(parents=True,exist_ok=True);meta,ids_z=P6.load_groups(out);Z=np.load(a['dwg']);bi=list(Z['bands']).index(P16.BAND);tk=S.tokenizer();cache={}
@@ -94,7 +94,7 @@ def write_stage(a):
         with rt.mesh:Kh0,Vh0,_h=L0.record(ids)
         del _h;rc={(hashlib.sha256(np.asarray(ids,np.int64).tobytes()).hexdigest(),nch):(Kh0,Vh0)};del L0;gc.collect();W[gid]={}
         for arm in NEW:
-            pl={int(k):[tuple(x) for x in v] for k,v in plan[gid][arm].items()};holder={};uv=UVRep(pl,ids,holder,rt);L=C.Ladder55(rt,save_dir=out/'states'/f'g{gid}_{arm}',canary=can);L.rec_cache=rc;holder['L']=L;install_rep_grad(L,s3,holder)
+            pl={int(k):[tuple(x) for x in v] for k,v in plan[gid][arm].items()};holder={};uv=UVRep(pl,ids,holder,rt);L=C.Ladder55(rt,save_dir=out/'states'/f'g{gid}_{arm}',canary=can);L.rec_cache=rc;holder['L']=L;install_rep_grad(L,s3,holder,float(a.get('rep_weight') or 1.0))
             res=L.run_stream('SELC1',1,ids,nch=nch,tag=f'pqa18g{gid}{arm}',log=lambda *x:None,read_chunks=rd_ch,canary_chunks=rd_ch,chunks_meta=[{'sents':[]} for _ in range(nch)],norm_targets=ntg,uv=uv)
             W[gid][arm]=dict(states={str(k):dict(file=v['_file'],hash=v['_hash'],canary=v.get('canary')) for k,v in res['reads'].items()},ce=[e['ce'] for e in res['log']],update_norms=[e['update_norm'] for e in res['log']],rep_log=holder.get('log'),canary_w0=cw0);del L,res;gc.collect()
         del rc,Kh0,Vh0;gc.collect();fn.write_text(json.dumps(W,default=float));lg(f'bundle {gid}: {nch} chunks, 2 arms written in {time.monotonic()-t0:.0f}s (total {time.monotonic()-t00:.0f}s)')
@@ -142,6 +142,6 @@ def selftest():
 def main():
     if '--selftest' in sys.argv:selftest();return
     stage=P2._pop('--stage');g=lambda k:P2._pop(k)
-    a=dict(out=g('--out'),src640=g('--src640'),items=g('--items-file'),bank=g('--bank'),assign=g('--assign'),stage1=g('--stage1'),dwg=g('--dwg'),json=g('--json'),merged=g('--merged'),r890=g('--r890'),max_groups=None)
+    a=dict(out=g('--out'),src640=g('--src640'),items=g('--items-file'),bank=g('--bank'),assign=g('--assign'),stage1=g('--stage1'),dwg=g('--dwg'),rep_weight=g('--rep-weight'),json=g('--json'),merged=g('--merged'),r890=g('--r890'),max_groups=None)
     {'plan':plan_stage,'write':write_stage,'read':read_stage,'analyze':analyze,'compare':compare_stage}[stage](a)
 if __name__=='__main__':main()
