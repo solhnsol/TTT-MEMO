@@ -80,6 +80,6 @@ def selftest():
 def main():
     if '--selftest' in sys.argv:selftest();return
     stage=P2._pop('--stage');g=lambda k:P2._pop(k)
-    a=dict(out=g('--out'),src640=g('--src640'),src790=g('--src790'),items=g('--items-file'),bank=g('--bank'),assign=g('--assign'),stage1=g('--stage1'),para=g('--para'),train=g('--train'),dev=g('--dev'),shuf=g('--shuf'),shuf_json=g('--shuf'),ref930=g('--ref930'),r930=g('--r930'),merged=g('--merged'),json=g('--json'),max_groups=None)
+    a=dict(out=g('--out'),src640=g('--src640'),src790=g('--src790'),items=g('--items-file'),bank=g('--bank'),assign=g('--assign'),stage1=g('--stage1'),para=g('--para'),train=g('--train'),dev=g('--dev'),shuf=None,shuf_json=g('--shuf'),ref930=g('--ref930'),r930=g('--r930'),merged=g('--merged'),json=g('--json'),max_groups=None)
     {'build':build,'write':write_stage,'read':read_stage,'analyze':analyze,'compare':compare_stage}[stage](a)
 if __name__=='__main__':main()
