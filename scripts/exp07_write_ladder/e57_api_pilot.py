@@ -96,12 +96,18 @@ def one_call(api,p,style,ex,log):
     n0=len(p['context'].split());prior=[('the original',p['context'])]+[(f'existing #{j+1}',t) for j,t in enumerate(ex)]
     prompt=PROMPT.format(ctx=p['context'],golds=json.dumps(p['golds'],ensure_ascii=False),voice=STYLES[style],n0=n0,lo=int(0.6*n0)+1,hi=int(1.5*n0),ex='\n'.join(f'[{j+1}] {t}' for j,t in enumerate(ex)))
     msgs=[{'role':'user','content':prompt}];t0=time.time();txt,u=api.msg(msgs);ins,outs=u['input_tokens'],u['output_tokens']
-    try:rs=parse(txt);assert isinstance(rs,list) and len(rs)==8 and all(isinstance(x,str) for x in rs)
-    except Exception as e:
-        rs=None;fails0={i:['unparseable answer'] for i in range(8)}
+    ok8=lambda r:isinstance(r,list) and len(r)==8 and all(isinstance(x,str) for x in r)
+    rs=None
+    for att in range(3):
+        try:
+            rs=parse(txt)
+            if ok8(rs):break
+        except Exception:pass
+        rs=None
+        if att==2:break
+        msgs+=[{'role':'assistant','content':txt or '(empty)'},{'role':'user','content':'Your answer was not a JSON array of exactly 8 strings. Answer again with only that JSON array.'}];txt,u=api.msg(msgs);ins+=u['input_tokens'];outs+=u['output_tokens']
+    if rs is None:raise ValueError('answer is not a JSON array of 8 strings after two repeat requests')
     rec=dict(pid=p['pid'],style=style,rounds=[],first_pass=None)
-    if rs is None:
-        msgs+= [{'role':'assistant','content':txt},{'role':'user','content':'Your answer was not a JSON array of exactly 8 strings. Answer again with only that JSON array.'}];txt,u=api.msg(msgs);ins+=u['input_tokens'];outs+=u['output_tokens'];rs=parse(txt)
     def checks(rs):
         return {i:check_one(r,p,prior,[(f're-description {j+1}',t) for j,t in enumerate(rs) if j!=i]) for i,r in enumerate(rs)}
     def todo(c):
@@ -146,16 +152,18 @@ def selftest():
     assert parse('```json\n["a","b"]\n```')==['a','b'] and parse('{"1":"x"}')=={'1':'x'}
     print('e57_api_pilot selftest ok')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--in',dest='inp');ap.add_argument('--out');ap.add_argument('--limit-pids',type=int,default=0);ap.add_argument('--styles',default=','.join(STYLES));ap.add_argument('--workers',type=int,default=20);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--in',dest='inp');ap.add_argument('--out');ap.add_argument('--limit-pids',type=int,default=0);ap.add_argument('--styles',default=','.join(STYLES));ap.add_argument('--only',default='');ap.add_argument('--workers',type=int,default=20);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     I=pathlib.Path(a.inp);O=pathlib.Path(a.out);O.mkdir(parents=True,exist_ok=True)
     pil=json.load(open(I/'pilot20.json'));P={r['pid']:r for r in json.load(open(I/'paragraphs.json'))};E=json.load(open(I/'all8.json'))
     pids=pil['pids'][:a.limit_pids] if a.limit_pids else pil['pids'];styles=a.styles.split(',');api=API();lg=lambda *x:print(*x,flush=True)
-    jobs=[(P[pid],st) for pid in pids for st in styles];t0=time.time();lg(f'{len(jobs)} calls, workers {a.workers}')
+    jobs=[(P[pid],st) for pid in pids for st in styles]
+    if a.only:ok_=set(tuple(x.split(':')) for x in a.only.split(','));jobs=[j for j in jobs if (j[0]['pid'],j[1]) in ok_]
+    t0=time.time();lg(f'{len(jobs)} calls, workers {a.workers}')
     def work(j):
         try:return one_call(api,j[0],j[1],E[j[0]['pid']],lg)
         except Exception as e:
-            lg('CALL ERROR',j[0]['pid'],j[1],type(e).__name__,str(e)[:200]);return dict(pid=j[0]['pid'],style=j[1],error=str(e)[:200])
+            import traceback;lg('CALL ERROR',j[0]['pid'],j[1],type(e).__name__,str(e)[:200],traceback.format_exc().splitlines()[-3:-1]);return dict(pid=j[0]['pid'],style=j[1],error=str(e)[:200])
     with ThreadPoolExecutor(a.workers) as ex:recs=list(ex.map(work,jobs))
     wall=time.time()-t0;ok=[r for r in recs if 'texts' in r]
     out={};[out.setdefault(r['pid'],{}).__setitem__(r['style'],r['texts']) for r in ok]

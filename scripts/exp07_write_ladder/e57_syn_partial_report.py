@@ -8,11 +8,12 @@ import e57_syn_tokread as TR
 EXP=ROOT/'experiments/exp07_write_ladder'
 NEW=['M3D30W8N05','M3D50W8N05','M3R30W8N05'];BASE=['M3W1N05','M3W8N05']
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--tokread');ap.add_argument('--out');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--tokread');ap.add_argument('--out');ap.add_argument('--extra',default='',help='ARM:TAG,... additional arms (e.g. M3CGW10N05:synqcg) whose inline in-window read, canary and mid-to-end change are added; their read files are E55_<TAG>_<ARM>_s64.read.json');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:print('e57_syn_partial_report selftest ok');return
     d=json.load(open(a.tokread));meta=json.load(open(EXP/'e57_synq/E55_synqpm_M3D30W8N05_s64.read.json'))['meta'];W0=TR.metrics(d['W0'],d['tokids'],meta);facts=sorted(W0);M={l:TR.metrics(t,d['tokids'],meta) for l,t in d['arms'].items()};res={'mid_to_end':{},'in_window_a128':{},'canary':{},'masks':None}
     fn={'first_dA':lambda m,w:m['A_first']-w['A_first'],'first_dAB':lambda m,w:(m['A_first']-w['A_first'])-(m['B_first']-w['B_first']) if m['B_first'] is not None and w['B_first'] is not None else None,'rr_branch_improvement':lambda m,w:(w['rank_branch']-m['rank_branch'])/16.0}
-    for arm in BASE+NEW:
+    EX=[x.split(':') for x in a.extra.split(',') if x];EXN=[x[0] for x in EX]
+    for arm in BASE+NEW+[e for e in EXN if f'{e}@c127' in M]:
         e={}
         for k,f in fn.items():
             v=[]
@@ -21,7 +22,7 @@ def main():
             e[k]=TR.boot(v)
         res['mid_to_end'][arm]=e
     # in-window read (stored inline read of the writes)
-    srcs={'NATQ':EXP/'e57_synq/E55_synq_NATQ_s64.read.json','M3W1N05':EXP/'e57_synq/E55_synqc_M3W1N05_s64.read.json','M3W8N05':EXP/'e57_synq/E55_synqc_M3W8N05_s64.read.json',**{n:EXP/f'e57_synq/E55_synqpm_{n}_s64.read.json' for n in NEW}}
+    srcs={'NATQ':EXP/'e57_synq/E55_synq_NATQ_s64.read.json','M3W1N05':EXP/'e57_synq/E55_synqc_M3W1N05_s64.read.json','M3W8N05':EXP/'e57_synq/E55_synqc_M3W8N05_s64.read.json',**{n:EXP/f'e57_synq/E55_synqpm_{n}_s64.read.json' for n in NEW},**{n:EXP/f'e57_synq/E55_{tg}_{n}_s64.read.json' for n,tg in EX}}
     kind=np.asarray(meta['kind']);gi=np.asarray(meta['gi']);rows=[r for r in range(len(kind)) if kind[r]=='fact']
     def stats(sc,w0):
         sc=np.asarray(sc,np.float64);w0=np.asarray(w0,np.float64);g=[sc[r][gi[r]]-w0[r][gi[r]] for r in rows];rr=[(1+(sc[r]>sc[r][gi[r]]).sum())/sc.shape[1] for r in rows];rr0=[(1+(w0[r]>w0[r][gi[r]]).sum())/w0.shape[1] for r in rows]
@@ -31,8 +32,9 @@ def main():
         x=json.load(open(f));rd=x['read'].get('128',{});w=x['W0']
         if 'in_g0' in rd and 'in_g0@128' in w:res['in_window_a128'][arm]=stats(rd['in_g0'],w['in_g0@128'])
         if 'out' in rd:res['in_window_a128'].setdefault(arm,{})['out_of_window_a128']=stats(rd['out'],w['out'])
-    for arm in ['M3W1N05','M3W8N05']+NEW:
-        f=EXP/('e57_synq/E55_synqc_%s_s64.saved.json'%arm if arm in BASE else 'e57_synq/E55_synqpm_%s_s64.saved.json'%arm)
+    tgx=dict(EX)
+    for arm in ['M3W1N05','M3W8N05']+NEW+EXN:
+        f=EXP/('e57_synq/E55_synqc_%s_s64.saved.json'%arm if arm in BASE else ('e57_synq/E55_%s_%s_s64.saved.json'%(tgx[arm],arm) if arm in tgx else 'e57_synq/E55_synqpm_%s_s64.saved.json'%arm))
         if f.exists():
             x=json.load(open(f));w0=x['canary_w0'];res['canary'][arm]={k:dict(gen_nll_rise=v['canary']['_gen_nll']-w0['_gen_nll'],tail_nll_rise=v['canary']['_tail_nll']-w0['_tail_nll']) for k,v in x['reads'].items() if 'canary' in v}
     mf=EXP/'e57_synq/syn_s64_partial_masks.json'
