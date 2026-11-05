@@ -15,8 +15,8 @@ HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1];sys.path.inser
 EXP=ROOT/'experiments/exp07_write_ladder'
 CRITERION_B='B1 beats ALLQ (mean diff>0, CI excludes 0); B2 vs M3 w=8 CI lower>-0.02; B3 direction agrees in >=2 of 3 sources (synthetic: >=2 of its non-tied worlds, min(2, number of non-tied worlds); a world in which all arms have the identical rank ratio (floor, all tied) is left out of the direction count only); B4 no source significantly worse than ALLQ; B5 out-of-window not lower than ALLQ; canary reference only'
 CRITERION_B_SHA=hashlib.sha256(CRITERION_B.encode()).hexdigest()[:12]
-FAM={'ABS2':dict(qa='M3qtA2W16Q128',news='NEWSqtA2W16',syn='M3TA2W16N05'),'ABS4':dict(qa='M3qtA4W16Q128',news='NEWSqtA4W16',syn='M3TA4W16N05'),'ABS6':dict(qa='M3qtA6W16Q128',news='NEWSqtA6W16',syn='M3TA6W16N05'),'TOP5':dict(qa='M3qt05W16Q128',news='NEWSqt05W16',syn='M3T05W16N05'),'M3':dict(qa='M3W8Q128',news='M3W8Q128',syn='M3W8N05'),'ALLQ':dict(qa='ALLQ128',news='ALLQ128',syn='M3W1N05')}
-RULES=('ABS2','ABS4','ABS6');B=2000
+FAM={'ABS2':dict(qa='M3qtA2W16Q128',news='NEWSqtA2W16',syn='M3TA2W16N05'),'ABS4':dict(qa='M3qtA4W16Q128',news='NEWSqtA4W16',syn='M3TA4W16N05'),'ABS6':dict(qa='M3qtA6W16Q128',news='NEWSqtA6W16',syn='M3TA6W16N05'),'GM50':dict(qa='M3qg50W16Q128'),'GM70':dict(qa='M3qg70W16Q128'),'GM85':dict(qa='M3qg85W16Q128'),'TOP5':dict(qa='M3qt05W16Q128',news='NEWSqt05W16',syn='M3T05W16N05'),'M3':dict(qa='M3W8Q128',news='M3W8Q128',syn='M3W8N05'),'ALLQ':dict(qa='ALLQ128',news='ALLQ128',syn='M3W1N05')}
+RULES=('ABS2','ABS4','ABS6');B=2000       # --rules overrides (e.g. GM50,GM70,GM85: QA-only gain-mass arms of job 1110; n_sources then counts only the sources that have the arm)
 def ci(x):x=np.asarray(x,float);return dict(mean=float(x.mean()),ci95=[float(np.percentile(x,2.5)),float(np.percentile(x,97.5))])
 class Src:
     """one source: name, kind ('qa' | 'news' | 'syn'), worlds = list of dicts {fam: rr array [units]} (qa / news: one world), optional out[world][fam] = out-of-window rr arrays"""
@@ -42,9 +42,9 @@ def oow_diff(sources,a,b):
             for w in s.out:
                 if a in w and b in w:v.append(float(np.mean(np.asarray(w[b])-np.asarray(w[a]))))
     return float(np.mean(v)) if v else None
-def evaluate(sources,part):
+def evaluate(sources,part,rules=None):
     res=dict(part=part,criterion_B=CRITERION_B,criterion_B_sha=CRITERION_B_SHA,rules={})
-    for r in RULES:
+    for r in (rules or RULES):
         pa,oa=boot_diff(sources,r,'ALLQ');pm,om=boot_diff(sources,r,'M3')
         if oa is None:continue
         dirs=[]
@@ -75,7 +75,7 @@ def news_source(part,s='v2A'):
     new=json.load(open(EXP/'e57_news_rules/read/e57_news_tokread.json'));old=json.load(open(EXP/'e57_news_tokread/e57_news_tokread.json'));sp=json.load(open(EXP/'e57_news_split.json'));ev=set(sp['events_'+part]);meta=new['meta'][s];T=new['tokens'][s];To=old['tokens'][s]
     m=np.array([it['event'] in ev for it in meta]);F=lambda tl:np.array([NT.frame_metrics(t,mm,'all')['rr_branch'] for t,mm in zip(tl,meta)])[m];w={}
     for fam,nm in FAM.items():
-        arm=nm['news'];lab=f'{arm}@c279'
+        arm=nm.get('news');lab=f'{arm}@c279'
         if lab in T:w[fam]=F(T[lab])
         elif arm in To:w[fam]=F(To[arm])
     return Src('news',[w])
@@ -86,10 +86,10 @@ def syn_source(spec):
         sd,cell=x.split(':');d=json.load(open(EXP/f'e57_syn_rules_s{sd}/e57_syn_tokread_s{sd}.json'));rj=json.load(open(next(EXP.glob(f'e57_synq/E55_synqrl_*_s{sd}.read.json'))))['meta'];facts=sorted(TR.metrics(d['W0'],d['tokids'],rj));w={};o={}
         kind=np.asarray(rj['kind']);gi=np.asarray(rj['gi']);rows=[r for r in range(len(kind)) if kind[r]=='fact']
         for fam,nm in FAM.items():
-            lab=f"{nm['syn']}@c127"
+            lab=f"{nm.get('syn')}@c127"
             if lab in d['arms']:
                 M=TR.metrics(d['arms'][lab],d['tokids'],rj);w[fam]=np.array([M[f]['rank_branch']/16 for f in facts])
-            f_=EXP/f"e57_synq/E55_synqrl_{nm['syn']}_s{sd}.read.json"
+            f_=EXP/f"e57_synq/E55_synqrl_{nm.get('syn')}_s{sd}.read.json"
             if f_.exists():
                 x_=json.load(open(f_));sc=np.asarray(x_['read']['128']['out'],float);o[fam]=np.array([(1+(sc[r]>sc[r][gi[r]]).sum())/sc.shape[1] for r in rows])
         worlds.append(w);outs.append(o)
@@ -102,11 +102,11 @@ def selftest():
     e=evaluate(src,'tune');assert e['rules']['ABS4']['B1'] and e['rules']['ABS4']['B3'] and e['rules']['ABS4']['B5'] and not e['rules']['ABS6']['B1'] and not e['rules']['ABS6']['B4'] and not e['rules']['ABS2']['B1']
     assert len(CRITERION_B_SHA)==12;print('e57_split_score selftest ok, criterion B sha',CRITERION_B_SHA)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--part',default='tune');ap.add_argument('--qa',action='store_true');ap.add_argument('--news',action='store_true');ap.add_argument('--syn',default='');ap.add_argument('--out');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--part',default='tune');ap.add_argument('--qa',action='store_true');ap.add_argument('--news',action='store_true');ap.add_argument('--syn',default='');ap.add_argument('--out');ap.add_argument('--rules',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     src=[]
     if a.qa:src.append(qa_source(a.part))
     if a.news:src.append(news_source(a.part))
     if a.syn:src.append(syn_source(a.syn))
-    res=evaluate(src,a.part);pathlib.Path(a.out).write_text(json.dumps(res,indent=1,default=float));print('wrote',a.out,'criterion B sha',CRITERION_B_SHA)
+    res=evaluate(src,a.part,[x for x in a.rules.split(',') if x] or None);pathlib.Path(a.out).write_text(json.dumps(res,indent=1,default=float));print('wrote',a.out,'criterion B sha',CRITERION_B_SHA)
 if __name__=='__main__':main()
