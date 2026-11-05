@@ -14,9 +14,23 @@ class UVQA:
     """UV-compatible keep object: band 128 for every row of every chunk; M4: the deciding rows see only the previous dec_band tokens; publishes the deciding rows of the chunk in holder['dec'] for the weighted gradient"""
     def __init__(self,masks,holder,dec_band=None):self.m=masks;self.holder=holder;self.dec_band=dec_band
     def keep(self,k,m,Kc,Vc,ids_k,keep_all):
-        base=np.asarray(keep_all,bool);dec=CM.up(self.m[k],CH);self.holder['dec']=dec.astype(np.float32);kp=np.broadcast_to(base,(CH,WIN+CH)).copy();kp[:]=CM.band_keep(base,BAND)
+        mk=self.m[k]
+        if isinstance(mk,np.ndarray) and mk.dtype.kind=='f' and mk.shape==(CH,):w=mk.astype(np.float32);dec=w>0;self.holder['dec']=w        # continuous per-row weight in [0, 1] (loss weight 1 + (W - 1) f); the rows with f > 0 count as deciding rows for the band
+        else:dec=CM.up(mk,CH);self.holder['dec']=dec.astype(np.float32)
+        base=np.asarray(keep_all,bool);kp=np.broadcast_to(base,(CH,WIN+CH)).copy();kp[:]=CM.band_keep(base,BAND)
         if self.dec_band:kp[dec]=CM.band_keep(base,self.dec_band)[dec]
         return kp,{'uv_arm':'M4' if self.dec_band else 'M3','q_banded':CH,'q_band':BAND,'n_deciding':int(dec.sum()),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
+def masks_from_npz(path,gid,key='qb_TOP30'):
+    """external mask source (job 1060 validation work): npz with the keys g<gid>_<key>_<chunk> (CM.pk packed bool rows, or a float32 [CH] weight vector in [0, 1]) -> {chunk: mask} for UVQA"""
+    Z=np.load(path,allow_pickle=True);pre=f'g{gid}_{key}_';return {int(k[len(pre):]):Z[k] for k in Z.files if k.startswith(pre)}
+def write_masks_npz(nll_npz,out,frac=P,band=BAND):
+    """top-frac masks of every bundle of a QA W0 npz (e57_dwg_qa_nll.npz) in the format of masks_from_npz"""
+    Z=np.load(nll_npz);bi=list(Z['bands']).index(band);res={}
+    for gid in sorted({int(k[1:].split('_')[0]) for k in Z.files if k.startswith('g') and k.endswith('_win')}):
+        win=Z[f'g{gid}_win'];bd=Z[f'g{gid}_band'][bi];lm=Z[f'g{gid}_lm']
+        for k in range(win.shape[0]):
+            el=CM.rows_eligible(lm[k],np.zeros(CH,np.int32))&lm[k];g=(bd[k]-win[k]).astype(np.float64);res[f'g{gid}_qb_TOP{int(round(frac*100))}_{k}']=CM.pk(CM.top_rows(g,el,int(round(frac*el.sum()))))
+    np.savez_compressed(out,**res);return res
 def deciding_masks(win,band,lm):
     out={}
     for k in range(win.shape[0]):
