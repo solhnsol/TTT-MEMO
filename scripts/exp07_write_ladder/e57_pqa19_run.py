@@ -11,7 +11,7 @@ import e57_pqa3_stream as S3
 import e57_pqa6_run as P6
 import e57_pqa15_run as P15
 import e57_pqa16_run as P16
-CH=1024;NR_ALL=[1,3,5,9,17,25,33,49,65];NR_A=[1,3,5,9,17,25,33];NR_B=[49,65];ARMS=['NATQ','ALLQ128','M3W8Q128','M4W8Q128'];ARMS_W=['NAT','NATQ','ALLQ128','M3W8Q128','M4W8Q128'];REW64_SHA12='5f99556baa5d'
+CH=1024;NR_ALL=[1,3,5,9,17,25,33,49,65];NR_A=[1,3,5,9,17,25,33];NR_B=[49,65];ARMS=['NATQ','ALLQ128','M3W8Q128','M4W8Q128'];ARMS_W=['NAT','NATQ','ALLQ128','M3W8Q128','M4W8Q128'];MASK_NPZ=None;MASK_KEY='qb_TOP30'   # MASK_NPZ: optional external mask file (e57_pqa16_run.masks_from_npz format) replacing the top-30% rule of the M3 / M4 arms;REW64_SHA12='5f99556baa5d'
 def build(a):
     out=pathlib.Path(a['out']);out.mkdir(parents=True,exist_ok=True);raw=open(a['rew64'],'rb').read();assert hashlib.sha256(raw).hexdigest().startswith(REW64_SHA12),'rewrites_64_subset.json sha256 differs'
     r64=json.loads(raw);src=pathlib.Path(a['src790']);meta,ids_z=P6.load_groups(src);para=json.load(open(a['para']));byp={p['pid']:p for p in para};tk=S.tokenizer()
@@ -45,7 +45,7 @@ def write_stage(a):
         gid=str(g['gid'])
         if gid in W and ARMS_W[-1] in W[gid]:continue
         ids=ids_z[f'g{gid}'];nch=len(ids)//CH;assert nch==g['n_chunks'];rd_ch={int(v) for v in g['read_chunks'].values()};t0=time.monotonic()
-        dm=P16.deciding_masks(Z[f'g{gid}_win'],Z[f'g{gid}_band'][bi],Z[f'g{gid}_lm']);L0=C.Ladder55(rt,save_dir=out/'states'/'rec',canary=None)
+        dm=P16.masks_from_npz(MASK_NPZ,gid,MASK_KEY) if MASK_NPZ else P16.deciding_masks(Z[f'g{gid}_win'],Z[f'g{gid}_band'][bi],Z[f'g{gid}_lm']);L0=C.Ladder55(rt,save_dir=out/'states'/'rec',canary=None)
         with rt.mesh:Kh0,Vh0,_h=L0.record(ids)
         del _h;rc={(hashlib.sha256(np.asarray(ids,np.int64).tobytes()).hexdigest(),nch):(Kh0,Vh0)};del L0;gc.collect();ntg=None;res_g={}
         for arm in ARMS_W:
