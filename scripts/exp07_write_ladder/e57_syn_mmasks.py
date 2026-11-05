@@ -6,6 +6,7 @@ HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
 import e57_closure_masks as CM
 import e57_longcell      # registers the cell v3_16_1_L1024 (long synthetic stream)
+import e57_syn_shuf      # pair-shuffled place tokens when E57_SYN_SHUF is set (job 960); otherwise no effect
 CH=1024;K0=8;K1=128;P=0.30
 def deciding(gain,elig,p=P):
     n=int(round(p*elig.sum()));return CM.top_rows(gain,elig,n)

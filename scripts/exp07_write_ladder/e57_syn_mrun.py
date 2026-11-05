@@ -12,6 +12,7 @@ for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/ex
 import e57_qband_run as QR
 import e57_closure_masks as CM
 import e57_longcell      # registers the cell v3_16_1_L1024 (long synthetic stream)
+import e57_syn_shuf      # pair-shuffled place tokens when E57_SYN_SHUF is set (job 960); otherwise no effect
 CH=1024;WIN=8*CH;K0=8
 ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'KL16W8N05':('KL16',8,'N05'),'M3NMW1N05':('M3NM',1,'N05'),'M3PB05W8N05':('M3PB05',8,'N05'),'M3PB10W8N05':('M3PB10',8,'N05'),'M3PBC05W8N05':('M3PBC05',8,'N05'),'M3PBC10W8N05':('M3PBC10',8,'N05'),'M3D30W8N05':('PD30',8,'N05'),'M3D50W8N05':('PD50',8,'N05'),'M3R30W8N05':('PR30',8,'N05'),'NATSGD':('NATSGD',1,'-'),'M3B128W1N05':('M3B128',1,'N05'),'KL64W8N05':('KL64',8,'N05'),'M3W4NALL':('M3',4,'NALL')}
 class UVDeciding:
