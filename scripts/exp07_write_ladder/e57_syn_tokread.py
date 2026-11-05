@@ -44,7 +44,7 @@ def r1_tokens(P,rt,m):
     lp=np.concatenate(out);return [lp[c,a:b].astype(np.float64) for c,a,b in P.where]
 def read_stage(a):
     out=pathlib.Path(a['out']);out.mkdir(parents=True,exist_ok=True);seed=int(a['seed']);import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
-    cell,arms={64:('v3_16_1',arms_s64()),61:('v3_64_4',arms_s61())}[seed];lg=lambda *x:print(*x,flush=True)
+    cell,arms=('v3_64_4',arms_s61()) if seed==61 else ('v3_16_1',arms_s64());lg=lambda *x:print(*x,flush=True)
     if a.get('cell'):cell=a['cell']
     if a.get('tag'):arms=arms_curve(seed,a['tag'],a.get('arms'))
     elif a.get('arms'):arms={k:v for k,v in arms.items() if k in a['arms'].split(',')};assert arms,'no arm selected'
