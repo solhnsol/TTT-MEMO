@@ -4,6 +4,7 @@
   qc_s_<k>   = s (float32 [1024])           band b_i = 8192 x (16/8192)^s_i  (s = 0: b = 8192 = the natural window of the model; s = 1: 16 tokens), weight w_i = 1 + (w - 1) s_i (w = 10 in job 1000: 1 + 9 s; w = 8: 1 + 7 s; the weight is applied in e57_syn_mrun.py)
   qcsh_s_<k> = the SAME values of s, permuted among the eligible rows of the chunk (np.random.default_rng(6500 + k)): control with identical distribution and no relation to g
 Output <out> npz + json (per chunk: mean s, share s>0, mean weight, mean band, share s = 1; summary = mean over chunks, next to the D30 values: mean weight 3.1 = 1 + 7 x .30).
+  Grid job 1020: the same file also holds qb_TOP30_<k>, qt15_<k>, qt50_<k> (packbits of the top 30 / 15 / 50% eligible rows by g) and qc_s_<k> (continuous s, used as a GRADED WEIGHT with band 256 on every row, kind M3GW).
   .venv/bin/python scripts/exp07_write_ladder/e57_syn_cmasks.py --out F.npz | --selftest"""
 import sys,json,argparse,pathlib,hashlib
 import numpy as np
@@ -34,6 +35,7 @@ def main():
         lm=Z['lm'][k];el=CM.rows_eligible(lm,sid)&lm;g=(Z['nll_band'][b][k]-Z['nll_win'][k]).astype(np.float64);s=s_of(g,el)
         idx=np.where(el)[0];perm=np.random.default_rng(6500+k).permutation(idx);ssh=np.zeros(CH,np.float32);ssh[idx]=s[perm]
         out[f'qc_s_{k}']=s;out[f'qcsh_s_{k}']=ssh
+        for pp_,nm in ((.30,'qb_TOP30'),(.15,'qt15'),(.50,'qt50')):out[f'{nm}_{k}']=CM.pk(CM.top_rows(g,el,int(round(pp_*el.sum()))))      # grid job 1020: deciding rows = the top 30% (= qb_TOP30 of jobs 710 / 730, same rule as e57_syn_mmasks.deciding), 15% and 50% of the eligible rows by g
         bb=band_of(s);st.append(dict(chunk=k,n_eligible=int(el.sum()),mean_s=float(s.mean()),share_pos=float((s>0).mean()),share_full=float((s>=1).mean()),mean_weight=float((1+9*s).mean()),mean_band_pos=float(bb[s>0].mean()) if (s>0).any() else None,median_band_pos=float(np.median(bb[s>0])) if (s>0).any() else None,mean_g_by_s_decile=[float(g[el&(s>=lo)&(s<hi+(1e-9 if hi==1 else 0))].mean()) if (el&(s>=lo)&(s<hi+(1e-9 if hi==1 else 0))).any() else None for lo,hi in zip(np.linspace(0,.9,10),np.linspace(.1,1,10))]))
     out['chunks']=np.asarray([K0,K1]);np.savez_compressed(a.out,**out)
     s={k:float(np.mean([x[k] for x in st if x[k] is not None])) for k in ('n_eligible','mean_s','share_pos','share_full','mean_weight','mean_band_pos','median_band_pos')};s['reference_D30_mean_weight_w8']=3.1
