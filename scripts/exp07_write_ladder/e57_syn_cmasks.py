@@ -43,7 +43,7 @@ def main():
         idx=np.where(el)[0];perm=np.random.default_rng(6500+k).permutation(idx);ssh=np.zeros(CH,np.float32);ssh[idx]=s[perm]
         out[f'qc_s_{k}']=s;out[f'qcsh_s_{k}']=ssh
         t30=CM.top_rows(g,el,int(round(.30*el.sum())));out[f'qe_f_{k}']=exp_shape(g,el,t30)      # job 1020 exponential graded weight (kind M3GE)
-        for pp_,nm in ((.30,'qb_TOP30'),(.15,'qt15'),(.50,'qt50')):out[f'{nm}_{k}']=CM.pk(CM.top_rows(g,el,int(round(pp_*el.sum()))))      # grid job 1020: deciding rows = the top 30% (= qb_TOP30 of jobs 710 / 730, same rule as e57_syn_mmasks.deciding), 15% and 50% of the eligible rows by g
+        for pp_,nm in ((.30,'qb_TOP30'),(.15,'qt15'),(.50,'qt50'),(.05,'qt05'),(.10,'qt10')):out[f'{nm}_{k}']=CM.pk(CM.top_rows(g,el,int(round(pp_*el.sum()))))      # grid job 1020: deciding rows = the top 30% (= qb_TOP30 of jobs 710 / 730, same rule as e57_syn_mmasks.deciding), 15% and 50% of the eligible rows by g
         bb=band_of(s);st.append(dict(chunk=k,n_eligible=int(el.sum()),mean_s=float(s.mean()),share_pos=float((s>0).mean()),share_full=float((s>=1).mean()),mean_weight=float((1+9*s).mean()),mean_band_pos=float(bb[s>0].mean()) if (s>0).any() else None,median_band_pos=float(np.median(bb[s>0])) if (s>0).any() else None,mean_g_by_s_decile=[float(g[el&(s>=lo)&(s<hi+(1e-9 if hi==1 else 0))].mean()) if (el&(s>=lo)&(s<hi+(1e-9 if hi==1 else 0))).any() else None for lo,hi in zip(np.linspace(0,.9,10),np.linspace(.1,1,10))]))
     out['chunks']=np.asarray([K0,K1]);np.savez_compressed(a.out,**out)
     s={k:float(np.mean([x[k] for x in st if x[k] is not None])) for k in ('n_eligible','mean_s','share_pos','share_full','mean_weight','mean_band_pos','median_band_pos')};s['reference_D30_mean_weight_w8']=3.1
