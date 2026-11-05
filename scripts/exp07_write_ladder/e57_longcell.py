@@ -5,3 +5,4 @@ for p in (HERE,ROOT/'scripts/exp04_what_ttt_retains'):sys.path.insert(0,str(p))
 import gen_facts as G
 CELL='v3_16_1_L1024'
 G.CELLS[CELL]=dict(k=16,n=1,p=1,bank='300',n_app=1024,read_apps=(16,32,64,128));G.CELL_BOOKS[CELL]=G.CELL_BOOKS['v3_64_4']
+G.CELLS['v3_32_1']=dict(k=32,n=1,p=1,bank='300',n_app=128,read_apps=(16,32,64,128))      # job 1060 (validation worlds): 32 facts, one sentence per fact in every chunk, 128 chunks (density 32 per chunk; v3_16_1 / v3_4_1 are the densities 16 / 4)
