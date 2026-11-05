@@ -1,6 +1,6 @@
 """E57 public QA stage 19 (new file; GPU; QA cause thread, Hans '수리부터 하고 한번에 돌려보자' 11/05 00:39 KST): the QA bundle episodes with up to 65 versions: original + 64 re-descriptions per paragraph (rewrites_64_subset.json, sha256 5f99556baa5d251d...; the first 16 re-descriptions equal rewrites_16_subset.json, so the first 17 sections equal the streams of jobs 790 / 870 up to the filler), 5 bundles (5 / 8 / 9 / 10 / 12; 50 paragraphs, 73 items), sections of the 10 paragraphs joined as in job 640, SQuAD filler completion to whole chunks. Arms NATQ, ALLQ128, M3 w=8 and M4 (deciding rows see only the previous 32 tokens) as in jobs 870 / 840: ALLQ128 on every row from chunk 0, update norm 0.5 x the per-chunk NAT norm (NAT written here as the norm source), M3 / M4 weight 8 on the deciding rows (top 30% of the eligible rows by g = nll_band128 - nll_win of the W0 pass over the streams); canary at every read chunk. Read points n = 1 / 3 / 5 / 9 / 17 / 25 / 33 / 49 / 65 sections; reads and metrics = the functions of e57_pqa15_run.py (question read A / B, closed same-bundle read; first content token, second token, rest; masking extras; item and bundle CIs). The reads of n <= 33 are done and analysed first (intermediate file), then n = 49 / 65.
   python3 e57_pqa19_run.py --stage build|write|read|analyze --out O ... [--n-set A|B|all] | --selftest"""
-import sys,json,time,gc,hashlib,pathlib
+import re,sys,json,time,gc,hashlib,pathlib
 import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE))
@@ -51,6 +51,9 @@ def write_stage(a):
         for arm in ARMS_W:
             L=C.Ladder55(rt,save_dir=out/'states'/f'g{gid}_{arm}',canary=can if arm!='NAT' else None);L.rec_cache=rc;uv=None;eng={'NAT':'NAT','NATQ':'NATADAMH'}.get(arm,'SELC1')
             if arm=='ALLQ128':uv=SM('ALLQ128',masks,lg)
+            mm=re.match(r'^M3(q[A-Za-z0-9_]*?)W(\d+)Q128$',arm)       # rule arms (job 1070): M3<mask key>W<weight>Q128, masks from MASK_NPZ (e57_rule_masks_real.py), e.g. M3qtA4W16Q128
+            if mm:
+                holder={'dec':np.zeros(CH,np.float32)};uv=P16.UVQA(P16.masks_from_npz(MASK_NPZ,gid,mm.group(1)),holder);MR.install_weighted_grad(L,s3,holder,float(mm.group(2)))
             if arm in ('M3W8Q128','M4W8Q128'):
                 holder={'dec':np.zeros(CH,np.float32)};uv=P16.UVQA(dm,holder,dec_band=P16.DEC_BAND_M4 if arm.startswith('M4') else None);MR.install_weighted_grad(L,s3,holder,8.0)
             res=L.run_stream(eng,1,ids,nch=nch,tag=f'pqa19g{gid}{arm}',log=lambda *x:None,read_chunks=rd_ch if arm!='NAT' else (),canary_chunks=rd_ch if arm!='NAT' else None,chunks_meta=[{'sents':[]} for _ in range(nch)],norm_targets=ntg,uv=uv)
