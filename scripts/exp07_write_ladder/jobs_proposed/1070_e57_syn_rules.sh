@@ -15,7 +15,7 @@ nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader | grep -q 
 for f in e57_rules.py e57_syn_rmasks.py e57_syn_mrun.py e57_syn_tokread.py e57_curve_report.py e55_gpu.py ladder.py; do echo "sha256 $(sha256sum $D/$f | cut -c1-12) $f"; done
 $PY $S/e57_rules.py --selftest | tail -1; $PY $S/e57_syn_mrun.py --selftest | tail -1
 SQ=$OUT/e57_synq; TT=$OUT/e57_syn_rules_s$SEED; mkdir -p "$TT"
-if [ -f "$OUT/E55_v3a_NAT_s$SEED.saved.json" ]; then NTG=$OUT/E55_v3a_NAT_s$SEED.saved.json; else NTG=$OUT/E55_synqnat_NATSGD_s$SEED.saved.json; fi
+if [ -f "$OUT/E55_v3a_NAT_s$SEED.saved.json" ]; then NTG=$OUT/E55_v3a_NAT_s$SEED.saved.json; else NTG=$SQ/E55_synqnat_NATSGD_s$SEED.saved.json; fi
 for f in $NTG $OUT/e57_syn_s$SEED/syn_s${SEED}_nll128.npz; do [ -f "$f" ] || { echo "input missing: $f (exit 7)"; exit 7; }; done
 [ -f "$SQ/syn_s${SEED}_rules.npz" ] || $PY $S/e57_syn_rmasks.py --seed $SEED --cell $CELL --taus $TAUS --out "$SQ/syn_s${SEED}_rules.npz"
 [ -n "$CPU_ONLY" ] && { echo "CPU_ONLY: done before any GPU step"; exit 0; }
