@@ -28,10 +28,10 @@ if SHUF:
         if not w.get('_shuf'):w['_shuf']=shuffle_chunks(w,enc,w['seed'])
         return enc,w,tf
     R55.build=build
-def check(out):
+def check(out,seed=64,cell='v3_16_1'):
     """CPU invariants (selftest of the job): same length, only place tokens changed, per-chunk derangement with the same place multiset, name -> place pair counts, stream hashes"""
     import json,collections,e57_syn_pass as SP,gen_facts as G
-    enc,w,tf=R55.build(SP.synth_args(64,'v3_16_1'),64,arms=['NAT']);_,w0,_=_b(SP.synth_args(64,'v3_16_1'),64,arms=['NAT'])
+    enc,w,tf=R55.build(SP.synth_args(seed,cell),seed,arms=['NAT']);_,w0,_=_b(SP.synth_args(seed,cell),seed,arms=['NAT'])
     F={f['id']:f for f in w['facts']};pairs=collections.Counter();changed=tot=0
     for c,c0 in zip(w['chunks'],w0['chunks']):
         assert len(c['ids'])==len(c0['ids'])==1024
@@ -43,7 +43,7 @@ def check(out):
                 for i in range(len(seg0)-len(t)+1):
                     if seg0[i:i+len(t)]==t:pos|=set(range(s['start']+i,s['start']+i+len(t)))
         d={i for i in range(1024) if c['ids'][i]!=c0['ids'][i]};assert d<=pos,'a non-place token changed';changed+=len(d);tot+=len(pos)
-        perm=c['shuf'];assert sorted(perm.values())==sorted(perm) and all(perm[k]!=k for k in perm) and len(perm)==16
+        perm=c['shuf'];assert sorted(perm.values())==sorted(perm) and all(perm[k]!=k for k in perm) and len(perm)==len(c0['sents'])
         for k,v in perm.items():pairs[(k,v)]+=1
     ex=collections.Counter();ex0=collections.Counter()
     for c in w['chunks']:ex.update(c['shuf'].values())
@@ -53,4 +53,4 @@ def check(out):
     json.dump(res,open(out,'w'),indent=1);print('shuffled-stream check ok',res)
 if __name__=='__main__':
     import sys
-    if '--check' in sys.argv:check(sys.argv[sys.argv.index('--out')+1])
+    if '--check' in sys.argv:check(sys.argv[sys.argv.index('--out')+1],int(sys.argv[sys.argv.index('--seed')+1]) if '--seed' in sys.argv else 64,sys.argv[sys.argv.index('--cell')+1] if '--cell' in sys.argv else 'v3_16_1')

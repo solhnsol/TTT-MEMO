@@ -13,7 +13,7 @@ def per_fact(m,W0,facts):
     g=lambda k:np.array([m[f][k] for f in facts],float);w=lambda k:np.array([W0[f][k] for f in facts],float)
     return dict(first_dA=dA,first_dAB=dA-dB,full_dAB=dAf-dBf,rr_branch=g('rank_branch')/16,rr_branch_impr=(w('rank_branch')-g('rank_branch'))/16,rr_full=g('rank_full')/16,rr_full_impr=(w('rank_full')-g('rank_full'))/16,gap_branch_gain=g('gap_branch')-w('gap_branch'),top1_branch=(g('rank_branch')==1).astype(float))
 def run(a):
-    S=json.load(open(a.shuf));tokids=S['tokids'];meta=json.load(open(next(iter(TR.arms_curve(64,'synqsh').values()))['read_json']))['meta']
+    sd=a.seed;S=json.load(open(a.shuf));tokids=S['tokids'];meta=json.load(open(next(iter(TR.arms_curve(sd,'synqsh').values()))['read_json']))['meta']
     O={};
     for f in a.orig:
         d=json.load(open(f));assert d['tokids']==tokids,'token ids differ';O.update(d['arms'])
@@ -23,9 +23,9 @@ def run(a):
         if l in O:
             W0O=TR.metrics(a_w0:=json.load(open(a.orig[0]))['W0'],tokids,meta);po=per_fact(TR.metrics(O[l],tokids,meta),W0O,facts)
             res['curve'][arm][str(ch)]['original']={k:TR.boot(v) for k,v in po.items()};res['shuffled_minus_original'].setdefault(arm,{})[str(ch)]={k:TR.boot(pf[k]-po[k]) for k in pf}
-    for arm,tags in (('M3NMW1N05',('synqsh','synqn')),('M3W1N05',('synqsh','synq')),('M3W8N05',('synqsh','synqc'))):
+    for arm,tags in (('M3NMW1N05',('synqsh','synqn')),('M3W1N05',('synqsh','synq','synqc')),('M3W8N05',('synqsh','synqc'))):
         for tag in tags:
-            f=EXP/f'e57_synq/E55_{tag}_{arm}_s64.saved.json'
+            f=EXP/f'e57_synq/E55_{tag}_{arm}_s{sd}.saved.json'
             if not f.exists():continue
             x=json.load(open(f));w0=x['canary_w0'];res['canary'].setdefault(arm,{})[tag]={k:dict(gen_nll_rise=v['canary']['_gen_nll']-w0['_gen_nll'],tail_nll_rise=v['canary']['_tail_nll']-w0['_tail_nll']) for k,v in x['reads'].items() if 'canary' in v}
     pathlib.Path(a.out).write_text(json.dumps(res,indent=1,default=float));print('wrote',a.out)
@@ -33,5 +33,5 @@ def selftest():
     f=[0,1];W0={i:dict(A_first=-5.,B_first=-5.,A_full=-9.,B_full=-9.,rank_branch=8,rank_full=8,gap_branch=0.) for i in f};m={i:dict(A_first=-4.,B_first=-4.5,A_full=-8.,B_full=-8.5,rank_branch=4,rank_full=2,gap_branch=1.) for i in f}
     p=per_fact(m,W0,f);assert np.allclose(p['first_dA'],1) and np.allclose(p['first_dAB'],.5) and np.allclose(p['rr_branch_impr'],.25) and np.allclose(p['rr_full'],2/16);print('e57_syn_shuf_report selftest ok')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--shuf');ap.add_argument('--orig',action='append');ap.add_argument('--out');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--shuf');ap.add_argument('--orig',action='append');ap.add_argument('--out');ap.add_argument('--seed',type=int,default=64);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     selftest() if a.selftest else run(a)
