@@ -43,6 +43,20 @@ class API2(A.API):
             with s.lock:s.tok[0]+=d['usage']['input_tokens'];s.tok[1]+=d['usage']['output_tokens'];s.calls+=1
             return ''.join(b.get('text','') for b in d['content'] if b.get('type')=='text').strip(),d['usage']
         raise RuntimeError('API failed after retries')
+def _tk(s):return re.findall(r"[a-z0-9']+",s.lower())
+def _ng(t,n):return set(zip(*[t[i:] for i in range(n)]))
+def _jac(a,b):return len(a&b)/max(1,len(a|b))
+J2=0.35;J4=0.15
+def jcheck(k,texts,p,prior):
+    """similarity check of text k against the original, the existing re-descriptions and the other texts: Jaccard of word 2-grams > J2 or of 4-grams > J4 (answer strings blanked); -> list of (label, bigram, fourgram) and the own-rule failures"""
+    m=[]
+    for g in [p['golds']]:pass
+    own=A.check_one(texts[k],p,[],[])      # gold / length / plain paragraph / sentence end only (no run rule)
+    a2=_ng(_tk(A.blank(texts[k],p['golds'])),2);a4=_ng(_tk(A.blank(texts[k],p['golds'])),4);sims=[]
+    for lab,t in prior+[(f're-description {j+1}',texts[j]) for j in range(len(texts)) if j!=k and texts[j]]:
+        b=A.blank(t,p['golds']);x2=_jac(a2,_ng(_tk(b),2));x4=_jac(a4,_ng(_tk(b),4))
+        if x2>J2 or x4>J4:sims.append((lab,x2,x4))
+    return own,sims
 def todo(c):
     own={i for i,m in c.items() if any(not x.startswith('SAME:') for x in m)};edges=set()
     for i,m in c.items():
