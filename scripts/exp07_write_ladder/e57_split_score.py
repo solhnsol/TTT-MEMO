@@ -3,7 +3,7 @@ Primary metric: the branch-token rank ratio rr (rank of the gold at the first di
 CRITERION B for a rule R (ABS tau 2 / 4 / 6 nats, loss weight 16) on a part (tune or hold-out):
   B1  R beats ALLQ (ALLQ256 synthetic, ALLQ128 QA / news): the equal-weight mean improvement R - ALLQ is > 0 and its bootstrap 95% CI excludes 0
   B2  against M3 w=8 (top 30%): the lower bound of the 95% CI of the equal-weight mean improvement R - M3 is > -0.02
-  B3  the direction (R better than ALLQ) agrees in at least 2 of the 3 sources; the synthetic source agrees when at least 2 of its 3 worlds (densities) agree
+  B3  the direction (R better than ALLQ) agrees in at least 2 of the 3 sources; the synthetic source agrees when at least min(2, n) of its n NON-TIED worlds (densities) agree (Hans 11/06 07:55 KST, decided before the QA / news / s72 results: a world in which all arms have the identical rank ratio, e.g. s71 at the floor 1/16, is left out of the direction count only; B1 / B2 / B4 still include it)
   B4  no source is significantly worse than ALLQ (the 95% CI of its R - ALLQ difference does not lie entirely below 0)
   B5  out-of-window reading (synthetic inline read 'out' at a = 128; QA and news have no separate one): the mean improvement R - ALLQ is not below 0
   canary: reference only; fixed arm with the same share (nearest available: top 5% / top 30%): direction only (sign and the difference, no test)
@@ -13,7 +13,7 @@ import sys,json,argparse,pathlib,hashlib
 import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1];sys.path.insert(0,str(HERE));sys.path.insert(0,str(ROOT/'scripts/exp04_what_ttt_retains'))
 EXP=ROOT/'experiments/exp07_write_ladder'
-CRITERION_B='B1 beats ALLQ (mean diff>0, CI excludes 0); B2 vs M3 w=8 CI lower>-0.02; B3 direction agrees in >=2 of 3 sources (synthetic: >=2 of 3 worlds); B4 no source significantly worse than ALLQ; B5 out-of-window not lower than ALLQ; canary reference only'
+CRITERION_B='B1 beats ALLQ (mean diff>0, CI excludes 0); B2 vs M3 w=8 CI lower>-0.02; B3 direction agrees in >=2 of 3 sources (synthetic: >=2 of its non-tied worlds, min(2, number of non-tied worlds); a world in which all arms have the identical rank ratio (floor, all tied) is left out of the direction count only); B4 no source significantly worse than ALLQ; B5 out-of-window not lower than ALLQ; canary reference only'
 CRITERION_B_SHA=hashlib.sha256(CRITERION_B.encode()).hexdigest()[:12]
 FAM={'ABS2':dict(qa='M3qtA2W16Q128',news='NEWSqtA2W16',syn='M3TA2W16N05'),'ABS4':dict(qa='M3qtA4W16Q128',news='NEWSqtA4W16',syn='M3TA4W16N05'),'ABS6':dict(qa='M3qtA6W16Q128',news='NEWSqtA6W16',syn='M3TA6W16N05'),'TOP5':dict(qa='M3qt05W16Q128',news='NEWSqt05W16',syn='M3T05W16N05'),'M3':dict(qa='M3W8Q128',news='M3W8Q128',syn='M3W8N05'),'ALLQ':dict(qa='ALLQ128',news='ALLQ128',syn='M3W1N05')}
 RULES=('ABS2','ABS4','ABS6');B=2000
@@ -32,6 +32,9 @@ def boot_diff(sources,a,b,seed=7):
         if not wv:continue
         sv=np.mean(wv,0);per[s.name]=dict(**ci(sv),point=float(np.mean(pw)),worlds=pw);ov+=sv;ns+=1
     return per,(dict(**ci(ov/ns),n_sources=ns) if ns else None)
+def world_tied(w):
+    """all arms of the world have the identical rank ratio for every unit (floor / saturation)"""
+    arrs=[np.asarray(v,float) for v in w.values()];return all(np.array_equal(arrs[0],a) for a in arrs[1:])
 def oow_diff(sources,a,b):
     v=[]
     for s in sources:
@@ -44,10 +47,12 @@ def evaluate(sources,part):
     for r in RULES:
         pa,oa=boot_diff(sources,r,'ALLQ');pm,om=boot_diff(sources,r,'M3')
         if oa is None:continue
-        dirs=[];
+        dirs=[]
         for s in sources:
             if s.name not in pa:continue
-            if len(s.worlds)>1:dirs.append(sum(1 for x in pa[s.name]['worlds'] if x>0)>=2)
+            if len(s.worlds)>1:
+                ws=[w for w in s.worlds if r in w and 'ALLQ' in w];pts=pa[s.name]['worlds'];keep=[x for x,w in zip(pts,ws) if not world_tied(w)]
+                dirs.append(len(keep)>0 and sum(1 for x in keep if x>0)>=min(2,len(keep)))
             else:dirs.append(pa[s.name]['point']>0)
         b1=oa['ci95'][0]>0;b2=om is not None and om['ci95'][0]>-0.02;b3=sum(dirs)>=2;b4=not any(v['ci95'][1]<0 for v in pa.values());oow=oow_diff(sources,r,'ALLQ');b5=(oow>=0) if oow is not None else None
         fx={}
@@ -92,7 +97,8 @@ def syn_source(spec):
 def selftest():
     r=np.random.default_rng(0);n=40
     def mk(shift):base=r.random(n)*0.5+0.3;return {'ALLQ':base,'M3':base-0.05,'ABS4':base-shift,'ABS2':base-0.0,'ABS6':base+0.2}
-    src=[Src('QA',[mk(0.1)]),Src('news',[mk(0.1)]),Src('synthetic',[mk(0.1),mk(0.1),mk(0.1)],out=[{'ALLQ':np.ones(5)*.5,'ABS4':np.ones(5)*.4},{'ALLQ':np.ones(5)*.5,'ABS4':np.ones(5)*.4},{'ALLQ':np.ones(5)*.5,'ABS4':np.ones(5)*.4}])]
+    tied={k:np.ones(n)*0.0625 for k in ('ALLQ','M3','ABS4','ABS2','ABS6')};assert world_tied(tied) and not world_tied(mk(0.1))
+    src=[Src('QA',[mk(0.1)]),Src('news',[mk(0.1)]),Src('synthetic',[mk(0.1),mk(0.1),tied],out=[{'ALLQ':np.ones(5)*.5,'ABS4':np.ones(5)*.4},{'ALLQ':np.ones(5)*.5,'ABS4':np.ones(5)*.4},{'ALLQ':np.ones(5)*.5,'ABS4':np.ones(5)*.4}])]
     e=evaluate(src,'tune');assert e['rules']['ABS4']['B1'] and e['rules']['ABS4']['B3'] and e['rules']['ABS4']['B5'] and not e['rules']['ABS6']['B1'] and not e['rules']['ABS6']['B4'] and not e['rules']['ABS2']['B1']
     assert len(CRITERION_B_SHA)==12;print('e57_split_score selftest ok, criterion B sha',CRITERION_B_SHA)
 def main():
