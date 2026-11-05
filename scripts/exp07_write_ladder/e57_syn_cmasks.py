@@ -27,7 +27,7 @@ def exp_shape(g,el,top_rows_mask,k=KEXP):
     tt=np.clip(g[el],0,gc)/gc;f[el]=((np.exp(k*tt)-1)/(np.exp(k)-1)).astype(np.float32);return f
 def band_of(s):return np.maximum(np.round(WIN*(BMIN/WIN)**np.asarray(s,np.float64)).astype(np.int64),BMIN)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--out');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--out');ap.add_argument('--seed',type=int,default=64);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:
         rng=np.random.default_rng(0);el=rng.random(CH)<.8;g=rng.standard_normal(CH)*2+1;s=s_of(g,el);assert s.min()>=0 and s.max()<=1 and (s[~el]==0).all() and (s[el]<=1).all()
         assert abs(float(np.percentile(g[el],PCT))-float(np.percentile(g[el],PCT)))<1e-12 and (s[el&(g>=np.percentile(g[el],PCT))]==1).all() and (s[el&(g<=0)]==0).all()
@@ -35,7 +35,7 @@ def main():
         o=np.argsort(g[el]);assert np.all(np.diff(s[el][o])>=0);rg=np.random.default_rng(3);elx=rg.random(CH)<.8;gx=rg.standard_normal(CH)*2+1;tx=CM.top_rows(gx,elx,int(round(.3*elx.sum())));fx=exp_shape(gx,elx,tx);assert fx.min()>=0 and fx.max()<=1+1e-6 and np.allclose(fx[tx],1.0) and (fx[~elx]==0).all() and np.all(fx[elx&(gx<=0)]==0);ox=np.argsort(gx[elx]);assert np.all(np.diff(fx[elx][ox])>=-1e-7);print('e57_syn_cmasks selftest ok');return
     import e55_run as R55,e55_uv as UVm,e57_syn_pass as SP
     import e57_syn_mmasks as MM
-    enc,w,tf=R55.build(SP.synth_args(64),64,arms=['NAT']);S=R55.streams(w,enc);ids,sha=S['A'];ends=UVm.sentence_ends(UVm.tokenizer(tf),ids);Z=np.load(EXP/'e57_syn_s64/syn_s64_nll.npz');b=list(Z['bands']).index(256);out={};st=[]
+    enc,w,tf=R55.build(SP.synth_args(a.seed),a.seed,arms=['NAT']);S=R55.streams(w,enc);ids,sha=S['A'];ends=UVm.sentence_ends(UVm.tokenizer(tf),ids);Z=np.load(EXP/f'e57_syn_s{a.seed}/syn_s{a.seed}_nll.npz');b=list(Z['bands']).index(256);out={};st=[]
     pre={}                                                         # job 1040 adaptive threshold: one GLOBAL g threshold per run = the pooled (all chunks) 5% / 10% quantile of g over eligible rows; each chunk then masks the rows with g > tau, so the per-chunk share varies with the data
     for k in range(K0,K1):
         q=UVm.chunk_sents(ends,k,CH);sid=np.full(CH,-1)
