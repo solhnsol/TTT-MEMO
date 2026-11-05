@@ -13,13 +13,16 @@ import e57_qband_run as QR
 import e57_closure_masks as CM
 import e57_longcell      # registers the cell v3_16_1_L1024 (long synthetic stream)
 CH=1024;WIN=8*CH;K0=8
-ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'KL16W8N05':('KL16',8,'N05'),'M3NMW1N05':('M3NM',1,'N05'),'M3PB05W8N05':('M3PB05',8,'N05'),'M3PB10W8N05':('M3PB10',8,'N05'),'M3PBC05W8N05':('M3PBC05',8,'N05'),'M3PBC10W8N05':('M3PBC10',8,'N05'),'NATSGD':('NATSGD',1,'-'),'M3B128W1N05':('M3B128',1,'N05'),'KL64W8N05':('KL64',8,'N05'),'M3W4NALL':('M3',4,'NALL')}
+ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'KL16W8N05':('KL16',8,'N05'),'M3NMW1N05':('M3NM',1,'N05'),'M3PB05W8N05':('M3PB05',8,'N05'),'M3PB10W8N05':('M3PB10',8,'N05'),'M3PBC05W8N05':('M3PBC05',8,'N05'),'M3PBC10W8N05':('M3PBC10',8,'N05'),'M3D30W8N05':('PD30',8,'N05'),'M3D50W8N05':('PD50',8,'N05'),'M3R30W8N05':('PR30',8,'N05'),'NATSGD':('NATSGD',1,'-'),'M3B128W1N05':('M3B128',1,'N05'),'KL64W8N05':('KL64',8,'N05'),'M3W4NALL':('M3',4,'NALL')}
 class UVDeciding:
     """UV-compatible keep object: ALLQ256 for every row from chunk K0; M2H: the deciding rows additionally lose the window keys; for M3 only the deciding-row vector of the chunk is published in holder['dec'] for the weighted gradient"""
     def __init__(self,kind,masks,holder,log=print):self.kind=kind;self.m=masks;self.holder=holder;self.log=log
     def keep(self,k,m,Kc,Vc,ids_k,keep_all):
         base=np.asarray(keep_all,bool);self.holder['dec']=np.zeros(CH,np.float32)
         if k<K0:return base,{'uv_arm':self.kind,'q_banded':0,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
+        if self.kind in ('PD30','PD50','PR30'):          # partial masking: ONLY the selected rows get the ALLQ256 band, all other rows keep the natural window; the selected rows carry the loss weight
+            dec=CM.up(self.m[f'qp_{self.kind[1:]}_{k}'],CH);self.holder['dec']=dec.astype(np.float32);kpp=np.broadcast_to(base,(CH,WIN+CH)).copy();kpp[dec]=CM.band_keep(base,256)[dec]
+            return kpp,{'uv_arm':self.kind,'q_banded':int(dec.sum()),'q_band':256,'n_deciding':int(dec.sum()),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
         dec=CM.up(self.m[f'qb_TOP30_{k}'],CH);self.holder['dec']=dec.astype(np.float32)
         if self.kind=='M3NM':return base,{'uv_arm':self.kind,'q_banded':0,'n_deciding':int(dec.sum()),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}     # no mask at all: natural window for every row, only the loss weight on the deciding rows
         kp=np.broadcast_to(base,(CH,WIN+CH)).copy();bk=CM.band_keep(base,128 if self.kind=='M3B128' else 256);kp[:]=bk
@@ -107,7 +110,7 @@ def main():
         kind,weight,nrm=ARMS[ar];ntg=None if kind=='NATSGD' else (ntgN if nrm=='N05' else ntgA);engine='NAT' if kind=='NATSGD' else 'SELC1';assert kind=='NATSGD' or nrm!='N05' or ntgN is not None,'NATSGD (norm source) must run first with --ntg-nat auto';holder={'dec':np.zeros(CH_,np.float32)}
         uv=None if kind=='NATSGD' else UVDeciding(kind,masks,holder,lg);L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_{ar}_s{seed}',canary=can);got={}
         if rc:L.rec_cache=rc
-        if kind in ('M3','M3NM','M3B128','M4','KL16','KL64') or kind.startswith('M3PB'):install_weighted_grad(L,s3,holder,float(weight))
+        if kind in ('M3','M3NM','M3B128','M4','KL16','KL64','PD30','PD50','PR30') or kind.startswith('M3PB'):install_weighted_grad(L,s3,holder,float(weight))
         if kind.startswith('M3PB'):
             holder['L']=L;install_contrast_grad(L,s3,holder,float(weight),0.5 if kind.endswith('05') else 1.0,cap=8.0 if kind.startswith('M3PBC') else None)
             _cn=L.canary
