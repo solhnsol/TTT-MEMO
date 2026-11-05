@@ -11,11 +11,14 @@ def deciding(gain,elig,p=P):
     n=int(round(p*elig.sum()));return CM.top_rows(gain,elig,n)
 class UVNewsM3:
     """UV-compatible keep object: ALLQ128 for every row from chunk K0; publishes the deciding-row vector of the chunk in holder['dec'] for the weighted gradient"""
-    def __init__(self,masks,holder,log=print,dec_band=None):self.m=masks;self.holder=holder;self.log=log;self.dec_band=dec_band
+    def __init__(self,masks,holder,log=print,dec_band=None,key='qb_TOP30'):self.m=masks;self.holder=holder;self.log=log;self.dec_band=dec_band;self.key=key
     def keep(self,k,m,Kc,Vc,ids_k,keep_all):
         base=np.asarray(keep_all,bool);self.holder['dec']=np.zeros(CH,np.float32)
         if k<K0:return base,{'uv_arm':'M3Q128','q_banded':0,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
-        dec=CM.up(self.m[f'qb_TOP30_{k}'],CH);self.holder['dec']=dec.astype(np.float32);kp=np.broadcast_to(base,(CH,WIN+CH)).copy();kp[:]=CM.band_keep(base,BAND)
+        mk=self.m[f'{self.key}_{k}']
+        if isinstance(mk,np.ndarray) and mk.dtype.kind=='f' and mk.shape==(CH,):w_=mk.astype(np.float32);dec=w_>0;self.holder['dec']=w_      # continuous weights in [0, 1]
+        else:dec=CM.up(mk,CH);self.holder['dec']=dec.astype(np.float32)
+        kp=np.broadcast_to(base,(CH,WIN+CH)).copy();kp[:]=CM.band_keep(base,BAND)
         if self.dec_band:kp[dec]=CM.band_keep(base,self.dec_band)[dec]        # M4: the deciding rows see only the previous dec_band tokens (window AND chunk keys)
         if k%16==0:self.log(f'  M3Q128 chunk {k}: deciding rows {int(dec.sum())}')
         return kp,{'uv_arm':'M3Q128','q_banded':CH,'q_band':BAND,'n_deciding':int(dec.sum()),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
@@ -34,13 +37,13 @@ def write_stage(a):
     import e55_run as R,e57_t1t2v2_run as V,e57_syn_mrun as MR,e57_qband_run as QR
     LD,s3,C=R.lab();rt=LD.Runtime();can=R.Canary55(LD,rt);lg=lambda *x:print(*x,flush=True);cw0=can(rt.base);lg('canary W0',cw0)
     ids=V.stream_ids(a['sentences'],'A');nch=len(ids)//CH;lg(f'stream A: {len(ids)} tokens, {nch} chunks, ids sha ok');saves=saves or [nch-1]
-    masks={k:v for k,v in np.load(out/'news_m30_masks.npz',allow_pickle=True).items()};ntg=list(json.load(open(a['nat_ref']))['norm_targets'][:nch]);assert len(ntg)==nch
+    masks={k:v for k,v in np.load(a.get('mask_npz') or out/'news_m30_masks.npz',allow_pickle=True).items()};ntg=list(json.load(open(a['nat_ref']))['norm_targets'][:nch]);assert len(ntg)==nch
     L0=C.Ladder55(rt,save_dir=out/'states'/'rec',canary=None);t0=time.monotonic()
     with rt.mesh:Kh0,Vh0,_h=L0.record(ids[:nch*CH])
     del _h;rc={(hashlib.sha256(np.asarray(ids[:nch*CH],np.int64).tobytes()).hexdigest(),nch):(Kh0,Vh0)};lg(f'  natural K,V recorded in {time.monotonic()-t0:.0f}s');del L0;gc.collect();LD.jax.clear_caches()
     holder={'dec':np.zeros(CH,np.float32)};L=C.Ladder55(rt,save_dir=out/'states'/f'E57_news_{tag}',canary=None);L.rec_cache=rc;traj=[]
     if arm=='ALLQ128':uv=QR.SelMaskQ('ALLQ128',{'band_ALLQ128':np.asarray(128),'all_ALLQ128':np.asarray(1)},lg)    # the original ALLQ128 write of job 570 (ordinary loss)
-    else:uv=UVNewsM3(masks,holder,lg,dec_band=DEC_BAND_M4 if arm.startswith('M4') else None);MR.install_weighted_grad(L,s3,holder,w)
+    else:uv=UVNewsM3(masks,holder,lg,dec_band=DEC_BAND_M4 if arm.startswith('M4') else None,key=a.get('mask_key') or 'qb_TOP30');MR.install_weighted_grad(L,s3,holder,w)
     def hook(k,m):
         cn=can(m);traj.append(dict(chunk=int(k),canary=cn));lg(f'  {tag} chunk {k}: canary rise gen {cn["_gen_nll"]-cw0["_gen_nll"]:+.4f} tail {cn["_tail_nll"]-cw0["_tail_nll"]:+.4f}');return {'ok':True}
     t0=time.monotonic()
@@ -62,6 +65,6 @@ def selftest():
     print('e57_news_m3 selftest ok')
 def main():
     if '--selftest' in sys.argv:selftest();return
-    ap=argparse.ArgumentParser();ap.add_argument('--stage');ap.add_argument('--out');ap.add_argument('--sentences',default=str(EXP/'e57_t1t2v2_in/e57_stream_sentences.jsonl'));ap.add_argument('--nat-ref',default=str(EXP/'e57_main/E57_main_NAT.arms.json'));ap.add_argument('--weight',default='8');ap.add_argument('--arm');ap.add_argument('--saves');ap.add_argument('--old',default=str(EXP/'e57_news_tokread/e57_news_tokread.json'));a=ap.parse_args()
-    {'masks':masks_stage,'write':write_stage,'merge':merge_stage}[a.stage](dict(out=a.out,sentences=a.sentences,nat_ref=a.nat_ref,weight=a.weight,old=a.old,arm=a.arm,saves=a.saves))
+    ap=argparse.ArgumentParser();ap.add_argument('--stage');ap.add_argument('--out');ap.add_argument('--sentences',default=str(EXP/'e57_t1t2v2_in/e57_stream_sentences.jsonl'));ap.add_argument('--nat-ref',default=str(EXP/'e57_main/E57_main_NAT.arms.json'));ap.add_argument('--weight',default='8');ap.add_argument('--arm');ap.add_argument('--saves');ap.add_argument('--mask-npz');ap.add_argument('--mask-key');ap.add_argument('--old',default=str(EXP/'e57_news_tokread/e57_news_tokread.json'));a=ap.parse_args()
+    {'masks':masks_stage,'write':write_stage,'merge':merge_stage}[a.stage](dict(out=a.out,sentences=a.sentences,nat_ref=a.nat_ref,weight=a.weight,old=a.old,arm=a.arm,saves=a.saves,mask_npz=a.mask_npz,mask_key=a.mask_key))
 if __name__=='__main__':main()
