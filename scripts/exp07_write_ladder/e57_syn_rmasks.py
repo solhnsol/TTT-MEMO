@@ -9,6 +9,7 @@ import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 sys.path.insert(0,str(HERE))
 import e57_closure_masks as CM,e57_rules as RU
+import e57_longcell      # registers the cells v3_32_1 / v3_16_1_L1024 (job 1060)
 EXP=ROOT/'experiments/exp07_write_ladder';CH=1024;K0=8;K1=128
 def fmt(x):return ('%g'%x).replace('.','p')
 def main():
