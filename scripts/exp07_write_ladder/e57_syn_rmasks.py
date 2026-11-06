@@ -10,13 +10,14 @@ HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 sys.path.insert(0,str(HERE))
 import e57_closure_masks as CM,e57_rules as RU
 import e57_longcell      # registers the cells v3_32_1 / v3_16_1_L1024 (job 1060)
+import e57_syn_shuf      # pair-shuffled place tokens when E57_SYN_SHUF is set (job 1140); otherwise no effect
 EXP=ROOT/'experiments/exp07_write_ladder';CH=1024;K0=8;K1=128
 def fmt(x):return ('%g'%x).replace('.','p')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--out');ap.add_argument('--taus',default='2,4,6');ap.add_argument('--rhos',default='');ap.add_argument('--gates',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--out');ap.add_argument('--taus',default='2,4,6');ap.add_argument('--nll',default='');ap.add_argument('--rhos',default='');ap.add_argument('--gates',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:RU.selftest();return
     import e55_run as R55,e55_uv as UVm,e57_syn_pass as SP
-    enc,w,tf=R55.build(SP.synth_args(a.seed,a.cell),a.seed,arms=['NAT']);S=R55.streams(w,enc);ids,sha=S['A'];ends=UVm.sentence_ends(UVm.tokenizer(tf),ids);Z=np.load(EXP/f'e57_syn_s{a.seed}/syn_s{a.seed}_nll128.npz');b=list(Z['bands']).index(128)
+    enc,w,tf=R55.build(SP.synth_args(a.seed,a.cell),a.seed,arms=['NAT']);S=R55.streams(w,enc);ids,sha=S['A'];ends=UVm.sentence_ends(UVm.tokenizer(tf),ids);Z=np.load(a.nll or EXP/f'e57_syn_s{a.seed}/syn_s{a.seed}_nll128.npz');b=list(Z['bands']).index(128)
     taus=[float(x) for x in a.taus.split(',') if x];rhos=[float(x) for x in a.rhos.split(',') if x];gates=[tuple(float(y) for y in x.split(':')) for x in a.gates.split(',') if x]
     out={};sh={};g_all=[]
     for k in range(K0,K1):
