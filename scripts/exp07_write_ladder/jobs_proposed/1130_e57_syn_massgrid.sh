@@ -20,7 +20,7 @@ for f in $NTG $OUT/e57_syn_s$SEED/syn_s${SEED}_nll128.npz; do [ -f "$f" ] || { e
 [ -f "$SQ/syn_s${SEED}_massgrid.npz" ] || $PY $S/e57_syn_rmasks.py --seed $SEED --cell $CELL --taus 2 --out "$SQ/syn_s${SEED}_massgrid.npz"
 [ -n "$CPU_ONLY" ] && { echo "CPU_ONLY: done before any GPU step"; exit 0; }
 $PY $S/e57_syn_mrun.py --seed $SEED --cell $CELL --out $SQ --tag synqmg --m30 $SQ/syn_s${SEED}_massgrid.npz --ntg-nat $NTG --arms $ARMS --save-apps 16,32,64,96,128
-$PY $S/e57_syn_tokread.py --stage read --seed $SEED --out "$TT" --tag synqmg
+$PY $S/e57_syn_tokread.py --stage read --seed $SEED --cell $CELL --out "$TT" --tag synqmg
 $PY - <<'PYE'
 import json,os,pathlib
 O=pathlib.Path(os.environ['EXP07_OUT']);sd=os.environ['SEED']
