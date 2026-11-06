@@ -25,6 +25,7 @@ def main():
         for i,(s_,e_) in enumerate(q):sid[s_:e_]=i
         lm=Z['lm'][k];el=CM.rows_eligible(lm,sid)&lm;nw=Z['nll_win'][k].astype(np.float64);g=Z['nll_band'][b][k].astype(np.float64)-nw;g_all.append(g[el])
         rules={}
+        out[f'el_{k}']=CM.pk(el)       # eligible rows (job 1150: the online rule needs them)
         for t in taus:rules[f'qtA{fmt(t)}']=RU.abs_rule(g,el,t)
         for r in rhos:rules[f'qg{fmt(r)}']=RU.gainmass_rule(g,el,r/100)
         for t,e in gates:rules[f'qh{fmt(t)}_{fmt(e)}']=RU.gate_rule(g,nw,el,t,e/10)
