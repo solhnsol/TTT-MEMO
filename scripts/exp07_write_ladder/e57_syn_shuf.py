@@ -31,6 +31,7 @@ if SHUF:
 def check(out,seed=64,cell='v3_16_1'):
     """CPU invariants (selftest of the job): same length, only place tokens changed, per-chunk derangement with the same place multiset, name -> place pair counts, stream hashes"""
     import json,collections,e57_syn_pass as SP,gen_facts as G
+    import e57_longcell      # registers the cell v3_32_1 (job 1060)
     enc,w,tf=R55.build(SP.synth_args(seed,cell),seed,arms=['NAT']);_,w0,_=_b(SP.synth_args(seed,cell),seed,arms=['NAT'])
     F={f['id']:f for f in w['facts']};pairs=collections.Counter();changed=tot=0
     for c,c0 in zip(w['chunks'],w0['chunks']):
