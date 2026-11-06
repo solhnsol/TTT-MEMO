@@ -14,7 +14,7 @@ import e57_closure_masks as CM
 import e57_longcell      # registers the cell v3_16_1_L1024 (long synthetic stream)
 import e57_syn_shuf      # pair-shuffled place tokens when E57_SYN_SHUF is set (job 960); otherwise no effect
 CH=1024;WIN=8*CH;K0=8
-ARMS={'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'KL16W8N05':('KL16',8,'N05'),'M3NMW1N05':('M3NM',1,'N05'),'M3PB05W8N05':('M3PB05',8,'N05'),'M3PB10W8N05':('M3PB10',8,'N05'),'M3PBC05W8N05':('M3PBC05',8,'N05'),'M3PBC10W8N05':('M3PBC10',8,'N05'),'M3D30W8N05':('PD30',8,'N05'),'M3D50W8N05':('PD50',8,'N05'),'M3R30W8N05':('PR30',8,'N05'),'NATSGD':('NATSGD',1,'-'),'M3B128W1N05':('M3B128',1,'N05'),'KL64W8N05':('KL64',8,'N05'),'M3W4NALL':('M3',4,'NALL'),'M3CGW8N05':('PCG',8,'N05'),'M3CGSHW8N05':('PCGSH',8,'N05'),'M3CWW8N05':('PCW',8,'N05'),'M3CBW8N05':('PCB',8,'N05'),'M3CGW10N05':('PCG',10,'N05'),'M3CGSHW10N05':('PCGSH',10,'N05'),'M3CWW10N05':('PCW',10,'N05'),'M3CBW10N05':('PCB',10,'N05'),'M3T15W8N05':('M3T15',8,'N05'),'M3T50W8N05':('M3T50',8,'N05'),'M3W32N05':('M3',32,'N05'),'M3GWW10N05':('M3GW',10,'N05'),'M3GWW20N05':('M3GW',20,'N05'),'M3GEW8N05':('M3GE',8,'N05'),'M3GEW16N05':('M3GE',16,'N05'),'M3T05W8N05':('M3T05',8,'N05'),'M3T05W16N05':('M3T05',16,'N05'),'M3T10W8N05':('M3T10',8,'N05'),'M3T10W16N05':('M3T10',16,'N05'),'M3T15W16N05':('M3T15',16,'N05'),'M3TA05W16N05':('M3TA05',16,'N05'),'M3TA10W16N05':('M3TA10',16,'N05'),'M3TA05W8N05':('M3TA05',8,'N05'),'M3TA10W8N05':('M3TA10',8,'N05'),'M3TA2W16N05':('M3TA2',16,'N05'),'M3TA4W16N05':('M3TA4',16,'N05'),'M3TA6W16N05':('M3TA6',16,'N05'),'M3TA2W8N05':('M3TA2',8,'N05'),'M3TA4W8N05':('M3TA4',8,'N05'),'M3TA6W8N05':('M3TA6',8,'N05'),'M3T10W8P5N05':('M3T10',8.5,'N05'),'M3T15W6N05':('M3T15',6,'N05'),'M3W3P5N05':('M3',3.5,'N05')}
+ARMS={'M3OA2W16N05':('M3OA2',16,'N05'),'M2H64N05':('M2H64',1,'N05'),'M2HN05':('M2H',1,'N05'),'M2HNALL':('M2H',1,'NALL'),'M3W2N05':('M3',2,'N05'),'M3W2NALL':('M3',2,'NALL'),'M3W4N05':('M3',4,'N05'),'M3W8N05':('M3',8,'N05'),'M3W16N05':('M3',16,'N05'),'M3NMW8N05':('M3NM',8,'N05'),'M3W1N05':('M3',1,'N05'),'M4W8N05':('M4',8,'N05'),'KL16W8N05':('KL16',8,'N05'),'M3NMW1N05':('M3NM',1,'N05'),'M3PB05W8N05':('M3PB05',8,'N05'),'M3PB10W8N05':('M3PB10',8,'N05'),'M3PBC05W8N05':('M3PBC05',8,'N05'),'M3PBC10W8N05':('M3PBC10',8,'N05'),'M3D30W8N05':('PD30',8,'N05'),'M3D50W8N05':('PD50',8,'N05'),'M3R30W8N05':('PR30',8,'N05'),'NATSGD':('NATSGD',1,'-'),'M3B128W1N05':('M3B128',1,'N05'),'KL64W8N05':('KL64',8,'N05'),'M3W4NALL':('M3',4,'NALL'),'M3CGW8N05':('PCG',8,'N05'),'M3CGSHW8N05':('PCGSH',8,'N05'),'M3CWW8N05':('PCW',8,'N05'),'M3CBW8N05':('PCB',8,'N05'),'M3CGW10N05':('PCG',10,'N05'),'M3CGSHW10N05':('PCGSH',10,'N05'),'M3CWW10N05':('PCW',10,'N05'),'M3CBW10N05':('PCB',10,'N05'),'M3T15W8N05':('M3T15',8,'N05'),'M3T50W8N05':('M3T50',8,'N05'),'M3W32N05':('M3',32,'N05'),'M3GWW10N05':('M3GW',10,'N05'),'M3GWW20N05':('M3GW',20,'N05'),'M3GEW8N05':('M3GE',8,'N05'),'M3GEW16N05':('M3GE',16,'N05'),'M3T05W8N05':('M3T05',8,'N05'),'M3T05W16N05':('M3T05',16,'N05'),'M3T10W8N05':('M3T10',8,'N05'),'M3T10W16N05':('M3T10',16,'N05'),'M3T15W16N05':('M3T15',16,'N05'),'M3TA05W16N05':('M3TA05',16,'N05'),'M3TA10W16N05':('M3TA10',16,'N05'),'M3TA05W8N05':('M3TA05',8,'N05'),'M3TA10W8N05':('M3TA10',8,'N05'),'M3TA2W16N05':('M3TA2',16,'N05'),'M3TA4W16N05':('M3TA4',16,'N05'),'M3TA6W16N05':('M3TA6',16,'N05'),'M3TA2W8N05':('M3TA2',8,'N05'),'M3TA4W8N05':('M3TA4',8,'N05'),'M3TA6W8N05':('M3TA6',8,'N05'),'M3T10W8P5N05':('M3T10',8.5,'N05'),'M3T15W6N05':('M3T15',6,'N05'),'M3W3P5N05':('M3',3.5,'N05')}
 CONT=('PCG','PCGSH','PCW','PCB')     # continuous arms (job 1000): s in [0,1] per row from e57_syn_cmasks.py; band b = 8192 x (16/8192)^s (s = 0: natural window of 8192), loss weight 1 + (w - 1) s
 def cont_keep(base,s,band=True):
     """-> bool [CH, WIN+CH]: row i sees the previous b_i tokens (b_i = round(8192 (16/8192)^s_i), window AND chunk keys) intersected with the natural keep; rows with s = 0 keep the natural window unchanged"""
@@ -50,6 +50,35 @@ class UVDeciding:
             kp2=CM.band_keep(base,1);L=self.holder['L'];self.holder['kmask2']=jnp.asarray(kp2);self.holder['pref2']=L.prefix_masked(m,jnp.asarray(ids_k,dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(kp2))
         if k%16==0:self.log(f'  {self.kind} chunk {k}: deciding rows {int(dec.sum())}, window-less {int(dec.sum()) if self.kind=="M2H" else 0}')
         return kp,{'uv_arm':self.kind,'q_banded':CH,'q_band':128 if self.kind=='M3B128' else 256,'n_deciding':int(dec.sum()),'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
+class UVOnline:
+    """job 1150: ONLINE ABS rule. ALLQ256 on every row from chunk K0 (as M3); the deciding rows are chosen at write time from the g128 = nll_band128 - nll_win of the chunk computed with the CURRENT fast weights (the weights before the write of the chunk): keep() computes the prefix outputs for the natural window and for the band 128 (frozen prefix layers) and stashes them; the wrapper installed by install_online_dec (needs the suffix state and the chunk of the write step) computes g and publishes dec = eligible rows with g > tau in holder['dec']. Eligible rows el_<k> come from the masks file (e57_syn_rmasks.py)."""
+    def __init__(self,masks,holder,log=print):self.m=masks;self.holder=holder;self.log=log
+    def keep(self,k,m,Kc,Vc,ids_k,keep_all):
+        base=np.asarray(keep_all,bool);self.holder['dec']=np.zeros(CH,np.float32);self.holder['stash']=None
+        if k<K0:return base,{'uv_arm':'M3OA2','q_banded':0,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
+        import jax.numpy as jnp
+        L=self.holder['L'];nat=jnp.asarray(base);b128=jnp.asarray(CM.band_keep(base,128));ik=jnp.asarray(ids_k,dtype=jnp.int32)
+        self.holder['stash']=dict(nat=nat,b=b128,pn=L.prefix_masked(m,ik,Kc,Vc,jnp.int32(k*CH),nat),pb=L.prefix_masked(m,ik,Kc,Vc,jnp.int32(k*CH),b128),el=CM.up(self.m[f'el_{k}'],CH),k=k)
+        kp=np.broadcast_to(base,(CH,WIN+CH)).copy();kp[:]=CM.band_keep(base,256)
+        return kp,{'uv_arm':'M3OA2','q_banded':CH,'q_band':256,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
+def install_online_dec(L,s3,holder,tau,log=print):
+    """outermost wrapper of L.grad_mask: g128 with the current weights -> holder['dec'] (rows with g > tau among the eligible rows) before the weighted gradient reads it"""
+    import jax,jax.numpy as jnp,equinox as eqx
+    S3SUF=s3.S3SUF;inner=L.grad_mask
+    @eqx.filter_jit
+    def logp_mask(m,st,c,pref,kmask):
+        S3SUF['kmask']=kmask
+        try:res=m.language_model.suffix_call(prefix_outputs=pref,state=st,seq=c)
+        finally:S3SUF.clear()
+        lp=jax.nn.log_softmax(res.logits.astype(jnp.float32),axis=-1);return jnp.take_along_axis(lp,c.target_tokens[:,None],axis=-1)[:,0]
+    def gm(m,st_w,c,pref_,kmask,*rest,**kw):
+        S=holder.get('stash')
+        if S is not None:
+            nw=-np.asarray(logp_mask(m,st_w,c,S['pn'],S['nat']),np.float64);nb=-np.asarray(logp_mask(m,st_w,c,S['pb'],S['b']),np.float64);g=nb-nw;lm=np.asarray(c.loss_masks,bool)
+            dec=(S['el']&lm&(g>tau)).astype(np.float32);holder['dec']=dec;holder.setdefault('shares',[]).append(float(dec.sum()/max(1,(S['el']&lm).sum())));holder.setdefault('g_mean',[]).append(float(g[S['el']&lm].mean()))
+            if S['k']%16==0:log(f"  online ABS tau {tau} chunk {S['k']}: selected rows {int(dec.sum())} ({holder['shares'][-1]:.3f} of eligible), mean g {holder['g_mean'][-1]:+.3f}")
+        return inner(m,st_w,c,pref_,kmask,*rest,**kw)
+    L.grad_mask=gm
 def install_weighted_grad(L,s3,holder,weight):
     """replace L.grad_mask (used by the Adam engines) by the gradient of the loss with the weight `weight` on the deciding rows"""
     import jax,jax.numpy as jnp,equinox as eqx
@@ -130,9 +159,10 @@ def main():
         fn=OUT/f'E55_{a.tag}_{ar}_s{seed}.saved.json'
         if fn.exists() and not a.rerun:lg('exists, reused:',fn);continue
         kind,weight,nrm=ARMS[ar];ntg=None if kind=='NATSGD' else (ntgN if nrm=='N05' else ntgA);engine='NAT' if kind=='NATSGD' else 'SELC1';assert kind=='NATSGD' or nrm!='N05' or ntgN is not None,'NATSGD (norm source) must run first with --ntg-nat auto';holder={'dec':np.zeros(CH_,np.float32)}
-        uv=None if kind=='NATSGD' else UVDeciding(kind,masks,holder,lg);L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_{ar}_s{seed}',canary=can);got={}
+        uv=None if kind=='NATSGD' else (UVOnline(masks,holder,lg) if kind=='M3OA2' else UVDeciding(kind,masks,holder,lg));L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_{ar}_s{seed}',canary=can);got={}
         if rc:L.rec_cache=rc
-        if kind in ('M3','M3NM','M3B128','M4','KL16','KL64','PD30','PD50','PR30','PCG','PCGSH','PCW','PCB','M3T05','M3T10','M3TA05','M3TA10','M3TA2','M3TA4','M3TA6','M3T15','M3T50','M3GW','M3GE') or kind.startswith('M3PB'):install_weighted_grad(L,s3,holder,float(weight))
+        if kind in ('M3','M3NM','M3B128','M4','KL16','KL64','PD30','PD50','PR30','PCG','PCGSH','PCW','PCB','M3T05','M3T10','M3TA05','M3TA10','M3TA2','M3TA4','M3TA6','M3T15','M3T50','M3GW','M3GE','M3OA2') or kind.startswith('M3PB'):install_weighted_grad(L,s3,holder,float(weight))
+        if kind=='M3OA2':holder['L']=L;install_online_dec(L,s3,holder,2.0,lg)
         if kind.startswith('M3PB'):
             holder['L']=L;install_contrast_grad(L,s3,holder,float(weight),0.5 if kind.endswith('05') else 1.0,cap=8.0 if kind.startswith('M3PBC') else None)
             _cn=L.canary
@@ -154,7 +184,7 @@ def main():
             lg('ABORTED',ar,str(e_));json.dump(dict(arm=ar,aborted=str(e_),contrast_log=holder.get('clog')),open(fn,'w'));gc.collect();LD.jax.clear_caches();continue
         if kind=='NATSGD':ntgN=[e['update_norm'] for e in r['log']]
         lgs=r['log'];r['summary']={'mean_update_norm':float(np.mean([e['update_norm'] for e in lgs])),'clip_bind_frac':r['clip_bind_frac'],'cum_update_norm':r['cum_update_norm'],'mean_ce':float(np.mean([e['ce'] for e in lgs])),'mean_scale':float(np.mean([e.get('scale',1.0) for e in lgs]))}
-        r.update(stream_sha=sha,world_seed=seed,cell=a.cell,read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,k=w['k'],n=w['n'],bank=w['bank_kind'],contrast_log=holder.get('clog'),engine=engine,mrun=True,arm=ar,mkind=kind,weight=weight,norm_source=nrm)
+        r.update(stream_sha=sha,world_seed=seed,cell=a.cell,read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,k=w['k'],n=w['n'],bank=w['bank_kind'],contrast_log=holder.get('clog'),online_share_mean=(float(np.mean(holder['shares'])) if holder.get('shares') else None),online_g_mean=(float(np.mean(holder['g_mean'])) if holder.get('g_mean') else None),engine=engine,mrun=True,arm=ar,mkind=kind,weight=weight,norm_source=nrm)
         w0=r['canary_w0']
         for k,e in r['reads'].items():
             if 'canary' in e:
