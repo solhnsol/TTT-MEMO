@@ -8,8 +8,8 @@ import e57_closure_masks as CM,e57_rules as RU
 def fmt(x):return ('%g'%x).replace('.','p')
 def rule_dict(g,el,taus,rhos=()):
     r={f'qtA{fmt(t)}':RU.abs_rule(g,el,t) for t in taus};r.update({f'qg{fmt(x)}':RU.gainmass_rule(g,el,x/100) for x in rhos});r['qt05']=RU.top_share(g,el,.05);r['qb_TOP30']=RU.top_share(g,el,.30);return r
-def qa(out,taus,rhos=(),tune=(8,10,12),hold=(5,9)):
-    Z=np.load(EXP/'e57_public_qa_n65/e57_dwg_qa_nll.npz');bi=list(Z['bands']).index(128);res={};sh={}
+def qa(out,taus,rhos=(),tune=(8,10,12),hold=(5,9),nll=None):
+    Z=np.load(nll or EXP/'e57_public_qa_n65/e57_dwg_qa_nll.npz');bi=list(Z['bands']).index(128);res={};sh={}
     for gid in (5,8,9,10,12):
         win=Z[f'g{gid}_win'];bd=Z[f'g{gid}_band'][bi];lm=Z[f'g{gid}_lm']
         for k in range(win.shape[0]):
@@ -28,11 +28,11 @@ def news(out,taus,rhos=()):
         for nm,d in rule_dict(g,el,taus,rhos).items():res[f'{nm}_{k}']=CM.pk(d>0);sh.setdefault(nm,[]).append(float((d>0).sum()/max(el.sum(),1)))
     res['chunks']=np.asarray([NM.K0,len(ids)//CH]);np.savez_compressed(out,**res);return {nm:float(np.mean(v)) for nm,v in sh.items()}
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--qa-out');ap.add_argument('--news-out');ap.add_argument('--taus',default='2,4,6');ap.add_argument('--rhos',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--qa-out');ap.add_argument('--qa-nll');ap.add_argument('--news-out');ap.add_argument('--taus',default='2,4,6');ap.add_argument('--rhos',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:
         r=np.random.default_rng(0);g=r.standard_normal(CH)*2+.8;el=r.random(CH)<.9;d=rule_dict(g,el,[2,4]);assert set(d)=={'qtA2','qtA4','qt05','qb_TOP30'};d2=rule_dict(g,el,[2],[50]);assert 'qg50' in d2 and 0<d2['qg50'].sum()<d2['qb_TOP30'].sum()*3 and d['qtA2'].sum()>=d['qtA4'].sum() and d['qb_TOP30'].sum()==round(.3*el.sum());print('e57_rule_masks_real selftest ok');return
     taus=[float(x) for x in a.taus.split(',') if x];rhos=[float(x) for x in a.rhos.split(',') if x];res={}
-    if a.qa_out:res['qa']=qa(a.qa_out,taus,rhos);pathlib.Path(a.qa_out).with_suffix('.json').write_text(json.dumps(res['qa'],indent=1))
+    if a.qa_out:res['qa']=qa(a.qa_out,taus,rhos,nll=a.qa_nll);pathlib.Path(a.qa_out).with_suffix('.json').write_text(json.dumps(res['qa'],indent=1))
     if a.news_out:res['news']=news(a.news_out,taus,rhos);pathlib.Path(a.news_out).with_suffix('.json').write_text(json.dumps(res['news'],indent=1))
     print(json.dumps(res))
 if __name__=='__main__':main()
