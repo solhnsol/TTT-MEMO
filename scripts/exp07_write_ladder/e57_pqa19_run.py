@@ -51,6 +51,9 @@ def write_stage(a):
         for arm in ARMS_W:
             L=C.Ladder55(rt,save_dir=out/'states'/f'g{gid}_{arm}',canary=can if arm!='NAT' else None);L.rec_cache=rc;uv=None;eng={'NAT':'NAT','NATQ':'NATADAMH'}.get(arm,'SELC1')
             if arm=='ALLQ128':uv=SM('ALLQ128',masks,lg)
+            if arm=='M3OA2W16Q128':             # job 1160: ONLINE ABS2 rule (g128 from the current fast weights, tau 2, weight 16, ALLQ128 on every row)
+                import e57_online_uv as OU
+                holder={'dec':np.zeros(CH,np.float32),'L':L};uv=OU.UVOnlineBand(holder,lg);MR.install_weighted_grad(L,s3,holder,16.0);OU.install_online_dec_band(L,s3,holder,2.0,lg)
             mm=re.match(r'^M3(q[A-Za-z0-9_]*?)W(\d+)Q128$',arm)       # rule arms (job 1070): M3<mask key>W<weight>Q128, masks from MASK_NPZ (e57_rule_masks_real.py), e.g. M3qtA4W16Q128
             if mm:
                 holder={'dec':np.zeros(CH,np.float32)};uv=P16.UVQA(P16.masks_from_npz(MASK_NPZ,gid,mm.group(1)),holder);MR.install_weighted_grad(L,s3,holder,float(mm.group(2)))
@@ -59,6 +62,7 @@ def write_stage(a):
             res=L.run_stream(eng,1,ids,nch=nch,tag=f'pqa19g{gid}{arm}',log=lambda *x:None,read_chunks=rd_ch if arm!='NAT' else (),canary_chunks=rd_ch if arm!='NAT' else None,chunks_meta=[{'sents':[]} for _ in range(nch)],norm_targets=ntg,uv=uv)
             if arm=='NAT':ntg=[e['update_norm'] for e in res['log']];res_g['NAT']=dict(update_norms=ntg,ce=[e['ce'] for e in res['log']])
             else:res_g[arm]=dict(states={str(k):dict(file=v['_file'],hash=v['_hash'],canary=v.get('canary')) for k,v in res['reads'].items()},ce=[e['ce'] for e in res['log']],update_norms=[e['update_norm'] for e in res['log']],canary_w0=cw0)
+            if arm=='M3OA2W16Q128':res_g[arm]['online_share_mean']=float(np.mean(holder['shares'])) if holder.get('shares') else None;res_g[arm]['online_g_mean']=float(np.mean(holder['g_mean'])) if holder.get('g_mean') else None
             del L,res;gc.collect();lg(f'  bundle {gid} {arm} done ({time.monotonic()-t0:.0f}s)')
         del rc,Kh0,Vh0;gc.collect();W[gid]=res_g;fn.write_text(json.dumps(W,default=float));lg(f'bundle {gid}: {nch} chunks, {len(ARMS_W)} arms written in {time.monotonic()-t0:.0f}s (total {time.monotonic()-t00:.0f}s)')
 def read_stage(a):
