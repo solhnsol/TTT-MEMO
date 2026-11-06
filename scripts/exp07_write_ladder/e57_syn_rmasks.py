@@ -27,7 +27,7 @@ def main():
         for t in taus:rules[f'qtA{fmt(t)}']=RU.abs_rule(g,el,t)
         for r in rhos:rules[f'qg{fmt(r)}']=RU.gainmass_rule(g,el,r/100)
         for t,e in gates:rules[f'qh{fmt(t)}_{fmt(e)}']=RU.gate_rule(g,nw,el,t,e/10)
-        for sh_,nm in ((.05,'qt05'),(.10,'qt10'),(.30,'qb_TOP30')):rules[nm]=RU.top_share(g,el,sh_)
+        for sh_,nm in ((.05,'qt05'),(.10,'qt10'),(.15,'qt15'),(.30,'qb_TOP30')):rules[nm]=RU.top_share(g,el,sh_)
         for nm,d in rules.items():out[f'{nm}_{k}']=CM.pk(d>0);sh.setdefault(nm,[]).append(float((d>0).sum()/max(el.sum(),1)))
     out['chunks']=np.asarray([K0,K1]);np.savez_compressed(a.out,**out);G=np.concatenate(g_all)
     js=dict(seed=a.seed,cell=a.cell,band=128,mean_share={k:float(np.mean(v)) for k,v in sh.items()},min_share={k:float(np.min(v)) for k,v in sh.items()},max_share={k:float(np.max(v)) for k,v in sh.items()},g_quantiles={str(p):float(np.percentile(G,p)) for p in (5,10,25,50,75,90,95,99)})
