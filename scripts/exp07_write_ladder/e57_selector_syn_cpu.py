@@ -100,6 +100,7 @@ def main():
     res['models']='a = trained on g128>2 labels; b = trained on true deciding rows (place first token)'
     res['eval']={}
     for (s,c),e in zip(EVAL,Ev):res['eval'][f's{s}_{c}_density{DENS[c]}']=evaluate(models,e,rng);lg('eval',s,c,'done')
+    for i,e in enumerate(Ev):e['ck']=e['ck']+1000*i
     res['eval']['pooled']=evaluate(models,cat(Ev),rng)
     pathlib.Path(a.out).write_text(json.dumps(res,indent=1));lg('wrote',a.out)
 if __name__=='__main__':main()
