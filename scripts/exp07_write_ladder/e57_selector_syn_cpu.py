@@ -35,14 +35,14 @@ def world(seed,cell):
     nch=len(ids)//CH;place=np.zeros(nch*CH+1,bool)
     for r in DW.locate_syn(tk,w,None):place[r['pos'][0]]=True
     D=np.load(EXP/f'e57_hidden_dump/hid_s{seed}.npz');assert (np.asarray(ids)[:nch*CH]==D['ids'][:nch*CH]).all() and str(D['stream_sha'])==str(sha),'stream mismatch'
-    H=D['h'];ck=[];g=[];t=[];rows=[]
+    H=D['h'];ck=[];g=[];t=[];rows=[];ixs=[]
     for k in range(int(Z['chunks'][0]),int(Z['chunks'][1])):
         q=UVm.chunk_sents(ends,k,CH);sid=np.full(CH,-1)
         for i,(s_,e_) in enumerate(q):sid[s_:e_]=i
         lm=Z['lm'][k];el=CM.rows_eligible(lm,sid)&lm;ix=np.nonzero(el)[0]
-        ck.append(np.full(len(ix),k));g.append((Z['nll_band'][b][k]-Z['nll_win'][k]).astype(np.float64)[ix]);t.append(place[k*CH+ix+1]);rows.append(k*CH+ix)
+        ck.append(np.full(len(ix),k));ixs.append(ix);g.append((Z['nll_band'][b][k]-Z['nll_win'][k]).astype(np.float64)[ix]);t.append(place[k*CH+ix+1]);rows.append(k*CH+ix)
     rows=np.concatenate(rows);u=H[rows].astype(np.uint32)<<16;X=u.view(np.float32)
-    return dict(ck=np.concatenate(ck),g=np.concatenate(g),t=np.concatenate(t),X=X)
+    return dict(ix=np.concatenate(ixs),ck=np.concatenate(ck),g=np.concatenate(g),t=np.concatenate(t),X=X)
 def cat(ws):return {k:np.concatenate([w[k] for w in ws]) for k in ('ck','g','t','X')}
 def boot(vals,rng,nb=NB):
     """vals: dict name->per-chunk array (aligned); returns mean + CI of means and requested contrasts handled by caller"""
@@ -87,16 +87,29 @@ def pick_lambda(Ws,key,log):
 def selftest():
     r=np.random.default_rng(0);n=3000;d=20;X=r.standard_normal((n,d)).astype(np.float32);y=(X[:,0]+.5*X[:,1]+r.standard_normal(n)*.5>1.5);w=fit_logreg(X,y,1e-3)
     assert auc(y,score(w,X))>0.9;g=r.standard_normal(100);t=np.zeros(100,bool);t[:5]=True;g[:5]+=5;m=top_mask(g,5);assert sel_stats(m,t)[0]==1.0;print('e57_selector_syn_cpu selftest ok')
+def write_masks(models,Ev,worlds):
+    """learned top-5% masks (n = ceil(5% of the eligible rows) per chunk, ranked by the selector score) for the GPU arms M3TLB (model b) / M3TLA (model a): keys qtLB_k / qtLA_k (packbits [128]) added to the world's rules npz -> e57_synq/syn_s<seed>_learned.npz"""
+    for (s_,c_),e in zip(worlds,Ev):
+        base=dict(np.load(EXP/f'e57_synq/syn_s{s_}_rules.npz'));sc={m:score(w,e['X']) for m,w in models.items()}
+        for k in np.unique(e['ck']):
+            sel=e['ck']==k;n5=int(np.ceil(0.05*sel.sum()))
+            for m,nm in (('b','qtLB'),('a','qtLA')):
+                mk=np.zeros(CH,bool);mk[e['ix'][sel][top_mask(sc[m][sel],n5)]]=True;base[f'{nm}_{int(k)}']=np.packbits(mk)
+        np.savez(EXP/f'e57_synq/syn_s{s_}_learned.npz',**base);print('masks',s_,flush=True)
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--out');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--masks-only',action='store_true');ap.add_argument('--out');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     lg=lambda *x:print(*x,flush=True);rng=np.random.default_rng(0)
     Tr=[];[Tr.append(world(s,c)) or lg('train world',s,c,len(Tr[-1]['g']),'rows') for s,c in TRAIN];Ev=[];[Ev.append(world(s,c)) or lg('eval world',s,c,len(Ev[-1]['g']),'rows') for s,c in EVAL]
     res={'definitions':__doc__.split('\n')[0],'train_worlds':[f's{s}_{c}' for s,c in TRAIN],'eval_worlds':[f's{s}_{c}' for s,c in EVAL],'lambdas':LAMS,'lowo':{}}
     full=cat(Tr);mu=full['X'].mean(0);sd=full['X'].std(0)+1e-6;models={}
     for key in 'ab':
+        if a.masks_only:
+            lam=json.load(open(a.out))['lowo'][key]['chosen_lambda'];y=(full['g']>2) if key=='a' else full['t'];models[key]=fit_logreg((full['X']-mu)/sd,y,lam,maxiter=400);lg('final',key,lam);continue
         lam,tab=pick_lambda(Tr,key,lg);res['lowo'][key]={'chosen_lambda':lam,'auc_by_lambda':{str(k):v for k,v in tab.items()}};y=(full['g']>2) if key=='a' else full['t'];models[key]=fit_logreg((full['X']-mu)/sd,y,lam,maxiter=400);lg('final',key,lam)
     for e in Ev:e['X']=(e['X']-mu)/sd
+    if a.masks_only:
+        write_masks(models,Ev,EVAL);np.savez(EXP/'e57_synq/syn_selector_weights.npz',mu=mu,sd=sd,wa=models['a'],wb=models['b']);return
     res['models']='a = trained on g128>2 labels; b = trained on true deciding rows (place first token)'
     res['eval']={}
     for (s,c),e in zip(EVAL,Ev):res['eval'][f's{s}_{c}_density{DENS[c]}']=evaluate(models,e,rng);lg('eval',s,c,'done')
