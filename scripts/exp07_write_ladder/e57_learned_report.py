@@ -20,7 +20,7 @@ def world(sd):
         A[ar]=dict(rr=np.asarray([m[f]['rank_branch']/16.0 for f in facts]),dA=dA,dAB=dA-dB)
     I={}
     for ar in ARMS:
-        x=json.load(open(EXP/f'e57_synq/E55_synqrl_{ar}_s{sd}.read.json'));rd=x['read']['128'];w=x['W0'];s=json.load(open(EXP/f'e57_synq/E55_synqrl_{ar}_s{sd}.saved.json'));cw=s['canary_w0'];k=max(s['reads'],key=int)
+        pj=lambda e:next(p for p in (EXP/f'e57_synq/E55_{t}_{ar}_s{sd}.{e}.json' for t in ('synqrl','synqrp')) if p.exists() and not p.is_symlink() or p.exists() and e=='read');x=json.load(open(pj('read')));rd=x['read']['128'];w=x['W0'];s=json.load(open(pj('saved')));cw=s['canary_w0'];k=max(s['reads'],key=int)
         I[ar]=dict(inw=inline_arrays(rd['in_g0'],w['in_g0@128'],x['meta']),out=inline_arrays(rd['out'],w['out'],x['meta']),canary=dict(gen_nll_rise=s['reads'][k]['canary']['_gen_nll']-cw['_gen_nll'],tail_nll_rise=s['reads'][k]['canary']['_tail_nll']-cw['_tail_nll']))
     return A,I
 def summarize(A,I):
