@@ -17,6 +17,10 @@ TOUT=${TOUT:-$OUT/e57_news_online_gprime}; MASKS=$OUT/e57_news_m3/news_rules_mas
 for f in $N65/e57_pqa6_groups.json $N65/e57_pqa6_group_ids.npz $N65/e57_dwg_qa_nll.npz $N17/e57_pqa6_groups.json $ITEMS $BANK $ST1 $ASG $OUT/e57_public_qa_n65_online/E57_pqa15_rows_A_M3OA2W16Q128_n65.json $MASKS $OUT/e57_main/E57_main_NAT.arms.json $OUT/e57_news_rules/read/e57_news_tokread.json $OUT/e57_news_tokread/e57_news_tokread.json $OUT/e57_news_split.json; do [ -f "$f" ] || { echo "input missing: $f (exit 7)"; exit 7; }; done
 [ -n "$CPU_ONLY" ] && { echo "CPU_ONLY: done before any GPU step"; exit 0; }
 for f in e57_pqa6_groups.json e57_pqa6_group_ids.npz e57_dwg_qa_nll.npz; do [ -f "$RD/$f" ] || cp "$N65/$f" "$RD/$f"; done
+# the news arms (new code path) run first so that an error shows up within minutes
+for A in NEWSOS2W16 NEWSOA2W16; do
+  [ -f "$TOUT/E57_news_${A}C.arms.json" ] || $PY $S/e57_news_m3.py --stage write --out "$TOUT" --weight 16 --arm $A --saves 279 --mask-npz $MASKS
+done
 if [ ! -f "$RD/E57_pqa15_rows_A_M3OS2W16Q128_n65.json" ] || [ -n "$RERUN" ]; then
   $PY $S/e57_pqa25_run.py --stage write --out "$RD"
   $PY $S/e57_pqa25_run.py --stage read --out "$RD" --src640 "$N17" --items-file $ITEMS --bank "$BANK" --assign $ASG --stage1 $ST1
@@ -31,9 +35,6 @@ for gid,arms in W.items():
             if c:can.setdefault(arm,{}).setdefault(gid,{})[ch]=dict(gen_nll_rise=c['_gen_nll']-v['canary_w0']['_gen_nll'],tail_nll_rise=c['_tail_nll']-v['canary_w0']['_tail_nll'])
 json.dump(can,open(sys.argv[1]+'/e57_qa_online_canary.json','w'),indent=1);print('canary written',list(can))
 PYE
-for A in NEWSOS2W16 NEWSOA2W16; do
-  [ -f "$TOUT/E57_news_${A}C.arms.json" ] || $PY $S/e57_news_m3.py --stage write --out "$TOUT" --weight 16 --arm $A --saves 279 --mask-npz $MASKS
-done
 EXTRA=$($PY - "$TOUT" <<'PYE'
 import json,sys
 t=sys.argv[1];parts=[]
