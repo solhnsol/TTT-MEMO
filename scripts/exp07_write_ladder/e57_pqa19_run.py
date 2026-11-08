@@ -54,9 +54,9 @@ def write_stage(a):
             if arm in ('M3OA2W16Q128','M3OS2W16Q128'):             # job 1160 / 1230 (OS2: g' with the band only in the suffix layers): ONLINE ABS2 rule (g128 from the current fast weights, tau 2, weight 16, ALLQ128 on every row)
                 import e57_online_uv as OU
                 holder={'dec':np.zeros(CH,np.float32),'L':L};uv=OU.UVOnlineBand(holder,lg);MR.install_weighted_grad(L,s3,holder,16.0);OU.install_online_dec_band(L,s3,holder,2.0,lg,suf=(arm=='M3OS2W16Q128'))
-            mm=re.match(r'^M3(q[A-Za-z0-9_]*?)W(\d+)Q128$',arm)       # rule arms (job 1070): M3<mask key>W<weight>Q128, masks from MASK_NPZ (e57_rule_masks_real.py), e.g. M3qtA4W16Q128
+            mm=re.match(r'^M3(q[A-Za-z0-9_]*?)W(\d+(?:p\d+)?)Q128$',arm)       # rule arms (job 1070): M3<mask key>W<weight>Q128, masks from MASK_NPZ (e57_rule_masks_real.py), e.g. M3qtA4W16Q128
             if mm:
-                holder={'dec':np.zeros(CH,np.float32)};uv=P16.UVQA(P16.masks_from_npz(MASK_NPZ,gid,mm.group(1)),holder);MR.install_weighted_grad(L,s3,holder,float(mm.group(2)))
+                holder={'dec':np.zeros(CH,np.float32)};uv=P16.UVQA(P16.masks_from_npz(MASK_NPZ,gid,mm.group(1)),holder);MR.install_weighted_grad(L,s3,holder,float(mm.group(2).replace('p','.')))
             if arm in ('M3W8Q128','M4W8Q128'):
                 holder={'dec':np.zeros(CH,np.float32)};uv=P16.UVQA(dm,holder,dec_band=P16.DEC_BAND_M4 if arm.startswith('M4') else None);MR.install_weighted_grad(L,s3,holder,8.0)
             res=L.run_stream(eng,1,ids,nch=nch,tag=f'pqa19g{gid}{arm}',log=lambda *x:None,read_chunks=rd_ch if arm!='NAT' else (),canary_chunks=rd_ch if arm!='NAT' else None,chunks_meta=[{'sents':[]} for _ in range(nch)],norm_targets=ntg,uv=uv)
