@@ -43,13 +43,21 @@ def write_stage(a):
     del _h;rc={(hashlib.sha256(np.asarray(ids[:nch*CH],np.int64).tobytes()).hexdigest(),nch):(Kh0,Vh0)};lg(f'  natural K,V recorded in {time.monotonic()-t0:.0f}s');del L0;gc.collect();LD.jax.clear_caches()
     holder={'dec':np.zeros(CH,np.float32)};L=C.Ladder55(rt,save_dir=out/'states'/f'E57_news_{tag}',canary=None);L.rec_cache=rc;traj=[]
     if arm=='ALLQ128':uv=QR.SelMaskQ('ALLQ128',{'band_ALLQ128':np.asarray(128),'all_ALLQ128':np.asarray(1)},lg)    # the original ALLQ128 write of job 570 (ordinary loss)
+    elif arm in ('NEWSOA2W16','NEWSOS2W16'):       # job 1230: ONLINE ABS2 rule (g128 = nll_band128 - nll_win, or g' with the band only in the suffix layers (OS2)) from the CURRENT fast weights, g > 2 nats among the eligible rows, loss weight 16, ALLQ128 on every row from chunk K0 (e57_online_uv.py)
+        import e57_online_uv as OU,e55_uv as UVm
+        ends=UVm.sentence_ends(UVm.tokenizer(str(ROOT/'data/tokenizer/llama3/tokenizer.json')),ids)
+        def elfn(k):
+            q=UVm.chunk_sents(ends,k,CH);sid=np.full(CH,-1)
+            for i,(s_,e_) in enumerate(q):sid[s_:e_]=i
+            return CM.rows_eligible(np.ones(CH,bool),sid)
+        holder['L']=L;uv=OU.UVOnlineBand(holder,lg,k0=K0);MR.install_weighted_grad(L,s3,holder,16.0);OU.install_online_dec_band(L,s3,holder,2.0,lg,suf=(arm=='NEWSOS2W16'),elfn=elfn)
     else:uv=UVNewsM3(masks,holder,lg,dec_band=DEC_BAND_M4 if arm.startswith('M4') else None,key=a.get('mask_key') or 'qb_TOP30');MR.install_weighted_grad(L,s3,holder,w)
     def hook(k,m):
         cn=can(m);traj.append(dict(chunk=int(k),canary=cn));lg(f'  {tag} chunk {k}: canary rise gen {cn["_gen_nll"]-cw0["_gen_nll"]:+.4f} tail {cn["_tail_nll"]-cw0["_tail_nll"]:+.4f}');return {'ok':True}
     t0=time.monotonic()
     res=L.run_stream('SELC1',1,ids,nch=nch,tag=f'news{tag}',log=lg,read_hook=hook,hook_chunks=set(saves),read_chunks=set(saves),chunks_meta=[{'sents':[]} for _ in range(nch)],norm_targets=ntg,uv=uv);log=res['log']
     ref_f=None if arm.startswith('M4') else (EXP/'e57_news_m3/E57_news_M3W8Q128.arms.json' if arm!='ALLQ128' else EXP/'e57_t1t2v2/streamA/E57_v2A_ALLQ128.arms.json');rh=json.load(open(ref_f))['states'][str(nch-1)]['hash'] if ref_f else None;nh=next((v['_hash'] for k,v in res['reads'].items() if int(k)==nch-1),None)
-    (out/f'E57_news_{tag}.arms.json').write_text(json.dumps(dict(arm=tag,engine='SELC1',stream='A',n_chunks=nch,ids_sha=V.STREAM_SHA['A'],weight=w if arm!='ALLQ128' else 1.0,band=BAND,p_deciding=P,canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,end_state_hash=nh,original_end_state_hash=rh,end_state_hash_equal=bool(nh==rh) if rh else None,dec_band=DEC_BAND_M4 if arm.startswith('M4') else None,
+    (out/f'E57_news_{tag}.arms.json').write_text(json.dumps(dict(arm=tag,engine='SELC1',stream='A',n_chunks=nch,ids_sha=V.STREAM_SHA['A'],weight=w if arm!='ALLQ128' else 1.0,band=BAND,p_deciding=P,online_share_mean=(float(np.mean(holder['shares'])) if holder.get('shares') else None),online_g_mean=(float(np.mean(holder['g_mean'])) if holder.get('g_mean') else None),canary_w0=cw0,trajectory=traj,states={str(k):{'file':v['_file'],'hash':v['_hash']} for k,v in res['reads'].items()},sec_total=time.monotonic()-t0,end_state_hash=nh,original_end_state_hash=rh,end_state_hash_equal=bool(nh==rh) if rh else None,dec_band=DEC_BAND_M4 if arm.startswith('M4') else None,
         update_log=[{k_:e[k_] for k_ in ('k','ce','update_norm','coef','sec','n_masked_keys','q_banded','q_band','n_deciding') if k_ in e} for e in log],norm_source='E57_main_NAT first cycle x 0.5 (engine SELC1)'),default=float));lg('wrote',out/f'E57_news_{tag}.arms.json','end-state hash equal to the original:',(nh==rh) if rh else 'no original')
 def merge_stage(a):
     """job 677 v1 tokens (all stored states) + the new state read in this job -> <out>/merged/e57_news_tokread.json (analyze of e57_news_tokread.py then compares every state, paired per frame)"""

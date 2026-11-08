@@ -6,14 +6,17 @@ HERE=pathlib.Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import e57_closure_masks as CM
 CH=1024;WIN=8*CH;BAND=128
 class UVOnlineBand:
-    def __init__(self,holder,log=print,band=BAND):self.holder=holder;self.log=log;self.band=band
+    def __init__(self,holder,log=print,band=BAND,k0=0):self.holder=holder;self.log=log;self.band=band;self.k0=k0       # k0: first chunk with the band mask (news: K0 = 8; QA: 0)
     def keep(self,k,m,Kc,Vc,ids_k,keep_all):
         import jax.numpy as jnp
         base=np.asarray(keep_all,bool);self.holder['dec']=np.zeros(CH,np.float32);L=self.holder['L']
+        if k<self.k0:
+            self.holder['stash']=None;return base,{'uv_arm':'M3OA2','q_banded':0,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
         self.holder['stash']=dict(pn=L.prefix_masked(m,jnp.asarray(ids_k,dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(base)),nat=jnp.asarray(base),k=k)
         kp=np.broadcast_to(base,(CH,WIN+CH)).copy();kp[:]=CM.band_keep(base,self.band)
         return kp,{'uv_arm':'M3OA2','q_banded':CH,'q_band':self.band,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
-def install_online_dec_band(L,s3,holder,tau,log=print):
+def install_online_dec_band(L,s3,holder,tau,log=print,suf=False,elfn=None):
+    """suf: job 1230, g' = nll_suffixband - nll_win (the band only in the suffix layers: the natural prefix outputs S['pn'] are used for the band forward); elfn(k): eligible rows of chunk k (news: sentence ids); default every row with a loss (QA)"""
     import jax,jax.numpy as jnp,equinox as eqx
     S3SUF=s3.S3SUF;inner=L.grad_mask
     @eqx.filter_jit
@@ -25,8 +28,8 @@ def install_online_dec_band(L,s3,holder,tau,log=print):
     def gm(m,st_w,c,pref_,kmask,*rest,**kw):
         S=holder.get('stash')
         if S is not None:
-            nw=-np.asarray(logp_mask(m,st_w,c,S['pn'],S['nat']),np.float64);nb=-np.asarray(logp_mask(m,st_w,c,pref_,kmask),np.float64);g=nb-nw;lm=np.asarray(c.loss_masks,bool)
-            el=CM.rows_eligible(lm,np.zeros(CH,np.int32))&lm;dec=(el&(g>tau)).astype(np.float32);holder['dec']=dec;holder.setdefault('shares',[]).append(float(dec.sum()/max(1,el.sum())));holder.setdefault('g_mean',[]).append(float(g[el].mean()))
+            nw=-np.asarray(logp_mask(m,st_w,c,S['pn'],S['nat']),np.float64);nb=-np.asarray(logp_mask(m,st_w,c,S['pn'] if suf else pref_,kmask),np.float64);g=nb-nw;lm=np.asarray(c.loss_masks,bool)
+            el=(CM.rows_eligible(lm,np.zeros(CH,np.int32)) if elfn is None else elfn(S['k']))&lm;dec=(el&(g>tau)).astype(np.float32);holder['dec']=dec;holder.setdefault('shares',[]).append(float(dec.sum()/max(1,el.sum())));holder.setdefault('g_mean',[]).append(float(g[el].mean()))
             if S['k']%16==0:log(f"  online ABS tau {tau} chunk {S['k']}: selected rows {int(dec.sum())} ({holder['shares'][-1]:.3f} of eligible), mean g {holder['g_mean'][-1]:+.3f}")
         return inner(m,st_w,c,pref_,kmask,*rest,**kw)
     L.grad_mask=gm
