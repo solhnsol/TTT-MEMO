@@ -6,6 +6,7 @@ import sys,os,json,pathlib,time,gc,hashlib,re
 import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import e57_natmask_run as NM
+import e57_qband_run as QR
 import e57_pqa2_run as P2
 import e57_pqa6_run as P6
 import e57_pqa15_run as P15
@@ -29,7 +30,7 @@ def write_stage(a):
         for arm in ARMS:
             ma,mult=NM.parse_arm(arm,'ALLQ128');mode=NM.arm_mode(arm)
             L=C.Ladder55(rt,save_dir=out/'states'/f'g{gid}_{arm}',canary=can);L.rec_cache=rc
-            uv=NM.KeyMatchedQ(ma[3],BAND,int(gid),lg) if ma.startswith('KEY') else SM(ma,masks,lg)
+            uv=NM.KeyMatchedQ(ma[3],BAND,int(gid),lg) if ma.startswith('KEY') else (QR.SelMaskQ('NATQ',masks,lg) if ma=='NATQ' else SM(ma,masks,lg))
             hold={};logfull=ma!='NATQ';uv=NM.with_base(uv,hold,L if (mode or logfull) else None,LD.jnp,full_every=every if logfull else 0,always_full=bool(mode))
             L.write_step=NM.swap_step(L.write_step,mult,mode,hold,every=every if logfull else 0);dch={c_ for c_ in range(0,nch,every)}|{nch-1};dfn=NM.make_nat_loss_diag(L,LD,s3,rt,hold,lg)
             res=L.run_stream(NM.ENGINE,1,ids,nch=nch,tag=f'pqa28g{gid}{arm}',log=lambda *x:None,read_chunks=rd_ch,canary_chunks=rd_ch,chunks_meta=[{'sents':[]} for _ in range(nch)],uv=uv,diag_fn=dfn,diag_chunks=dch)
