@@ -69,6 +69,29 @@ def mult_step(orig,mult):
         newp=jax.tree.map(lambda n,o:(o.astype(f32)+(n.astype(f32)-o.astype(f32))*mult).astype(n.dtype),newp,old)
         return newp,gn,coef,ce
     return ws
+def make_nat_loss_diag(L,LD,s3,rt,holder,log=print):
+    """Council 11/09 prediction-path loss: at the chunks of diag_chunks, BEFORE the write of the chunk, the chunk is scored with the FULL natural local context (natural keep in prefix and suffix, current weights, same suffix state), the way e57_closure_suffixband_run does it. holder['base'] is the natural 1-D keep of the chunk, stored by the uv object's keep(). Returns the diag_fn (wants_ctx) -> per-chunk dict {nat_nll_mean, upd_nll_mean (masked update-path loss on the same tokens)}."""
+    jax,jnp,eqx=LD.jax,LD.jnp,LD.eqx
+    @eqx.filter_jit
+    def logp_mask(m,st,c,pref,kmask):
+        s3.S3SUF['kmask']=kmask
+        try:res=m.language_model.suffix_call(prefix_outputs=pref,state=st,seq=c)
+        finally:s3.S3SUF.clear()
+        lp=jax.nn.log_softmax(res.logits.astype(jnp.float32),axis=-1);return jnp.take_along_axis(lp,c.target_tokens[:,None],axis=-1)[:,0]
+    def fn(k,m,Kc,Vc,keep,ids_k,ctx=None):
+        base=np.asarray(holder['base'],bool);assert base.ndim==1
+        with rt.mesh:
+            pref_n=L.prefix_masked(m,jnp.asarray(ids_k,dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),jnp.asarray(base))
+            lp=np.asarray(logp_mask(m,ctx['st_w'],ctx['c'],pref_n,jnp.asarray(base)),np.float64)
+            lpu=np.asarray(logp_mask(m,ctx['st_w'],ctx['c'],ctx['pref_w'],jnp.asarray(np.asarray(keep,bool))),np.float64)
+        lm=np.asarray(ctx['c'].loss_masks,bool);r=dict(nat_nll_mean=float((-lp[lm]).mean()),upd_nll_mean=float((-lpu[lm]).mean()),n=int(lm.sum()))
+        log(f'  predict-path chunk {k}: natural-context nll {r["nat_nll_mean"]:.4f}, update-path nll {r["upd_nll_mean"]:.4f}');return r
+    fn.wants_ctx=True;return fn
+def with_base(uv,holder):
+    """wrap uv.keep so that the natural 1-D keep of the chunk is stored in holder['base'] (for make_nat_loss_diag)"""
+    o=uv.keep
+    def keep(k,m,Kc,Vc,ids_k,keep_all):holder['base']=np.asarray(keep_all,bool);return o(k,m,Kc,Vc,ids_k,keep_all)
+    uv.keep=keep;return uv
 def selftest():
     QR.selftest()
     assert parse_arm('NATS','ALLQ256')==('NATQ',1.0) and parse_arm('NATSx4','ALLQ256')==('NATQ',4.0)
@@ -90,6 +113,7 @@ def selftest():
     assert verdict_rules(nt,aq,[0.11,0.13,0.10,0.12])['verdict'].startswith('split')
     assert verdict_rules(nt,[0.10,0.13,0.10,0.11],aq)['verdict'].startswith('not attributable')
     assert verdict_rules(nt,aq,[0.25,0.33,0.20,0.34])['verdict'].startswith('undecided')
+    h={};u=with_base(KeyMatchedQ('C',256,0,lambda *x:None),h);nat2=np.ones(WIN+CH,bool);u.keep(3,None,None,None,None,nat2);assert h['base'] is not None and h['base'].shape==(WIN+CH,)
     # multiplier wrapper on a toy 'model'
     import jax.numpy as jnp
     class M_:
@@ -99,7 +123,7 @@ def selftest():
     n1=mult_step(orig,1.0)(M_())[0]['w'];assert np.allclose(np.asarray(n1),0.9,atol=1e-6)
     print('e57_natmask_run selftest ok')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--masks');ap.add_argument('--mask-arm',default='ALLQ256');ap.add_argument('--rand-arm',default='RANDQ256P50');ap.add_argument('--arms');ap.add_argument('--tag',default='synng');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--masks');ap.add_argument('--mask-arm',default='ALLQ256');ap.add_argument('--rand-arm',default='RANDQ256P50');ap.add_argument('--arms');ap.add_argument('--tag',default='synng');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--nat-loss-every',type=int,default=8);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
     import e57_syn_pass as SP
@@ -118,14 +142,14 @@ def main():
         fn=OUT/f'E55_{a.tag}_{ar}_s{seed}.saved.json'
         if fn.exists() and not a.rerun:lg('exists, reused:',fn);continue
         ma,mult=spec[ar];uv=(KeyMatchedQ(ma[3],masks[f'band_{ma[5:]}'],seed,lg) if ma.startswith('KEY') else QR.SelMaskQ(ma,masks,lg));L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_{ar}_s{seed}',canary=can);got={}
-        L.write_step=mult_step(L.write_step,mult)
+        L.write_step=mult_step(L.write_step,mult);hold={};uv=with_base(uv,hold);dchunks={c_ for c_ in range(K0,nch,a.nat_loss_every)}|{nch-1} if a.nat_loss_every>0 else set();dfn=make_nat_loss_diag(L,LD,s3,rt,hold,lg) if dchunks else None
         def partial(k,m,ar=ar,got=got):
             x=R_.at((k+1)//p,m);got[(k+1)//p]=x
             rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':'v3_16_1','seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':False})[ar];json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{seed}.read.partial.json','w'))
             return {c_:'ok' for c_ in x}
         hook_chunks=[a_*p-1 for a_ in sorted(set(ro)|set(ri))] if not a.smoke else [nch-1]
         t0=time.monotonic();lg(f'== seed {seed} {ar} (mask {ma}, lr x{mult:g}): {nch} chunks, reads out {ro} in {ri}')
-        r=L.run_stream(ENGINE,p,ids,decoy_ids=S['decoy'][0] if 'decoy' in S else None,bg_ids=S['nofact'][0] if 'nofact' in S else (S['bg'][0] if 'bg' in S else None),read_chunks=reads,canary_chunks=canary_chunks,nch=nch,tag=ar+f'_s{seed}',log=lg,read_hook=partial,hook_chunks=hook_chunks,chunks_meta=w['chunks'],uv=uv);r.pop('model',None)
+        r=L.run_stream(ENGINE,p,ids,decoy_ids=S['decoy'][0] if 'decoy' in S else None,bg_ids=S['nofact'][0] if 'nofact' in S else (S['bg'][0] if 'bg' in S else None),read_chunks=reads,canary_chunks=canary_chunks,nch=nch,tag=ar+f'_s{seed}',log=lg,read_hook=partial,hook_chunks=hook_chunks,chunks_meta=w['chunks'],uv=uv,diag_fn=dfn,diag_chunks=dchunks);r.pop('model',None)
         lgs=r['log'];r['summary']={'mean_update_norm':float(np.mean([e['update_norm'] for e in lgs])),'clip_bind_frac':r['clip_bind_frac'],'cum_update_norm':r['cum_update_norm'],'mean_ce':float(np.mean([e['ce'] for e in lgs])),'mean_gnorm':float(np.mean([e['gnorm'] for e in lgs])),'mean_coef':float(np.mean([e['coef'] for e in lgs])),'median_update_norm':float(np.median([e['update_norm'] for e in lgs])),'clip_frac_coef_lt1':float(np.mean([e['coef']<1.0 for e in lgs])),'mean_masked_row_frac':float(np.mean([e.get('q_banded',0) for e in lgs])/CH),'mean_hidden_keys_row':float(np.mean([e['hidden_keys_row_mean'] for e in lgs if 'hidden_keys_row_mean' in e] or [0]))}
         r.update(stream_sha=sha,world_seed=seed,cell='v3_16_1',read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,k=w['k'],n=w['n'],bank=w['bank_kind'],engine='SGD(clip)',mask_arm=ma,band=(int(masks[f'band_{ma[5:] if ma.startswith("KEY") else ma}']) if ma!='NATQ' else None),lr_mult=mult,arm=ar)
         w0=r['canary_w0']
