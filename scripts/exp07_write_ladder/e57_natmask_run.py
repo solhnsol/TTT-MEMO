@@ -158,17 +158,17 @@ def selftest():
     n1=mult_step(orig,1.0)(M_())[0]['w'];assert np.allclose(np.asarray(n1),0.9,atol=1e-6)
     print('e57_natmask_run selftest ok')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--masks');ap.add_argument('--mask-arm',default='ALLQ256');ap.add_argument('--rand-arm',default='RANDQ256P50');ap.add_argument('--arms');ap.add_argument('--tag',default='synng');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--nat-loss-every',type=int,default=8);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--save-apps',default='128');ap.add_argument('--out');ap.add_argument('--masks');ap.add_argument('--mask-arm',default='ALLQ256');ap.add_argument('--rand-arm',default='RANDQ256P50');ap.add_argument('--arms');ap.add_argument('--tag',default='synng');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--nat-loss-every',type=int,default=8);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     import e55_run as R55,e55_read as R,e55_gpu as RG,gen_facts as G
     import e57_syn_pass as SP
     register_engine()
-    seed=a.seed;OUT=pathlib.Path(a.out);OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');ro=[16,32,64,128];ri=[128];sv=[128];CH=1024
+    seed=a.seed;OUT=pathlib.Path(a.out);OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');ro=[16,32,64,128];ri=[128];sv=[int(x) for x in a.save_apps.split(',')];CH=1024
     masks={k:v for k,v in np.load(a.masks,allow_pickle=True).items()} if a.masks and os.path.exists(a.masks) else {};masks.setdefault(f'band_{a.mask_arm}',np.asarray(int(re.sub(r'\D','',a.mask_arm))));masks.setdefault(f'all_{a.mask_arm}',np.asarray(1)) if a.mask_arm.startswith('ALLQ') else None;masks['band_INF']=np.asarray(10**6);masks['all_INF']=np.asarray(1);spec={ar:parse_arm(ar,a.mask_arm,a.rand_arm) for ar in arms}
     for ar,(ma,_) in spec.items():assert ma=='NATQ' or f'band_{ma[5:] if ma.startswith("KEY") else ma}' in masks,('mask arm not in the mask file',ar,ma)
     LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     lg=lambda *x:print(*x,flush=True)
-    enc,w,tf=R55.build(SP.synth_args(seed),seed,read_apps=set(ro)|set(ri)|set(sv),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];p=w['p'];assert p==1
+    enc,w,tf=R55.build(SP.synth_args(seed,a.cell),seed,read_apps=set(ro)|set(ri)|set(sv),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];p=w['p'];assert p==1
     ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w)),'stream hash mismatch'
     P=R.plan(w,enc);items=P['items'];reads=[a_*p-1 for a_ in sv] if not a.smoke else [nch-1];canary_chunks=reads
     tok=rt.tok;raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=R55.out_tail_8192(LD,tok,rt.bos,R55.forbid_list(w))
@@ -181,17 +181,17 @@ def main():
         L.write_step=swap_step(L.write_step,mult,mode,hold,every=a.nat_loss_every if logfull else 0);dchunks={c_ for c_ in range(K0,nch,a.nat_loss_every)}|{nch-1} if a.nat_loss_every>0 else set();dfn=make_nat_loss_diag(L,LD,s3,rt,hold,lg) if dchunks else None
         def partial(k,m,ar=ar,got=got):
             x=R_.at((k+1)//p,m);got[(k+1)//p]=x
-            rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':'v3_16_1','seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':False})[ar];json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{seed}.read.partial.json','w'))
+            rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':False})[ar];json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{seed}.read.partial.json','w'))
             return {c_:'ok' for c_ in x}
         hook_chunks=[a_*p-1 for a_ in sorted(set(ro)|set(ri))] if not a.smoke else [nch-1]
         t0=time.monotonic();lg(f'== seed {seed} {ar} (mask {ma}, lr x{mult:g}): {nch} chunks, reads out {ro} in {ri}')
         r=L.run_stream(ENGINE,p,ids,decoy_ids=S['decoy'][0] if 'decoy' in S else None,bg_ids=S['nofact'][0] if 'nofact' in S else (S['bg'][0] if 'bg' in S else None),read_chunks=reads,canary_chunks=canary_chunks,nch=nch,tag=ar+f'_s{seed}',log=lg,read_hook=partial,hook_chunks=hook_chunks,chunks_meta=w['chunks'],uv=uv,diag_fn=dfn,diag_chunks=dchunks);r.pop('model',None);r['wlog']=hold.get('wlog',[]);r['swap_mode']=mode
         lgs=r['log'];r['summary']={'mean_update_norm':float(np.mean([e['update_norm'] for e in lgs])),'clip_bind_frac':r['clip_bind_frac'],'cum_update_norm':r['cum_update_norm'],'mean_ce':float(np.mean([e['ce'] for e in lgs])),'mean_gnorm':float(np.mean([e['gnorm'] for e in lgs])),'mean_coef':float(np.mean([e['coef'] for e in lgs])),'median_update_norm':float(np.median([e['update_norm'] for e in lgs])),'clip_frac_coef_lt1':float(np.mean([e['coef']<1.0 for e in lgs])),'mean_masked_row_frac':float(np.mean([e.get('q_banded',0) for e in lgs])/CH),'mean_hidden_keys_row':float(np.mean([e['hidden_keys_row_mean'] for e in lgs if 'hidden_keys_row_mean' in e] or [0]))}
-        r.update(stream_sha=sha,world_seed=seed,cell='v3_16_1',read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,k=w['k'],n=w['n'],bank=w['bank_kind'],engine='SGD(clip)',mask_arm=ma,band=(int(masks[f'band_{ma[5:] if ma.startswith("KEY") else ma}']) if ma!='NATQ' else None),lr_mult=mult,arm=ar)
+        r.update(stream_sha=sha,world_seed=seed,cell=a.cell,read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,k=w['k'],n=w['n'],bank=w['bank_kind'],engine='SGD(clip)',mask_arm=ma,band=(int(masks[f'band_{ma[5:] if ma.startswith("KEY") else ma}']) if ma!='NATQ' else None),lr_mult=mult,arm=ar)
         w0=r['canary_w0']
         for k,e in r['reads'].items():
             if 'canary' in e:
                 for key in ('_gen_nll','_tail_nll'):lg(f'  canary {key} at chunk {k}: {e["canary"][key]-w0[key]:+.4f}')
-        rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':'v3_16_1','seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':True,'place_len':w['place_len']})[ar];fr=OUT/f'E55_{a.tag}_{ar}_s{seed}.read.json';json.dump(rec,open(fr,'w'));json.dump(r,open(fn,'w'),default=float)
+        rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':True,'place_len':w['place_len']})[ar];fr=OUT/f'E55_{a.tag}_{ar}_s{seed}.read.json';json.dump(rec,open(fr,'w'));json.dump(r,open(fn,'w'),default=float)
         lg('wrote',fn,f'{time.monotonic()-t0:.0f}s');gc.collect();LD.jax.clear_caches()
 if __name__=='__main__':main()
