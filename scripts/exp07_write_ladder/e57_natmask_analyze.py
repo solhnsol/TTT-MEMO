@@ -24,6 +24,19 @@ def main():
         for s in seeds:k0s.setdefault(arm,set()).add(json.load(open(D/f'E55_{a.tag}_{arm}_s{s}.saved.json')).get('K0',8))      # files without the tag are the K0 = 8 jobs 1270 / 1272
     allk=set().union(*k0s.values());assert len(allk)==1,('mask arms with different K0: never pool across K0',k0s)
     out={'K0':sorted(allk)[0],'run_type':a.run_type,'seeds':seeds,'per_arm':{},'contrasts':{}}
+    K0v=sorted(allk)[0];gates={}
+    act={}
+    for s in seeds:
+        x=json.load(open(D/f'E55_{a.tag}_NATMASK_s{s}.saved.json'))['log'];y=json.load(open(D/f'E55_{a.tag}_NATS_s{s}.saved.json'))['log'];act[s]=bool(x[K0v]['ce']!=y[K0v]['ce'] or x[K0v]['update_norm']!=y[K0v]['update_norm'])
+    gates['activity_NATMASK_differs_from_NATS_at_chunk_K0']=act                    # the mask is active from chunk K0 on (Council 11/10); the old 'identical before chunk 8' check is removed
+    g1={}
+    for s in seeds:
+        fb=D/f'E55_{a.tag}_NATBINF_s{s}.saved.json'
+        if fb.exists():
+            b=json.load(open(fb));n=json.load(open(D/f'E55_{a.tag}_NATS_s{s}.saved.json'));g1[s]=bool(len(b['log'])==len(n['log']) and all(u[k]==v[k] for u,v in zip(b['log'],n['log']) for k in ('update_norm','ce','gnorm','coef')) and b.get('final_hash')==n.get('final_hash'))
+    gates['G1_NATBINF_eq_NATS']=g1 if g1 else 'not available (no NATBINF arm in this run)'
+    gates['regression_and_unit_gates']='regression gate = job 1279 first step (new code at K0=8 vs job 1270 bit for bit); 256-token unit test = e57_oracle_run selftest'
+    out['gates']=gates
     for arm in ARMS:
         x=acc[arm];out['per_arm'][arm]=dict(mean_acc=float(x.mean()),per_seed=[float(v) for v in x.mean(1)],acc128=float(acc128[arm].mean()),canary_gen_mean=float(np.mean([e['gen'] for e in stats[arm]])),canary_tail_mean=float(np.mean([e['tail'] for e in stats[arm]])),clip_frac=float(np.mean([e['clip'] for e in stats[arm]])),median_update_norm=float(np.mean([e['upd'] for e in stats[arm]])))
     C={'NATMASK-NATS':('NATMASK','NATS'),'NATMASK-NATMASKC':('NATMASK','NATMASKC'),'DIRmaskNORMfull-NATS':('DIRmaskNORMfull','NATS'),'DIRfullNORMmask-NATS':('DIRfullNORMmask','NATS'),'DIRmaskNORMfull-NATMASK':('DIRmaskNORMfull','NATMASK'),'DIRfullNORMmask-NATMASK':('DIRfullNORMmask','NATMASK')}
