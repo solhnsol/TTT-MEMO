@@ -30,8 +30,8 @@ def holm(p):
 def logs(path):
     r=json.load(open(path));return r
 def same(a,b,keys=('update_norm','ce','gnorm','coef')):return all(x[k]==y[k] for x,y in zip(a['log'],b['log']) for k in keys) and len(a['log'])==len(b['log']) and a.get('final_hash')==b.get('final_hash')
-def analyze(D,seeds,tag4='orcp4',tag16='orcp16',gate_seed=62):
-    D=pathlib.Path(D);out={'seeds':list(seeds),'n_seeds':len(seeds),'gates':{},'p4':{},'p16':{}}
+def analyze(D,seeds,tag4='orcp4',tag16='orcp16',gate_seed=62,run_type='pilot_exploration'):
+    D=pathlib.Path(D);out={'run_type':run_type,'seeds':list(seeds),'n_seeds':len(seeds),'gates':{},'p4':{},'p16':{}}
     g2={}
     for s in seeds:g2[f'p4_NATBINF=NATS_s{s}']=bool(same(logs(D/f'E55_{tag4}_NATBINF_s{s}.saved.json'),logs(D/f'E55_{tag4}_NATS_s{s}.saved.json')))
     f=lambda a,b:D/f'E55_{tag16}_{a}_s{gate_seed}.saved.json'
@@ -44,7 +44,7 @@ def analyze(D,seeds,tag4='orcp4',tag16='orcp16',gate_seed=62):
             for s in seeds:
                 pth=D/f'E55_{tag}_{arm}_s{s}.saved.json'
                 if pth.exists():k0s.setdefault((tag,arm),set()).add(logs(pth).get('K0'))
-    out['K0_by_arm']={f'{t}:{a_}':sorted(v,key=lambda z:(z is None,z)) for (t,a_),v in k0s.items()};base_k0={k for (t,a_),v in k0s.items() if a_!='NATMASK_K08' for k in v};assert len(base_k0)==1,('K0 differs between arms: never pool across K0',base_k0)
+    out['K0_by_arm']={f'{t}:{a_}':sorted(v,key=lambda z:(z is None,z)) for (t,a_),v in k0s.items()};base_k0={k for (t,a_),v in k0s.items() if a_!='NATMASK_K08' for k in v};out['K0']=sorted(base_k0)[0] if len(base_k0)==1 else None;assert len(base_k0)==1,('K0 differs between arms: never pool across K0',base_k0)
     out['gates']['G2_exact_bit_identity']=g2;out['gates']['G2_pass']=bool(all(g2.values()))
     g3={};
     for tag,arms in ((tag4,P4),(tag16,P16)):
@@ -105,8 +105,8 @@ def selftest():
     assert holm({'a':0.01,'b':0.04})=={'a':0.02,'b':0.04} and abs(signflip([1,1,1,1,1])[0]-1/32)<1e-12 and abs(signflip([1,1,1,1,1,1])[1]-2/64)<1e-12 and seeds_needed(1.0,0.5)>=8
     print('e57_oracle_analyze selftest ok')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds');ap.add_argument('--json');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds');ap.add_argument('--json');ap.add_argument('--run-type',default='pilot_exploration',choices=['confirmation','k0_sensitivity','pilot_exploration','legacy_k08']);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest()
     else:
-        r=analyze(a.dir,[int(x) for x in a.seeds.split(',')]);print(json.dumps(r,indent=1,default=float))
+        r=analyze(a.dir,[int(x) for x in a.seeds.split(',')],run_type=a.run_type);print(json.dumps(r,indent=1,default=float))
         if a.json:json.dump(r,open(a.json,'w'),indent=1,default=float)

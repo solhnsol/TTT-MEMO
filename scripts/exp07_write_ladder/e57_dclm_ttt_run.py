@@ -39,7 +39,7 @@ def run(a):
             t0=time.monotonic();lg(f'== stream {si} {arm} (mask {ma}, lr x{mult:g}): {nch} chunks')
             r=L.run_stream(NM.ENGINE,1,ids,nch=nch,tag=f'dclm{si}{arm}',log=lambda *x:None,read_chunks=(),canary_chunks=None,chunks_meta=[{'sents':[]} for _ in range(nch)],uv=uv,diag_fn=dfn,diag_chunks=set(range(nch)));r.pop('model',None)
             nll=[float(r['diag'][k]['nat_nll_mean']) for k in range(nch)]
-            rec=dict(arm=arm,stream=si,docs=[si*DOCS,si*DOCS+DOCS-1],n_chunks=nch,mask_arm=ma,lr_mult=mult,K0=K0,nll_pre=nll,ce=[e['ce'] for e in r['log']],update_norm=[e['update_norm'] for e in r['log']],gnorm=[e['gnorm'] for e in r['log']],coef=[e['coef'] for e in r['log']],sec=time.monotonic()-t0,ids_sha=hashlib.sha256(ids.tobytes()).hexdigest())
+            rec=dict(arm=arm,stream=si,docs=[si*DOCS,si*DOCS+DOCS-1],n_chunks=nch,mask_arm=ma,lr_mult=mult,K0=(a.k0 if arm in ('NATMASK','NATMASKC') else None),nll_pre=nll,ce=[e['ce'] for e in r['log']],update_norm=[e['update_norm'] for e in r['log']],gnorm=[e['gnorm'] for e in r['log']],coef=[e['coef'] for e in r['log']],sec=time.monotonic()-t0,ids_sha=hashlib.sha256(ids.tobytes()).hexdigest())
             if not np.all(np.isfinite(nll)):rec['diverged']=True
             json.dump(rec,open(fn,'w'),default=float);lg('wrote',fn,f'{rec["sec"]:.0f}s mean nll chunks>=8: {np.mean(nll[K0:]):.4f}');del L,r;gc.collect();LD.jax.clear_caches()
         del rc,Kh0,Vh0;gc.collect()
@@ -55,7 +55,14 @@ def analyze(a):
         if not all(f.exists() for f in fs) and getattr(a,'ref_dir',None):fs=[pathlib.Path(a.ref_dir)/f'E57_dclmttt_{arm}_st{s}.json' for s in range(ns)]      # W0 / NATS of the K0 = 8 run (K0 does not change them)
         if all(f.exists() for f in fs):
             recs=[json.load(open(f)) for f in fs];assert not any(r.get('diverged') for r in recs),('diverged',arm);N[arm]=np.array([r['nll_pre'] for r in recs])
-    res={'n_pairs':int(ns*(NCH-K0)),'per_arm_mean_nll_chunks_8_127':{k:float(v[:,K0:].mean()) for k,v in N.items()}}
+    k0s={}
+    for arm in ARMS_ALL:
+        for s_ in range(ns):
+            f=out/f'E57_dclmttt_{arm}_st{s_}.json'
+            if not f.exists() and getattr(a,'ref_dir',None):f=pathlib.Path(a.ref_dir)/f'E57_dclmttt_{arm}_st{s_}.json'
+            if f.exists() and arm in ('NATMASK','NATMASKC'):k0s.setdefault(arm,set()).add(json.load(open(f)).get('K0',8))      # records without the tag are the K0 = 8 job 1274
+    allk=set().union(*k0s.values()) if k0s else set();assert len(allk)<=1,('mask arms with different K0: never pool across K0',k0s)
+    res={'K0_mask_arms':(sorted(allk)[0] if allk else None),'run_type':getattr(a,'run_type',None),'n_pairs':int(ns*(NCH-K0)),'per_arm_mean_nll_chunks_8_127':{k:float(v[:,K0:].mean()) for k,v in N.items()}}
     def diff(x,y):return N[x][:,K0:]-N[y][:,K0:]
     for x,y in (('NATMASK','NATS'),('NATMASKC','NATS'),('NATS','W0'),('NATMASK','W0'),('NATMASKC','W0')):
         if x in N and y in N:
@@ -76,7 +83,7 @@ def selftest():
     d=np.full((4,120),0.004)+np.random.default_rng(1).normal(0,0.001,(4,120));m,ccl,cch=cluster_ci(d);assert abs(m-0.004)<5e-4 and ccl[0]<=m<=ccl[1] and cch[0]<=m<=cch[1]
     print('e57_dclm_ttt_run selftest ok')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--stage',default='run');ap.add_argument('--out');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--streams',default='0,1,2,3');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--json');ap.add_argument('--selftest',action='store_true');ap.add_argument('--k0',type=int,default=8);ap.add_argument('--ref-dir');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--stage',default='run');ap.add_argument('--out');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--streams',default='0,1,2,3');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--json');ap.add_argument('--selftest',action='store_true');ap.add_argument('--k0',type=int,default=8);ap.add_argument('--run-type',default=None,choices=[None,'confirmation','k0_sensitivity','pilot_exploration','legacy_k08']);ap.add_argument('--ref-dir');a=ap.parse_args()
     if a.selftest:selftest()
     elif a.stage=='run':run(a)
     else:analyze(a)
