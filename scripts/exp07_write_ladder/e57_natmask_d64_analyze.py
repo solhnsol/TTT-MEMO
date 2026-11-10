@@ -24,7 +24,7 @@ def holm(p):
     k=sorted(p,key=lambda z:p[z]);m=len(k);adj={};run=0.0
     for i,z in enumerate(k):run=max(run,min(1.0,(m-i)*p[z]));adj[z]=run
     return adj
-def analyze(D,seeds,tag='synngd64'):
+def analyze(D,seeds,tag='synngd64',run_type='confirmation'):
     A={a:[] for a in ARMS};I={a:[] for a in ARMS};S={a:[] for a in ARMS};C={a:[] for a in ARMS}
     for a in ARMS:
         for s in seeds:
@@ -33,7 +33,11 @@ def analyze(D,seeds,tag='synngd64'):
             o,inw,_,nf=accs(f);A[a].append(o['128']);I[a].append(inw);S[a].append(slope(o))
             w0=r['canary_w0'];last=max(int(k) for k in r['reads']);cn=r['reads'][str(last)]['canary'];C[a].append(cn['_tail_nll']-w0['_tail_nll'])
     A={a:np.array(v) for a,v in A.items()};S={a:np.array(v) for a,v in S.items()}
-    res={'seeds':seeds,'n_fact_per_seed':nf,'acc128':{a:[float(x) for x in A[a]] for a in ARMS}}
+    k0s=set()
+    for a in ('NATMASK','NATMASKC','DIRmaskNORMfull','DIRfullNORMmask'):
+        for s in seeds:k0s.add(json.load(open(D/f'E55_{tag}_{a}_s{s}.saved.json')).get('K0',8))      # files without the tag are the K0 = 8 job 1276
+    assert len(k0s)==1,('mask arms with different K0: never pool across K0',k0s)
+    res={'K0':sorted(k0s)[0],'run_type':run_type,'seeds':seeds,'n_fact_per_seed':nf,'acc128':{a:[float(x) for x in A[a]] for a in ARMS}}
     m,lo,hi,p=tci(A['NATMASK']-A['NATS']);res['primary']=dict(contrast='NATMASK-NATS acc128',mean=m,ci95_t=[lo,hi],p=p,superior=bool(lo>0 and m>=0.03))
     fam={'NATMASK-NATMASKC':A['NATMASK']-A['NATMASKC'],'DIRmaskNORMfull-NATS':A['DIRmaskNORMfull']-A['NATS'],'slope(NATMASK)-slope(NATS)':S['NATMASK']-S['NATS']};pv={};res['family']={}
     for k,d in fam.items():
@@ -59,8 +63,8 @@ def selftest():
         r=analyze(td,seeds,'t');assert set(r['family'])=={'NATMASK-NATMASKC','DIRmaskNORMfull-NATS','slope(NATMASK)-slope(NATS)'} and r['gates']['canary_pass'] and 'primary' in r
     print('e57_natmask_d64_analyze selftest ok')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds');ap.add_argument('--tag',default='synngd64');ap.add_argument('--json');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds');ap.add_argument('--tag',default='synngd64');ap.add_argument('--json');ap.add_argument('--run-type',default='confirmation',choices=['confirmation','k0_sensitivity','pilot_exploration','legacy_k08']);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest()
     else:
-        r=analyze(pathlib.Path(a.dir),[int(x) for x in a.seeds.split(',')],a.tag);print(json.dumps(r,indent=1,default=float))
+        r=analyze(pathlib.Path(a.dir),[int(x) for x in a.seeds.split(',')],a.tag,a.run_type);print(json.dumps(r,indent=1,default=float))
         if a.json:json.dump(r,open(a.json,'w'),indent=1,default=float)

@@ -9,7 +9,7 @@ def item_acc(path):
     d=json.load(open(path));g=np.array(d['meta']['gold_idx']);fact=np.array([k=='fact' for k in d['meta']['kind']])
     A=np.stack([(np.array(d['read'][a]['out']).argmax(1)==g)[fact] for a in EXPO]).astype(float);return A.mean(0),A[-1]      # exposure-mean accuracy per fact, accuracy at 128
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds');ap.add_argument('--tag',default='synng');ap.add_argument('--json');a=ap.parse_args();D=pathlib.Path(a.dir);seeds=[int(x) for x in a.seeds.split(',')]
+    ap=argparse.ArgumentParser();ap.add_argument('--dir');ap.add_argument('--seeds');ap.add_argument('--tag',default='synng');ap.add_argument('--json');ap.add_argument('--run-type',default='legacy_k08',choices=['confirmation','k0_sensitivity','pilot_exploration','legacy_k08']);a=ap.parse_args();D=pathlib.Path(a.dir);seeds=[int(x) for x in a.seeds.split(',')]
     acc={};acc128={};stats={}
     for arm in ARMS:
         m=[];m128=[];st=[]
@@ -18,7 +18,12 @@ def main():
             assert f.exists() and sv.exists(),('missing',f);x,y=item_acc(f);m.append(x);m128.append(y);r=json.load(open(sv));w0=r['canary_w0']
             cn=r['reads'][str(max(int(k) for k in r['reads']))]['canary'];st.append(dict(gen=cn['_gen_nll']-w0['_gen_nll'],tail=cn['_tail_nll']-w0['_tail_nll'],clip=r['summary']['clip_frac_coef_lt1'],upd=r['summary']['median_update_norm']))
         acc[arm]=np.stack(m);acc128[arm]=np.stack(m128);stats[arm]=st
-    out={'seeds':seeds,'per_arm':{},'contrasts':{}}
+    k0s={}
+    for arm in ARMS:
+        if arm=='NATS':continue                                                     # NATS does not depend on K0
+        for s in seeds:k0s.setdefault(arm,set()).add(json.load(open(D/f'E55_{a.tag}_{arm}_s{s}.saved.json')).get('K0',8))      # files without the tag are the K0 = 8 jobs 1270 / 1272
+    allk=set().union(*k0s.values());assert len(allk)==1,('mask arms with different K0: never pool across K0',k0s)
+    out={'K0':sorted(allk)[0],'run_type':a.run_type,'seeds':seeds,'per_arm':{},'contrasts':{}}
     for arm in ARMS:
         x=acc[arm];out['per_arm'][arm]=dict(mean_acc=float(x.mean()),per_seed=[float(v) for v in x.mean(1)],acc128=float(acc128[arm].mean()),canary_gen_mean=float(np.mean([e['gen'] for e in stats[arm]])),canary_tail_mean=float(np.mean([e['tail'] for e in stats[arm]])),clip_frac=float(np.mean([e['clip'] for e in stats[arm]])),median_update_norm=float(np.mean([e['upd'] for e in stats[arm]])))
     C={'NATMASK-NATS':('NATMASK','NATS'),'NATMASK-NATMASKC':('NATMASK','NATMASKC'),'DIRmaskNORMfull-NATS':('DIRmaskNORMfull','NATS'),'DIRfullNORMmask-NATS':('DIRfullNORMmask','NATS'),'DIRmaskNORMfull-NATMASK':('DIRmaskNORMfull','NATMASK'),'DIRfullNORMmask-NATMASK':('DIRfullNORMmask','NATMASK')}
