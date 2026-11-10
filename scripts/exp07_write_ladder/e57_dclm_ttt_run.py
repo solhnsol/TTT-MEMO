@@ -20,7 +20,7 @@ def arm_spec(arm):
     return {'W0':('NATQ',0.0),'NATS':('NATQ',1.0),'NATMASK':('ALLQ256',1.0),'NATMASKC':('KEYC:ALLQ256',1.0)}[arm]
 def run(a):
     import e55_run as R55
-    out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True);NM.register_engine()
+    out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True);NM.register_engine();NM.K0=a.k0;QR.K0=a.k0
     LD,s3,C=R55.lab();rt=LD.Runtime();lg=lambda *x:print(*x,flush=True)
     S=streams();masks={'band_ALLQ256':np.asarray(256),'all_ALLQ256':np.asarray(1)}
     for si in [int(x) for x in a.streams.split(',')]:
@@ -52,6 +52,7 @@ def analyze(a):
     out=pathlib.Path(a.out);ns=NSTREAM;N={}
     for arm in ARMS_ALL:
         fs=[out/f'E57_dclmttt_{arm}_st{s}.json' for s in range(ns)]
+        if not all(f.exists() for f in fs) and getattr(a,'ref_dir',None):fs=[pathlib.Path(a.ref_dir)/f'E57_dclmttt_{arm}_st{s}.json' for s in range(ns)]      # W0 / NATS of the K0 = 8 run (K0 does not change them)
         if all(f.exists() for f in fs):
             recs=[json.load(open(f)) for f in fs];assert not any(r.get('diverged') for r in recs),('diverged',arm);N[arm]=np.array([r['nll_pre'] for r in recs])
     res={'n_pairs':int(ns*(NCH-K0)),'per_arm_mean_nll_chunks_8_127':{k:float(v[:,K0:].mean()) for k,v in N.items()}}
@@ -75,7 +76,7 @@ def selftest():
     d=np.full((4,120),0.004)+np.random.default_rng(1).normal(0,0.001,(4,120));m,ccl,cch=cluster_ci(d);assert abs(m-0.004)<5e-4 and ccl[0]<=m<=ccl[1] and cch[0]<=m<=cch[1]
     print('e57_dclm_ttt_run selftest ok')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--stage',default='run');ap.add_argument('--out');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--streams',default='0,1,2,3');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--json');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--stage',default='run');ap.add_argument('--out');ap.add_argument('--arms',default=','.join(ARMS_ALL));ap.add_argument('--streams',default='0,1,2,3');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--json');ap.add_argument('--selftest',action='store_true');ap.add_argument('--k0',type=int,default=8);ap.add_argument('--ref-dir');a=ap.parse_args()
     if a.selftest:selftest()
     elif a.stage=='run':run(a)
     else:analyze(a)
