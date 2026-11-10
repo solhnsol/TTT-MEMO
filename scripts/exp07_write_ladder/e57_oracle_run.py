@@ -22,7 +22,17 @@ def parse_arm2(name,mask_arm,rand_arm='RANDQ256P50'):
     if name=='NATORACLE':return 'ORACLE',1.0
     if name=='NATHALF':return 'HALF',1.0
     if name=='NATORACLE_RAND':return 'ORACLE_RAND',1.0
+    if name=='NATPLACEBO':return 'PLACEBO',1.0
     return NM.parse_arm(name,mask_arm,rand_arm)
+def clip_step(orig,C):
+    """clip-threshold sensitivity (Council 11/10): arm suffix _clip<C> (e.g. NATS_clip10): the clipped step of the original rule (coef = min(1, 1.0/gn)) is rescaled to the threshold C: step x min(1, C/gn) / coef; C large = effectively no clip. gn = pre-clip gradient norm returned by the step."""
+    import jax,jax.numpy as jnp
+    def ws(m,*a,**k):
+        newp,gn,coef,ce=orig(m,*a,**k);f=float(jnp.minimum(1.0,C/jnp.maximum(gn,1e-30)))/float(coef);f32=jnp.float32;old=m.inner_parameters()
+        newp=jax.tree.map(lambda n,o:(o.astype(f32)+(n.astype(f32)-o.astype(f32))*f).astype(n.dtype),newp,old);return newp,gn,coef,ce
+    return ws
+def split_clip(name):
+    m=re.search(r'_clip(\d+(?:\.\d+)?)$',name);return (name[:m.start()],float(m.group(1))) if m else (name,None)
 def make_token_diag(L,LD,s3,rt,holder,chunks,log=print,grad_every=8):
     """Council 11/10 logging: before the write of every diag chunk, per-token NLL (nat) of (a) the FULL natural context and (b) the update path (the arm's mask) split into fact-sentence tokens of the FIRST exposure of their fact (app 0), of LATER exposures (app >= 1) and filler tokens; token t of a sentence is predicted at position t-1. Every `grad_every`-th chunk also the share of the fact tokens in the clipped-gradient direction: ||g_fact|| x (N_fact / N_total) / ||g_total||, g_fact = gradient of the mean loss over the fact tokens only, same state, same keep as the update (2 extra backward passes)."""
     jax,jnp,eqx=LD.jax,LD.jnp,LD.eqx
@@ -60,6 +70,7 @@ def selftest():
     c=register_cell('v3_32_16_a16');assert c==dict(k=32,n=1,p=16,bank='300',n_app=16,read_apps=(16,)) and G.CELLS['v3_32_16_a16']['p']==16
     try:register_cell('v3_8_16_a16');raise SystemExit('k<p accepted')
     except AssertionError:pass
+    assert split_clip('NATS_clip10')==('NATS',10.0) and split_clip('NATMASK')==('NATMASK',None) and parse_arm2('NATPLACEBO','ALLQ256')==('PLACEBO',1.0)
     print('e57_oracle_run selftest ok')
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--cell',default='v3_16_1');ap.add_argument('--save-apps',default='128');ap.add_argument('--out');ap.add_argument('--masks');ap.add_argument('--mask-arm',default='ALLQ256');ap.add_argument('--rand-arm',default='RANDQ256P50');ap.add_argument('--arms');ap.add_argument('--tag',default='synng');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--nat-loss-every',type=int,default=8);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
@@ -69,8 +80,8 @@ def main():
     import e57_syn_pass as SP
     register_engine()
     seed=a.seed;OUT=pathlib.Path(a.out);OUT.mkdir(parents=True,exist_ok=True);arms=a.arms.split(',');ro=list(cellinfo['read_apps']);ri=[ro[-1]];sv=[ro[-1]] if a.save_apps=='128' and a.cell!='v3_16_1' else [int(x) for x in a.save_apps.split(',')];CH=1024
-    masks={k:v for k,v in np.load(a.masks,allow_pickle=True).items()} if a.masks and os.path.exists(a.masks) else {};masks.setdefault(f'band_{a.mask_arm}',np.asarray(int(re.sub(r'\D','',a.mask_arm))));masks.setdefault(f'all_{a.mask_arm}',np.asarray(1)) if a.mask_arm.startswith('ALLQ') else None;masks['band_INF']=np.asarray(10**6);masks['all_INF']=np.asarray(1);spec={ar:parse_arm2(ar,a.mask_arm,a.rand_arm) for ar in arms}
-    for ar,(ma,_) in spec.items():assert ma in ('NATQ','ORACLE','ORACLE_RAND','HALF') or f'band_{ma[5:] if ma.startswith("KEY") else ma}' in masks,('mask arm not in the mask file',ar,ma)
+    masks={k:v for k,v in np.load(a.masks,allow_pickle=True).items()} if a.masks and os.path.exists(a.masks) else {};masks.setdefault(f'band_{a.mask_arm}',np.asarray(int(re.sub(r'\D','',a.mask_arm))));masks.setdefault(f'all_{a.mask_arm}',np.asarray(1)) if a.mask_arm.startswith('ALLQ') else None;masks['band_INF']=np.asarray(10**6);masks['all_INF']=np.asarray(1);spec={ar:parse_arm2(split_clip(ar)[0],a.mask_arm,a.rand_arm) for ar in arms}
+    for ar,(ma,_) in spec.items():assert ma in ('NATQ','ORACLE','ORACLE_RAND','PLACEBO','HALF') or f'band_{ma[5:] if ma.startswith("KEY") else ma}' in masks,('mask arm not in the mask file',ar,ma)
     LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     lg=lambda *x:print(*x,flush=True)
     enc,w,tf=R55.build(SP.synth_args(seed,a.cell),seed,read_apps=set(ro)|set(ri)|set(sv),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];p=w['p']
@@ -81,9 +92,11 @@ def main():
     for ar in arms:
         fn=OUT/f'E55_{a.tag}_{ar}_s{seed}.saved.json'
         if fn.exists() and not a.rerun:lg('exists, reused:',fn);continue
-        ma,mult=spec[ar];uv=(OM.OracleUV(w['chunks'],K0,lg) if ma=='ORACLE' else OM.OracleRandUV(w['chunks'],seed,K0,lg) if ma=='ORACLE_RAND' else OM.HalfOracleUV(w['chunks'],256,K0,lg) if ma=='HALF' else KeyMatchedQ(ma[3],masks[f'band_{ma[5:]}'],seed,lg) if ma.startswith('KEY') else QR.SelMaskQ(ma,masks,lg));L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_{ar}_s{seed}',canary=can);got={}
-        mode=arm_mode(ar);hold={};logfull=ma!='NATQ';uv=with_base(uv,hold,L if (mode or logfull) else None,LD.jnp,full_every=a.nat_loss_every if logfull else 0,always_full=bool(mode))
-        L.write_step=swap_step(L.write_step,mult,mode,hold,every=a.nat_loss_every if logfull else 0);dchunks={c_ for c_ in range(K0,nch,a.nat_loss_every)}|{nch-1} if a.nat_loss_every>0 else set();dfn=make_token_diag(L,LD,s3,rt,hold,w['chunks'],lg) if dchunks else None
+        ma,mult=spec[ar];uv=(OM.OracleUV(w['chunks'],K0,lg) if ma=='ORACLE' else OM.OracleRandUV(w['chunks'],seed,K0,lg) if ma=='ORACLE_RAND' else OM.PlaceboOracleUV(w['chunks'],K0,lg) if ma=='PLACEBO' else OM.HalfOracleUV(w['chunks'],256,K0,lg) if ma=='HALF' else KeyMatchedQ(ma[3],masks[f'band_{ma[5:]}'],seed,lg) if ma.startswith('KEY') else QR.SelMaskQ(ma,masks,lg));L=C.Ladder55(rt,save_dir=OUT/'states'/f'E55_{a.tag}_{ar}_s{seed}',canary=can);got={}
+        mode=arm_mode(split_clip(ar)[0]);hold={};logfull=ma!='NATQ';uv=with_base(uv,hold,L if (mode or logfull) else None,LD.jnp,full_every=a.nat_loss_every if logfull else 0,always_full=bool(mode))
+        L.write_step=swap_step(L.write_step,mult,mode,hold,every=a.nat_loss_every if logfull else 0);clipv=split_clip(ar)[1]
+        if clipv:L.write_step=clip_step(L.write_step,clipv)
+        dchunks={c_ for c_ in range(K0,nch,a.nat_loss_every)}|{nch-1} if a.nat_loss_every>0 else set();dfn=make_token_diag(L,LD,s3,rt,hold,w['chunks'],lg) if dchunks else None
         def partial(k,m,ar=ar,got=got):
             h0=LD.reuse._hash_pytree(m.inner_parameters())[0];x=R_.at((k+1)//p,m);h1=LD.reuse._hash_pytree(m.inner_parameters())[0];assert h0==h1,'weights changed during the read';hold.setdefault('read_hash',[]).append((k,h0,h1));got[(k+1)//p]=x
             rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':a.cell,'seed':seed,'k':w['k'],'n':w['n'],'p':p,'bank':w['bank_kind'],'tag':a.tag,'complete':False})[ar];json.dump(rec,open(OUT/f'E55_{a.tag}_{ar}_s{seed}.read.partial.json','w'))
@@ -92,7 +105,7 @@ def main():
         t0=time.monotonic();lg(f'== seed {seed} {ar} (mask {ma}, lr x{mult:g}): {nch} chunks, reads out {ro} in {ri}')
         r=L.run_stream(ENGINE,p,ids,decoy_ids=S['decoy'][0] if 'decoy' in S else None,bg_ids=S['nofact'][0] if 'nofact' in S else (S['bg'][0] if 'bg' in S else None),read_chunks=reads,canary_chunks=canary_chunks,nch=nch,tag=ar+f'_s{seed}',log=lg,read_hook=partial,hook_chunks=hook_chunks,chunks_meta=w['chunks'],uv=uv,diag_fn=dfn,diag_chunks=dchunks);r.pop('model',None);r['wlog']=hold.get('wlog',[]);r['swap_mode']=mode;r['read_hash']=hold.get('read_hash',[])
         lgs=r['log'];r['summary']={'mean_update_norm':float(np.mean([e['update_norm'] for e in lgs])),'clip_bind_frac':r['clip_bind_frac'],'cum_update_norm':r['cum_update_norm'],'mean_ce':float(np.mean([e['ce'] for e in lgs])),'mean_gnorm':float(np.mean([e['gnorm'] for e in lgs])),'mean_coef':float(np.mean([e['coef'] for e in lgs])),'median_update_norm':float(np.median([e['update_norm'] for e in lgs])),'clip_frac_coef_lt1':float(np.mean([e['coef']<1.0 for e in lgs])),'mean_masked_row_frac':float(np.mean([e.get('q_banded',0) for e in lgs])/CH),'mean_hidden_keys_row':float(np.mean([e['hidden_keys_row_mean'] for e in lgs if 'hidden_keys_row_mean' in e] or [0]))}
-        r.update(stream_sha=sha,world_seed=seed,cell=a.cell,read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,k=w['k'],n=w['n'],bank=w['bank_kind'],engine='SGD(clip)',mask_arm=ma,band=(int(masks[f'band_{ma[5:] if ma.startswith("KEY") else ma}']) if ma not in ('NATQ','ORACLE','ORACLE_RAND','HALF') else None),lr_mult=mult,arm=ar)
+        r.update(stream_sha=sha,world_seed=seed,cell=a.cell,read_apps_out=ro,read_apps_in=ri,save_apps=sv,sec_total=time.monotonic()-t0,k=w['k'],n=w['n'],bank=w['bank_kind'],engine='SGD(clip)',mask_arm=ma,band=(int(masks[f'band_{ma[5:] if ma.startswith("KEY") else ma}']) if ma not in ('NATQ','ORACLE','ORACLE_RAND','PLACEBO','HALF') else None),lr_mult=mult,arm=ar)
         w0=r['canary_w0']
         for k,e in r['reads'].items():
             if 'canary' in e:
