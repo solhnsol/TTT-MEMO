@@ -50,15 +50,15 @@ def partial_rxs(q):
         for x in dict.fromkeys(pick):
             if len(x)>2:out.append(re.compile(r'(?<![\w])'+re.escape(x)+r'(?![\w])',re.I))
     return out
-def build(variant,ids,tk,tfile,items,iv,UVm,B,ends_old=None,period=None):
-    """-> dict(fr [(chunk,start,len)], txt [str], hidden bool[], strict bool[], partial_only bool[], cross_event_only bool[], event [str], ends); period = tokens of one cycle when ids is the stream repeated for several cycles (article lookup modulo the period)"""
+def build(variant,ids,tk,tfile,items,iv,UVm,B,ends_old=None):
+    """-> dict(fr [(chunk,start,len)], txt [str], hidden bool[], strict bool[], partial_only bool[], cross_event_only bool[], event [str], ends)"""
     n=len(ids)//CH
     if variant=='orc':ends=ends_old if ends_old is not None else UVm.sentence_ends(UVm.tokenizer(tfile),ids[:n*CH])
     else:ends=sentence_ends_v2(UVm.tokenizer(tfile),ids[:n*CH])
     fr=[]
     for c in range(n):
         for s_,e_ in UVm.chunk_sents(ends,c,CH):fr.append((c,c*CH+s_,e_-s_))
-    txt=[tk.decode([int(x) for x in ids[s:s+l]]) for _,s,l in fr];starts=[x[0] for x in iv];P=period or (len(ids)//CH)*CH;art=[max(0,bisect.bisect_right(starts,s%P)-1) for _,s,_l in fr];ev=[iv[a][2] for a in art]
+    txt=[tk.decode([int(x) for x in ids[s:s+l]]) for _,s,l in fr];starts=[x[0] for x in iv];art=[max(0,bisect.bisect_right(starts,s)-1) for _,s,_l in fr];ev=[iv[a][2] for a in art]
     ms=[B.ans_matcher(it['q'])[0] for it in items];nF=len(fr)
     strict_q=[[qi for qi,m in enumerate(ms) if m(t)] for t in txt];strict=np.array([bool(x) for x in strict_q])
     strict_same=np.array([any(items[qi]['event']==ev[j] for qi in strict_q[j]) for j in range(nF)]);cross_only=strict&~strict_same
