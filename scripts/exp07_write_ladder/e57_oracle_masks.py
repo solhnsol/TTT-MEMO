@@ -42,6 +42,22 @@ class HalfOracleUV:
                 seg=np.broadcast_to(base[s:e],(b-a,e-s));reopened+=int((seg&~kp[a:b,s:e]).sum());kp[a:b,s:e]|=seg
         if k%16==0:self.log(f'  HALF chunk {k}: sentence rows {rows}, reopened (row,key) pairs {reopened}')
         return kp,{'uv_arm':'HALF','q_banded':CH,'q_band':self.band,'sentence_rows':rows,'reopened_pairs':reopened,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
+class OracleRandUV:
+    """token-matched random control of OracleUV (Council 11/10): for each sentence of the chunk the same NUMBER of window keys as the oracle hides (the tokens of the earlier same-fact sentences inside the window, intersected with the natural keep) is hidden for all rows of that sentence, but the keys are drawn uniformly at random among the natural-visible window keys that are NOT the oracle keys (seeded by (seed, chunk, sentence index)); sentence rows only, other rows see everything."""
+    def __init__(self,chunks,seed=0,K0=8,log=print):self.chunks=chunks;self.seed=seed;self.K0=K0;self.log=log
+    def keep(self,k,m,Kc,Vc,ids_k,keep_all):
+        base=np.asarray(keep_all,bool)
+        if k<self.K0:return base,{'uv_arm':'ORACLE_RAND','q_banded':0,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
+        kp=np.broadcast_to(base,(CH,WIN+CH)).copy();hid=0;rows=0
+        for i,(a,b,ks) in enumerate(own_earlier(self.chunks,k)):
+            rows+=b-a;orc=np.zeros(WIN+CH,bool)
+            for s0,e0 in ks:orc[s0:e0]=True
+            orc&=base;n=int(orc.sum())
+            if n==0:continue
+            cand=np.nonzero(base[:WIN]&~orc[:WIN])[0];n=min(n,len(cand));pick=np.random.default_rng((self.seed,k,i)).choice(cand,n,replace=False)
+            kp[a:b,pick]=False;hid+=n*(b-a)
+        if k%16==0:self.log(f'  ORACLE_RAND chunk {k}: sentence rows {rows}, hidden (row,key) pairs {hid}')
+        return kp,{'uv_arm':'ORACLE_RAND','q_banded':rows,'masked_pairs':hid,'sentence_rows':rows,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
 def selftest():
     import e55_swap as E
     rng=np.random.default_rng(0);nch=12;chunks=[]
@@ -65,6 +81,11 @@ def selftest():
     n0,_=HalfOracleUV(chunks).keep(3,None,None,None,None,base);assert n0.ndim==1
     # the half-oracle sees strictly fewer keys than the natural window and no more than band + own-fact exposures
     assert hk.sum()<base.sum()*CH and (hk>=band).all()
+    ro_,_=OracleRandUV(chunks,5,log=lambda *x:None).keep(k,None,None,None,None,base)
+    assert (~ro_).sum()==(~ok).sum() and not np.array_equal(ro_,ok)          # same number of hidden (row, key) pairs as the oracle, other keys
+    for a_,b_,ks_ in own_earlier(chunks,k):
+        n_=sum(e-s for s,e in ks_);assert (~ro_[a_:b_]).sum(1).tolist()==[n_]*(b_-a_)      # per sentence row exactly the oracle count
+    assert ro_[5].all() and np.array_equal(ro_,OracleRandUV(chunks,5,log=lambda *x:None).keep(k,None,None,None,None,base)[0]) and not np.array_equal(ro_,OracleRandUV(chunks,6,log=lambda *x:None).keep(k,None,None,None,None,base)[0])
     print('e57_oracle_masks selftest ok')
 if __name__=='__main__':
     if '--selftest' in sys.argv:selftest()
