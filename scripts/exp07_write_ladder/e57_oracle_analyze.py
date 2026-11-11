@@ -30,6 +30,44 @@ def holm(p):
 def logs(path):
     r=json.load(open(path));return r
 def same(a,b,keys=('update_norm','ce','gnorm','coef')):return all(x[k]==y[k] for x,y in zip(a['log'],b['log']) for k in keys) and len(a['log'])==len(b['log']) and a.get('final_hash')==b.get('final_hash')
+ROOT_PARAMS=dict(oracle_frac=0.5,half_retain_max=0.5,r2_oracle_max=0.25,approx_frac=0.25,leak_tau_nat=0.1)
+def classify_root(M,M16,gaps,P=ROOT_PARAMS):
+    """ROOT CLASSIFICATION RULES (registered before any 1279 result was opened; Hans 11/11 'rule registration approved'; values below are registered numbers): G = mean over seeds of margin(NATMASK) - margin(NATS) at p=4 (nat). 'approx' (the equivalence band) = |difference| <= approx_frac x G (0.25 G). LEAK flag = (token-level update-path minus natural-context NLL of later-exposure fact tokens, mean over chunks >= 8, ORACLE) minus (the same for NATS) <= leak_tau_nat (0.1 nat), i.e. the oracle update-path fact-token loss is near NATS, so the mask did not block the exposures.
+ R1 (exposure hiding is the root): ORACLE-NATS, ORACLE-RAND and ORACLE-PLACEBO each >= 0.5 G (seed means) with the same positive sign in ALL seeds; the retained share of the gain by NATHALF, (NATHALF-NATS)/G, <= 0.5; and at p=16 G16 = NATMASK-NATS > 0 in ALL seeds (p=16 is the control: ORACLE == NATS and HALF == NATMASK there, bit identity is gate G2).
+ LEAK flagged (checked first, before R1) -> R3-leak (the oracle did not act on the update path; no conclusion on the exposures).
+ R2a: ORACLE-NATS < 0.25 G, leak low, NATHALF ~ NATMASK (|HALF-MASK| <= 0.25 G): hiding exposures is neither sufficient nor needed; the band mask as such carries the gain.
+ R2b: ORACLE-NATS < 0.25 G, leak low, NATHALF ~ NATS (|HALF-NATS| <= 0.25 G).
+ everything else: R3. If G <= 0 the rules do not apply."""
+    G=float((M['NATMASK']-M['NATS']).mean());out=dict(params=P,G=G)
+    if G<=0:out['label']='rules not applicable (G <= 0)';return out
+    d=lambda a,b:M[a]-M[b];oN=d('NATORACLE','NATS');oR=d('NATORACLE','NATORACLE_RAND');oP=d('NATORACLE','NATPLACEBO');half=d('NATHALF','NATS')
+    pos=lambda v:bool((np.asarray(v)>0).all())
+    r1=dict(oracle_nats=bool(oN.mean()>=P['oracle_frac']*G and pos(oN)),oracle_rand=bool(oR.mean()>=P['oracle_frac']*G and pos(oR)),oracle_placebo=bool(oP.mean()>=P['oracle_frac']*G and pos(oP)),half_retained_share=float(half.mean()/G),half_retained_le_0_5=bool(half.mean()/G<=P['half_retain_max']),p16_G_positive_all_seeds=pos(M16['NATMASK']-M16['NATS']))
+    out['R1_conditions']=r1;leak=None
+    if gaps is not None and gaps.get('oracle') is not None and gaps.get('nats') is not None:leak=bool(gaps['oracle']-gaps['nats']<=P['leak_tau_nat'])
+    out['leak_flag']=leak;eq=lambda v:bool(abs(float(np.mean(v)))<=P['approx_frac']*G)
+    out['evidence']=dict(oracle_minus_nats_over_G=float(oN.mean()/G),half_minus_mask=float(d('NATHALF','NATMASK').mean()),half_minus_mask_approx=eq(d('NATHALF','NATMASK')),half_minus_nats_approx=eq(half))
+    if leak:out['label']='R3-leak'                                                   # the oracle did not act on the update path: no root conclusion, checked first
+    elif r1['oracle_nats'] and r1['oracle_rand'] and r1['oracle_placebo'] and r1['half_retained_le_0_5'] and r1['p16_G_positive_all_seeds']:out['label']='R1'
+    elif oN.mean()<P['r2_oracle_max']*G and leak is False:
+        out['label']='R2a' if eq(d('NATHALF','NATMASK')) else ('R2b' if eq(half) else 'R3')
+    else:out['label']='R3' if leak is not None else 'R3 (leak flag unavailable: token logs missing)'
+    return out
+def update_signal(D,tag4,seeds):
+    """common items (Hans 11/11): descriptive update-signal measures from the logs: (a) mean cosine between the masked and the full-context step (wlog cos_mask_full, mask arms, before / after chunk 8) i.e. the gradient cosine NATS-NATMASK direction agreement, (b) later-exposure fact-token NLL (natural context and update path) per exposure number (learning curve = update utility), (c) the fact-gradient share. Canary did not pass (+0.039 nat, 1276) and DCLM non-inferiority is NOT established: these statements are fixed in the output notes."""
+    out={'notes':['canary tail NLL rise NATMASK-NATS did not pass (+0.039 nat in job 1276 > +0.01)','DCLM non-inferiority is not established (job 1274: +0.0091 point estimate, cluster CI upper bound +0.0104)']}
+    for arm in ('NATMASK','NATHALF','NATORACLE','NATPLACEBO','NATORACLE_RAND','NATS'):
+        cs={'before_chunk8':[],'from_chunk8':[]};cur={};share=[]
+        for s in seeds:
+            pth=D/f'E55_{tag4}_{arm}_s{s}.saved.json'
+            if not pth.exists():continue
+            r=logs(pth)
+            for e in r.get('wlog',[]):cs['before_chunk8' if e['k']<8 else 'from_chunk8'].append(e['cos_mask_full'])
+            for k,x in r.get('diag',{}).items():
+                if x.get('nat_nll_fact_later') is not None and x.get('app') is not None:cur.setdefault(x['app'],[]).append((x['nat_nll_fact_later'],x['upd_nll_fact_later']))
+                if x.get('fact_grad_share') is not None:share.append(x['fact_grad_share'])
+        out[arm]=dict(cos_mask_full={k:(float(np.mean(v)) if v else None) for k,v in cs.items()},fact_grad_share_mean=(float(np.mean(share)) if share else None),later_fact_nll_by_exposure={str(a):dict(natural=float(np.mean([z[0] for z in v])),update_path=float(np.mean([z[1] for z in v]))) for a,v in sorted(cur.items())})
+    return out
 def analyze(D,seeds,tag4='orcp4',tag16='orcp16',gate_seed=62,run_type='pilot_exploration'):
     D=pathlib.Path(D);out={'run_type':run_type,'seeds':list(seeds),'n_seeds':len(seeds),'gates':{},'p4':{},'p16':{}}
     g2={}
@@ -85,6 +123,14 @@ def analyze(D,seeds,tag4='orcp4',tag16='orcp16',gate_seed=62,run_type='pilot_exp
                 if n_<5:res[c_]=dict(tested=False,reason='n < 5: exact one-sided sign-flip has min p = 1/2^n > .05 at n < 5');ok=False;continue
                 if not ok:res[c_]=dict(tested=False,reason='previous step in the fixed sequence failed');continue
                 pv=out['p4']['margin'][c_]['signflip_p_one_sided'];res[c_]=dict(tested=True,p_one_sided_exact=pv,passed=bool(pv<alpha));ok=bool(pv<alpha)
+            def tokgap(arm):
+                v=[]
+                for s_ in seeds:
+                    dd=logs(D/f'E55_{tag4}_{arm}_s{s_}.saved.json').get('diag',{})
+                    v+=[x['upd_nll_fact_later']-x['nat_nll_fact_later'] for k_,x in dd.items() if int(k_)>=8 and x.get('upd_nll_fact_later') is not None and x.get('nat_nll_fact_later') is not None]
+                return float(np.mean(v)) if v else None
+            out['root_classification']=classify_root(M,M16,dict(oracle=tokgap('NATORACLE'),nats=tokgap('NATS')))
+            out['update_signal']=update_signal(D,tag4,seeds)
             out['fixed_sequence']=res;out['interaction_note']='2x2 factorial effects (same_fact_main, general_main, MASK-HALF) are descriptive only; MASK-NATS p4 / p16 are a Holm family; no p4 vs p16 contrast';out['seeds_needed_from_SESOI']='seeds_needed(sd_of_paired_diff, SESOI) with SESOI fixed in the registration (floor 8)'
     return out
 def selftest():
