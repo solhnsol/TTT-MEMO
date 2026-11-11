@@ -10,72 +10,118 @@
  ],
  "results": {
   "0.05": {
+   "independent_alpha_check_new_c2": {
+    "look1": 0.00558,
+    "look2_incremental": 0.0444922,
+    "cumulative": 0.0500722,
+    "mc_se": 6.896736531661914e-05,
+    "N": 10000000,
+    "seed": 31415,
+    "target": 0.05
+   },
+   "independent_alpha_check_registered_c2": {
+    "c2": 1.757,
+    "look1": 0.0055877,
+    "look2_incremental": 0.0445068,
+    "cumulative": 0.0500945,
+    "mc_se": 6.89819114476759e-05,
+    "N": 10000000,
+    "seed": 27182,
+    "target": 0.05
+   },
+   "c2_at_N_2e6_seed99": 1.7548692226409912,
    "alpha_1": 0.005574596680784305,
    "c1_analytic": 3.1819836784069713,
    "c2_estimates": [
-    1.7569072246551514,
-    1.7571104764938354
+    1.7577543258666992,
+    1.7572015523910522
    ],
-   "c2_difference": 0.00020325183868408203,
-   "c2_used_mean": 1.7570088505744934,
-   "c2_boundary_mc_se": 0.0007457559819106009,
+   "c2_difference": 0.0005527734756469727,
+   "c2_used_mean": 1.7574779391288757,
+   "c2_boundary_mc_se": 0.0007463128099146772,
    "binomial_se_alpha": 6.892024376045111e-05,
    "error_check_independent_draws": {
     "normal": {
      "look1": 0.005567,
-     "look2_incremental": 0.0444479,
-     "cumulative": 0.0500149
+     "look2_incremental": 0.0444111,
+     "cumulative": 0.0499781
     },
     "t5": {
      "look1": 0.0043334,
-     "look2_incremental": 0.0443655,
-     "cumulative": 0.0486989
+     "look2_incremental": 0.0443253,
+     "cumulative": 0.0486587
     },
     "lognormal": {
      "look1": 3.97e-05,
-     "look2_incremental": 0.0069829,
-     "cumulative": 0.0070226
+     "look2_incremental": 0.0069675,
+     "cumulative": 0.0070072
     },
     "lognormal_neg": {
      "look1": 0.0942257,
-     "look2_incremental": 0.1184135,
-     "cumulative": 0.2126392
+     "look2_incremental": 0.1183599,
+     "cumulative": 0.2125856
     }
    }
   },
   "0.025": {
+   "independent_alpha_check_new_c2": {
+    "look1": 0.0015219,
+    "look2_incremental": 0.0235145,
+    "cumulative": 0.0250364,
+    "mc_se": 4.940605091994299e-05,
+    "N": 10000000,
+    "seed": 31415,
+    "target": 0.025
+   },
+   "independent_alpha_check_registered_c2": {
+    "c2": 2.109,
+    "look1": 0.0015477,
+    "look2_incremental": 0.0235396,
+    "cumulative": 0.0250873,
+    "mc_se": 4.945495665624428e-05,
+    "N": 10000000,
+    "seed": 27182,
+    "target": 0.025
+   },
+   "c2_at_N_2e6_seed99": 2.107870578765869,
    "alpha_1": 0.0015253227579890005,
    "c1_analytic": 4.012871402883237,
    "c2_estimates": [
-    2.1092588901519775,
-    2.1078898906707764
+    2.1095330715179443,
+    2.109070301055908
    ],
-   "c2_difference": 0.0013689994812011719,
-   "c2_used_mean": 2.108574390411377,
-   "c2_boundary_mc_se": 0.0009956593922908358,
+   "c2_difference": 0.0004627704620361328,
+   "c2_used_mean": 2.1093016862869263,
+   "c2_boundary_mc_se": 0.0009969628624611577,
    "binomial_se_alpha": 4.937104414532875e-05,
    "error_check_independent_draws": {
     "normal": {
      "look1": 0.001529,
-     "look2_incremental": 0.0234801,
-     "cumulative": 0.0250091
+     "look2_incremental": 0.0234469,
+     "cumulative": 0.0249759
     },
     "t5": {
      "look1": 0.0010414,
-     "look2_incremental": 0.0223637,
-     "cumulative": 0.0234051
+     "look2_incremental": 0.0223331,
+     "cumulative": 0.0233745
     },
     "lognormal": {
      "look1": 2.9e-06,
-     "look2_incremental": 0.0014569,
-     "cumulative": 0.0014598
+     "look2_incremental": 0.0014522,
+     "cumulative": 0.0014551
     },
     "lognormal_neg": {
      "look1": 0.0593721,
-     "look2_incremental": 0.1005269,
-     "cumulative": 0.159899
+     "look2_incremental": 0.1004631,
+     "cumulative": 0.1598352
     }
    }
   }
+ },
+ "explanation_c2_1.757_vs_1.7553": "1.7553 was recompute_look2 at N = 2e6 (boundary MC SE about .0017); the registered 1.757 is the mean of two N = 1e7 runs (SE about .0008 each); the difference (.0017) is Monte Carlo noise, not a design difference (same alpha_1 = A(.5), same t_9 look 1, same 1:1 information fraction); see c2_at_N_2e6_seed99",
+ "look1_check": {
+  "c1": 3.1819836784069713,
+  "t3_975": 3.182446305284263,
+  "df": 9
  }
 }
