@@ -70,7 +70,7 @@ def make_token_diag(L,LD,s3,rt,holder,chunks,log=print,grad_every=8):
             r['grad_total_norm']=ngt;r['grad_factmean_norm']=ngf;r['fact_grad_share']=ngf*(int((f0|f1).sum())/int(lm.sum()))/ngt if ngt>0 else None
         log(f'  tokdiag chunk {k}: nat nll fact(first/later)/filler {r["nat_nll_fact_first"]}/{r["nat_nll_fact_later"]}/{r["nat_nll_filler"]}, upd {r["upd_nll_fact_first"]}/{r["upd_nll_fact_later"]}/{r["upd_nll_filler"]}');return r
     fn.wants_ctx=True;return fn
-CH_=1024
+CH_=1024;CH=1024
 def selftest():
     NM.K0=8;NM.selftest();OM.selftest()
     assert parse_arm2('NATORACLE_RAND','ALLQ256')==('ORACLE_RAND',1.0) and parse_arm2('NATORACLE','ALLQ256')==('ORACLE',1.0) and parse_arm2('NATHALF','ALLQ256')==('HALF',1.0) and parse_arm2('NATMASK','ALLQ256')==('ALLQ256',1.0)
