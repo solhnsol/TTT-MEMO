@@ -7,7 +7,7 @@ GATES: 2a E_rec: lower 95% bound > 0 and point >= .25; 2b E_mask: lower bound > 
 VERDICT (exclusive): 1 PROTOCOL / INSTRUMENT INVALID ; 2a E_rec NOT CERTIFIED ; 4 CACHE SUFFICIENT (T_R cache direction; practically unreachable, see disclosures) ; 3a/3b/3c (deepest reached step of the hierarchy; 3c requires the placebo non-superiority) ; 6 INCONCLUSIVE. Independent flags: F_LOW, H_GEN, HALF_PL (a seed is excluded from HALF-PL when more than 3 of its 32 facts are unmatched), ANOMALY (E_cache > 1.2 E_rec).
 SEQUENTIAL: looks at n = 10 and 20; look 1 boundary analytic c1 = t_9^{-1}(1 - alpha_1), look 2 by Monte Carlo only at look 2 on the sets that did not cross at look 1 (shared first 10 seeds), see e57_1280_boundaries.py (method, two RNG seeds, versions, both estimates and their difference, boundary MC SE, look-wise and cumulative error, t(5) and skewed-data robustness; report file e57_1280_boundaries_report.json). The same c_k is used for every gate and every reported bound. Rejection = the first look at which a boundary is crossed. Efficacy stop only if the target verdict and every gate it needs hold at that look.
 LOOK-1 FUTILITY (item 8, non-binding, no alpha recycling, no sample-size re-estimation): triggers are COMPUTED by look1_report on the first 10 seeds (101..110) and the DEFAULT actions below are pre-specified; continuing after a trigger is always allowed (the decider, named by role, records the reason BEFORE opening seeds 111..120), stopping without a trigger is reported as a protocol deviation; the look-1 report script and its hash are committed BEFORE seeds 111..120 are run or opened and the seed list is fixed; if seeds 111..120 run concurrently their output is not read before the look-1 decision. (i) E_rec: nominal one-sided 95% t upper bound (df = 9, 1.833) < .25 -> label 'NOT CERTIFIED (look-1 futility)', stops R and Q (and F, which depends on gates) = the whole experiment; this is a screen, not a boundary, and it fires with probability .05 if the true E_rec is exactly .25 (a power cost, not an alpha cost); it is NOT a confirmatory conclusion that the population denominator is below .25. (ii) G upper bound < SESOI_fact (nat/fact; provisional .5): applies only because G, L_F and L_Flow share units (margin nat); stops only the F family (3c impossible, maximum verdict 3b; R and Q continue at the same boundaries; F-only arms = RECOMP and RECOMP-PL branch arms; shared arms NATS and NATMASK continue; the placebo non-superiority is stopped together with F). If SESOI_fact (.5) was fixed after seeing G ~ 2 this is disclosed in item 12. (iii) predictive probabilities PP(3a), PP(3b), PP(3c) from the model of appendix 8A, evaluated with the final analysis function: PP(3c) < .10 -> stop the 3c-only arms; PP(3b) < .10 -> stop the 3b-only arms (the recomputed band measurement of E_mask); the WHOLE experiment stops only if PP(3a) < .10 or trigger (i) fires. PP(3a) ~ P(gate 2a passes) and overlaps with (i) (disclosed).
-APPENDIX 8A (PP model, v7): reduced seed vector Y = (E_cache, E_rec, E_mask, G, H, PLd = M_RECOMP_PL - M_NATS, gain_noprior) (p = 7); FROZEN prior Sigma ~ InverseWishart(nu0 = 8, Psi0 = (nu0 + p + 1) diag(sd0^2)) so the prior mode is diag(sd0^2), sd0 = PRIOR['sd0'] = (.03, .05, .05, .45, .45, .45, .45) (token-family .03/.05/.05, margin-family .45 from the pilot scale; frozen at Freeze A, never taken from the confirmatory seeds); posterior from the first 10 seeds: Sigma | Y ~ IW(nu0 + 9, Psi0 + 9 S), mu | Sigma ~ N(ybar, Sigma / 10) (flat prior on mu); simulate 10 future seeds ~ MVN(mu, Sigma), append to the observed 10, evaluate evaluate_core at look 20 (same final analysis code and hash); B >= 10^5 draws, fixed RNG seed, MC SE reported; instrument flags are assumed true; the full covariance is used (independence NOT assumed). Futility report (futility_report): P(trigger (i) fires | true E_rec = .30) for SD(E_rec) in {.03,.05,.10} (exact noncentral t; it equals .05 at E_rec = .25).
+APPENDIX 8A (PP model, v7): reduced seed vector Y = (E_cache, E_rec, E_mask, G, H, PLd = M_RECOMP_PL - M_NATS, gain_noprior) (p = 7); FROZEN prior Sigma ~ InverseWishart(nu0 = 11 >= p + 4 so prior mean and variance are finite, Psi0 = (nu0 - p - 1) diag(sd0^2) so the prior mean is diag(sd0^2)); sd0 = derive_sd0 over the instrumentation seeds (A-prime value), never the confirmatory seeds; posterior from the first 10 seeds: Sigma | Y ~ IW(nu0 + 9 = 20, Psi0 + 9 S), mu | Sigma ~ N(ybar, Sigma / 10) (flat prior on mu); simulate 10 future seeds ~ MVN(mu, Sigma), append to the observed 10, evaluate evaluate_core at look 20 (same final analysis code and hash); B >= 10^5 draws, fixed RNG seed, MC SE reported; instrument flags are assumed true; the full covariance is used (independence NOT assumed). Futility report (futility_report): P(trigger (i) fires | true E_rec = .30) for SD(E_rec) in {.03,.05,.10} (exact noncentral t; it equals .05 at E_rec = .25).
 POWER: mde_report gives, per test, three MDEs (fixed n, look 1 (n = 10 at its boundary, noncentral t), cumulative over both looks (80% power of crossing at either look, Monte Carlo)); T_R uses the alpha = .025 boundaries (n = 10 MDE about .032 for SD .0202, i.e. boundary inflation, not an SD multiplier); joint_power_mc computes the joint (cumulative and final-look-only) power of the 3c conditions with a user-specified mean vector, SD vector and correlation matrix (inputs disclosed with the result); the earlier .47 / .78 values (independent normal components, fixed t critical values, no boundaries) are WITHDRAWN. A power below .80 is stated as such.
 SEEDS: instrumentation 91..94 (variance components at k = 8 only, no confirmatory inference); confirmatory 1280 = 101..120 (look 1 = 101..110, look 2 adds 111..120); spare list 121..140 used in order; FAILURE = a technical, outcome-independent event only (TECH_FAILURES: world_generation_exception, non_finite_value, determinism_check_failed, runner_crash, out_of_memory); a failed seed is replaced by the next unused spare, the replacement belongs to the look at which the failure occurred and is drawn before that look's statistics are computed; no exclusion by outcome; the reduced-n rule and the cap of 3 are DROPPED; if the spares run out the analysis uses the available seeds with the look-2 boundary RECOMPUTED from the actual information fraction (recompute_look2 in e57_1280_boundaries.py, n1/n2 actual), and n_final < 16 is PROTOCOL INVALID: results exploratory only (label 1); every attempted seed and its reason is preserved. 1284 = 201..220.
 BRANCH CHUNKS (one rule): each branch chunk starts from a copy of the natural snapshot just before chunk t, every arm applies one update on its own context and is evaluated on the fact tokens of the same chunk with the margin M_* (frozen weights, same probes), then the copy is discarded; eligibility: t >= 8, fact tokens present, a prior same-fact exposure inside the window, at least 32 scored fact tokens; selection: stratified by terciles of the eligible t, order by sha256(job|seed|salt|t), round-robin over terciles so that k = 3 is a prefix of k = 6 is a prefix of k = 8, the SAME chunks for every arm (paired); fewer eligible chunks than k -> all eligible are used and the count is reported; isolation: parameters, optimizer state and RNG state are deep-copied and a checksum of the natural trajectory must be unchanged (assert_isolated). k is chosen ONCE by choose_k from the instrumentation seeds 91..94 run at k = 8: SD^2(k) = sigma_b^2 + sigma_w^2 / k (both components carry an 80% upper confidence limit: sigma_w^2 with df = 28, sigma_b^2 with df = 3, sigma_b^2 estimated by method of moments (MSB - MSW)/k clipped at 0); the smallest k in {3, 6, 8} with SD(L_F) <= .4; if no k meets the target k = 8 and the power/MDE tables are recomputed at the achieved SD (target not met is stated); 'no sample-size re-estimation; Kieser-Friede is not applicable'; the rule code, the raw instrumentation metrics, the variance components, the chosen k, the salt, the script version and a timestamp log are hashed (commit_k_log) before seed 101 starts, and the power/MDE tables are recomputed at the chosen k.
@@ -79,29 +79,43 @@ def reduced_vectors(recs):
     A=lambda k:np.array([r[k] for r in recs],float);return np.stack([A('a')-A('nc'),A('b')-A('c'),A('X_MASK'),A('M_MASK')-A('M_NATS'),A('M_RECOMP')-A('M_NATS'),A('M_RECOMP_PL')-A('M_NATS'),A('gain_noprior')],1)
 def label_of(Y,look):
     r=evaluate_core(Y[:,0],Y[:,1],Y[:,2],Y[:,3],Y[:,4],Y[:,5],Y[:,6],look=look);return r['label']
-PRIOR=dict(nu0=9,sd0=None,note='frozen rule at Freeze A (nu0 = 9 > p + 1 = 8 so the prior mean exists; Psi0 = (nu0 - p - 1) diag(sd0^2) so the prior mean of Sigma is diag(sd0^2)); the VALUES sd0 are derived mechanically at A-prime by derive_sd0 from the instrumentation seeds 91..94, never from confirmatory seeds')
+PRIOR=dict(nu0=11,sd0=None,note='frozen rule at Freeze A (nu0 = 11 > p + 3 = 10 so the prior mean AND variance of Sigma are finite; Psi0 = (nu0 - p - 1) diag(sd0^2) so the prior mean of Sigma is diag(sd0^2); the prior is a regulariser, the posterior df is nu0 + 9 = 20); the VALUES sd0 are derived mechanically at A-prime by derive_sd0 from the instrumentation seeds 91..94, never from confirmatory seeds')
 def pp_model(Y10,B=100_000,seed=20261112,prior=None):
     """appendix 8A (v7): predictive probabilities of the verdict levels at the final look; frozen inverse-Wishart prior, posterior IW(nu0 + 9, Psi0 + 9 S)"""
     from scipy.stats import invwishart
     assert prior is not None,'pp_model needs the frozen prior with derived sd0'
-    rng=np.random.default_rng(seed);n,p=Y10.shape;assert n==10 and p==7 and prior['nu0']>p+1 and prior['sd0'] is not None and len(prior['sd0'])==7;yb=Y10.mean(0);S=np.cov(Y10.T,ddof=1);nu0=prior['nu0'];Psi0=(nu0-p-1)*np.diag(np.square(prior['sd0']));nu=nu0+n-1;Psi=Psi0+(n-1)*S;cnt=dict(a=0,b=0,c=0)
+    rng=np.random.default_rng(seed);n,p=Y10.shape;assert n==10 and p==7 and prior['nu0']>=p+4 and prior['sd0'] is not None and len(prior['sd0'])==7;yb=Y10.mean(0);S=np.cov(Y10.T,ddof=1);nu0=prior['nu0'];Psi0=(nu0-p-1)*np.diag(np.square(prior['sd0']));nu=nu0+n-1;Psi=Psi0+(n-1)*S;cnt=dict(a=0,b=0,c=0)
     sig=invwishart.rvs(df=nu,scale=Psi,size=B,random_state=rng)
     for i in range(B):
         Sg=sig[i];mu=rng.multivariate_normal(yb,Sg/10);Yf=rng.multivariate_normal(mu,Sg,size=10);lab=label_of(np.vstack([Y10,Yf]),20)
         cnt['a']+=lab.startswith(('3a','3b','3c'));cnt['b']+=lab.startswith(('3b','3c'));cnt['c']+=lab.startswith('3c')
     pp={k:v/B for k,v in cnt.items()};se={k:float(np.sqrt(pp[k]*(1-pp[k])/B)) for k in pp}
     return dict(PP_3a=pp['a'],PP_3b=pp['b'],PP_3c=pp['c'],mc_se=se,B=B,seed=seed,prior=prior,posterior_df=nu)
-def derive_sesoi(gain_fact,gain_token,c=SESOI_COEF,min_valid=6):
-    """A-prime rule (the coefficient c is fixed BEFORE the measurement): SESOI_x = c * mean gain of the K0=0 NATS 16->128 auxiliary measurement (seeds 901..908), in unit x; nat/fact = margin gain per fact, nat/token = NLL gain per later-exposure fact token MEASURED DIRECTLY (never converted from nat/fact); unstable if valid seeds < 6 of 8, or the 95% two-sided t CI lower bound <= 0, or its half-width > .5 * mean; unstable nat/fact -> SESOI_FALLBACK_FACT (.5), unstable nat/token -> None (defined by no rule)"""
-    def one(v,fallback):
-        v=np.asarray(v,float);v=v[np.isfinite(v)];n=len(v)
+SESOI_OPTIONS=dict(estimator=('mean','median','lcb95'),nonpositive=('keep','drop','floor0'),rounding=('none','dec2','floor0.05'),clamp=(None,'[lo,hi]'),on_unstable=('fallback','amend_rule_before_Aprime'))
+SESOI_DRAFT=dict(estimator='mean',nonpositive='keep',rounding='none',clamp=None,on_unstable='fallback')      # DRAFT defaults, NOT frozen: the options are pending Hans / Council (registration item 13, OPTIONS_PENDING)
+def derive_sesoi(gain_fact,gain_token,c=SESOI_COEF,min_valid=6,opt=None,clamp_fact=None):
+    """A-prime rule (the coefficient c is fixed BEFORE the measurement): SESOI_x = c * G_x, G_x = estimator of the K0=0 NATS 16->128 auxiliary gain (seeds 901..908) in unit x; nat/fact = margin gain per fact, nat/token = NLL gain per later-exposure fact token MEASURED DIRECTLY (never converted from nat/fact). Options (SESOI_OPTIONS; draft defaults SESOI_DRAFT): estimator mean | median | lcb95 (lower 95% t bound of the mean); nonpositive gains 'keep' (counted, unbiased), 'drop' (invalid seed), 'floor0' (set to 0); rounding none | 2 decimals half-even | floor to .05; clamp none | [lo, hi] on SESOI_fact; unstable -> 'fallback' (nat/fact: SESOI_FALLBACK_FACT .5, nat/token: undefined) or 'amend_rule_before_Aprime' (raises: the rule may be amended only before A-prime, never after the values are seen). Unstable = valid seeds < 6 of 8, or the 95% two-sided t CI lower bound <= 0, or its half-width > .5 * mean."""
+    o=dict(SESOI_DRAFT,**(opt or {}))
+    for k,v in o.items():assert v in SESOI_OPTIONS[k] or k=='clamp',f'unknown option {k}={v}'
+    def rnd(x):
+        if x is None or o['rounding']=='none':return x
+        return round(x,2) if o['rounding']=='dec2' else float(np.floor(x/0.05+1e-9)*0.05)
+    def one(v,fallback,is_fact):
+        v=np.asarray(v,float);v=v[np.isfinite(v)]
+        if o['nonpositive']=='drop':v=v[v>0]
+        elif o['nonpositive']=='floor0':v=np.maximum(v,0.0)
+        n=len(v)
         if n<2:return dict(value=fallback,stable=False,reason='fewer than 2 valid seeds',n_valid=n,fallback_used=True)
         m=float(v.mean());hw=float(stats.t.ppf(0.975,n-1)*v.std(ddof=1)/np.sqrt(n));why=[]
         if n<min_valid:why.append(f'valid seeds {n} < {min_valid}')
         if m-hw<=0:why.append('CI lower <= 0')
         if hw>0.5*m:why.append('half-width > .5 * mean')
-        ok=not why;return dict(value=(c*m if ok else fallback),stable=ok,reason='; '.join(why),n_valid=n,mean_gain=m,ci_half_width=hw,coef=c,fallback_used=not ok)
-    return dict(sesoi_fact=one(gain_fact,SESOI_FALLBACK_FACT),sesoi_token=one(gain_token,None))
+        ok=not why
+        if not ok and o['on_unstable']=='amend_rule_before_Aprime':raise AssertionError('measurement unstable: the rule may be amended only before A-prime and by Council review, not after the values are seen: '+'; '.join(why))
+        est={'mean':m,'median':float(np.median(v)),'lcb95':m-hw}[o['estimator']];val=rnd(c*est) if ok else fallback
+        if ok and is_fact and clamp_fact is not None:val=min(max(val,clamp_fact[0]),clamp_fact[1])
+        return dict(value=val,stable=ok,reason='; '.join(why),n_valid=n,mean_gain=m,ci_half_width=hw,coef=c,estimator=o['estimator'],fallback_used=not ok)
+    return dict(sesoi_fact=one(gain_fact,SESOI_FALLBACK_FACT,True),sesoi_token=one(gain_token,None,False),options=o,options_frozen=False)
 def derive_sd0(Y,conf=SD0_UCL_CONF):
     """A-prime rule: sd0_j = SD_j of the 7 reduced components over the instrumentation seeds 91..94 (per-seed values at k = 8 chunks) times sqrt(df / chi2_{1-conf}(df)), df = seeds - 1 (80% upper confidence limit of the SD)"""
     Y=np.asarray(Y,float);n=Y.shape[0];df=n-1;return [float(x) for x in Y.std(0,ddof=1)*np.sqrt(df/stats.chi2.ppf(1-conf,df))]
@@ -147,8 +161,8 @@ def mde_cumulative(sd,level='05',power=0.8,N=200_000,seed=1):
         if pw(mid)<power:lo=mid
         else:hi=mid
     return float(hi)
-def mde_report(sd,level='05'):
-    a=0.05 if level=='05' else 0.025;return dict(sd=sd,level=level,fixed_n10=mde_fixed(sd,10,a),fixed_n20=mde_fixed(sd,20,a),look1_n10=mde_look1(sd,level),cumulative_n20=mde_cumulative(sd,level))
+def mde_report(sd,level='05',N=200_000):
+    a=0.05 if level=='05' else 0.025;return dict(sd=sd,level=level,fixed_n10=mde_fixed(sd,10,a),fixed_n20=mde_fixed(sd,20,a),look1_n10=mde_look1(sd,level),cumulative_n20=mde_cumulative(sd,level,N=N))
 COMPONENTS=('g2a_E_rec','g2b_E_mask','g2c_G','T_R_leak','T_Q','L_F','PL_nonsup')
 def components_pass(out):
     g=out['gates'];t=out['tests'];return dict(g2a_E_rec=g['g2a_E_rec']['ok'],g2b_E_mask=g['g2b_E_mask']['ok'],g2c_G=g['g2c_G']['ok'],T_R_leak=bool(t['T_R']['upper']<0),T_Q=bool(t['T_Q']['lower']>0),L_F=bool(t['L_F']['lower']>0),PL_nonsup=bool(t['PL_nonsuperior_abs_nat']))
@@ -190,7 +204,7 @@ def futility_h0_report(M=200,B=1000,Mtrig=20000,seed=5,scenario=None,sesoi_fact=
     sc=scenario or SCENARIO_H0;rng=np.random.default_rng(seed);mu=np.array(sc['means'],float);sd=np.array(sc['sds'],float);cov=np.outer(sd,sd)*np.array(sc['corr'],float);t1=t2=0
     for _ in range(Mtrig):
         Y=rng.multivariate_normal(mu,cov,size=10);er=bounds_t(Y[:,1],float(stats.t.ppf(0.95,9)));gg=bounds_t(Y[:,3],float(stats.t.ppf(0.95,9)));t1+=bool(er['upper']<P['erec_min']);t2+=bool(gg['upper']<sesoi_fact)
-    pr=dict(nu0=9,sd0=list(sd)+[0.45],note='report scenario');c3c=c3b=call=0
+    pr=dict(nu0=PRIOR['nu0'],sd0=list(sd)+[float(sd[3])],note='report scenario');c3c=c3b=call=0
     for _ in range(M):
         Y=np.column_stack([rng.multivariate_normal(mu,cov,size=10),np.zeros(10)]);pp=pp_model(Y,B=B,prior=pr,seed=int(rng.integers(1<<30)));c3c+=bool(pp['PP_3c']<0.10);c3b+=bool(pp['PP_3b']<0.10);call+=bool(pp['PP_3a']<0.10)
     return dict(trigger_i=fmt_mc(t1,Mtrig),trigger_ii=fmt_mc(t2,Mtrig),stop_3c_only_arms=fmt_mc(c3c,M),stop_3b_only_arms=fmt_mc(c3b,M),stop_whole_PP3a=fmt_mc(call,M),M=M,B=B,Mtrig=Mtrig,scenario=sc)
@@ -257,8 +271,70 @@ def signflip_components(Y,n1=10,p=P):
     """exact sequential sign-flip (sensitivity) for the four contrasts, final look; Y = reduced vectors with n = len(Y) <= 20"""
     Ec,Er,Em,G,H,PLd=[Y[:,i] for i in range(6)];xs=dict(T_R_leak=-(Ec-p['R_k']*Er),T_Q=Er-p['Q_k']*Em,L_F=H-p['F_k']*G,PL_nonsup=p['delta_PL_value']-PLd);al=dict(T_R_leak=0.025,T_Q=0.05,L_F=0.05,PL_nonsup=0.05)
     return {k:BD.signflip_sequential(x,al[k],n1=n1) for k,x in xs.items()}
+OUTCOME_KEYS=frozenset(['nc','a','c','b','a_P','b_P','X_MASK','E_cache','E_rec','E_mask','M_NATS','M_MASK','M_RECOMP','M_RECOMP_PL','gain_noprior','G','H','PLd','margins','verdict'])
+FAILURE_RULES=[('out_of_memory',r'(?i)out of memory|RESOURCE_EXHAUSTED|\bOOM\b|cannot allocate|CUDA_ERROR_OUT_OF_MEMORY'),('world_generation_exception',r'(?i)gen_facts|world generation|gen_world|register_cell'),('determinism_check_failed',r'(?i)determinism|read hash|hash mismatch|checksum'),('non_finite_value',r'(?i)\bnan\b|non-?finite|\binf\b|FloatingPointError'),('runner_crash',r'(?i)Traceback|killed|segmentation|core dumped|signal \d+')]
+def classify_failure(rec):
+    """BLIND automatic classification of a failed seed: only the outcome-free fields exit_code, exception_type, stderr_tail, finite_flag, determinism_ok may be present (any outcome key raises); the FIRST matching FAILURE_RULES entry (fixed order) decides on the text of exception_type + stderr_tail; flags finite_flag == False -> non_finite_value and determinism_ok == False -> determinism_check_failed take precedence in that order; no match and exit_code != 0 -> runner_crash; otherwise 'unclassified' (NOT a technical failure: the seed stays, fill_seeds raises); the result must be logged and hashed BEFORE the replacement seed is drawn or any outcome of the failed seed is read"""
+    import re;bad=OUTCOME_KEYS&set(rec);assert not bad,f'classification must be blind: outcome keys present {sorted(bad)}'
+    extra=set(rec)-{'seed','exit_code','exception_type','stderr_tail','finite_flag','determinism_ok'};assert not extra,f'unknown fields {sorted(extra)}'
+    if rec.get('finite_flag') is False:return 'non_finite_value'
+    if rec.get('determinism_ok') is False:return 'determinism_check_failed'
+    txt=f"{rec.get('exception_type','')} {rec.get('stderr_tail','')}"
+    for nm,pat in FAILURE_RULES:
+        if re.search(pat,txt):return nm
+    return 'runner_crash' if rec.get('exit_code',0)!=0 else 'unclassified'
+def classification_log(recs,path):
+    """classify every failed seed (blind) and write the canonical log with its sha256 sidecar; returns status dict seed -> failure type for fill_seeds"""
+    st={r['seed']:classify_failure(r) for r in recs};rec=dict(classified=st,rules=[(a,b) for a,b in FAILURE_RULES],utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()));write_manifest(rec,path);return st
+ARM_COMPONENTS=dict(NATS=[3,4,5],NATMASK=[3],RECOMP=[4],RECOMP_PL=[5],ORACLE=[0],RECOMP_ORACLE=[1],MASK_BAND=[2],ALL=[0,1,2,3,4,5])     # reduced-vector columns (E_cache,E_rec,E_mask,G,H,PLd,gain_noprior) an arm failure could bias
+ADVERSE_SIGN=[+1,-1,-1,-1,-1,+1,0]                                                                                          # direction that hurts the 3c claim, per column
+def failure_sensitivity(Y,failed_arms,k=2.0,p=P,n1=10):
+    """informative-failure sensitivity (worst case, per arm): the observed final data Y (n x 7) get one imputed row per failed seed; the imputed row = column means, except the columns an arm can bias (ARM_COMPONENTS) which are moved k SD in the ADVERSE direction (worst case) or the FAVOURABLE direction (best case); every case is evaluated with the boundary recomputed from the actual information fraction; the verdict is robust to informative failure when the worst-case label is unchanged. failed_arms = list of arm names (one per failed seed, 'ALL' = every component)"""
+    Y=np.asarray(Y,float);mu=Y.mean(0);sd=Y.std(0,ddof=1);base=evaluate_core(*[Y[:,i] for i in range(7)],look=20,n1=n1,p=p)['label'];out=dict(observed=base,k=k,cases={})
+    for nm,sg in (('worst',1.0),('best',-1.0)):
+        rows=[]
+        for arm in failed_arms:
+            r=mu.copy()
+            for c in ARM_COMPONENTS[arm]:r[c]=mu[c]+sg*k*sd[c]*ADVERSE_SIGN[c]
+            rows.append(r)
+        Z=np.vstack([Y]+rows) if rows else Y;out['cases'][nm]=evaluate_core(*[Z[:,i] for i in range(7)],look=20,n1=n1,p=p)['label']
+    out['robust_to_informative_failure']=bool(out['cases']['worst'][:2]==base[:2]);return out
+ALLOWED_APRIME_KEYS=frozenset(['sesoi_fact','sesoi_token','sd0','k','salt','sesoi_options','derivation_logs'])
+def check_aprime_values(values):
+    """A-prime binds VALUES only: the values file may contain only ALLOWED_APRIME_KEYS (no rule, threshold, boundary, seed list or code change is possible at A-prime)"""
+    bad=set(values)-ALLOWED_APRIME_KEYS;assert not bad,f'A-prime may only bind values, not {sorted(bad)}';return True
+OPS_SDS=(0.225,0.45,0.90);OPS_RHOS=(0.0,0.7,0.9);OPS_SESOI=(0.25,0.5,1.0)
+SCEN_WEAK_G=dict(means=[0.07,0.30,0.35,0.8,0.6,0.0])
+def _ops_scenarios(msd,rho):
+    base=SCENARIO_657;sd=list(base['sds'][:3])+[msd]*3;corr=[r[:] for r in base['corr']];corr[3][4]=corr[4][3]=rho;mk=lambda m:dict(means=m,sds=sd,corr=corr)
+    return dict(alt=mk(base['means']),weakG=mk(SCEN_WEAK_G['means']),h0=mk(SCENARIO_H0['means']))
+def ops_cell(args,mde_N=200_000):
+    """operating characteristics of one (margin SD, rho(G,H)) cell for three scenarios (alt = SCENARIO_657, weakG, h0): N replicates with common random numbers across scenarios, power IGNORING futility, power OBEYING the look-1 triggers (i)/(ii) for every SESOI in OPS_SESOI, and obeying triggers + PP rules on the first M replicates; nu0 = PRIOR['nu0'] throughout"""
+    msd,rho,N,M,B,seed=args;sc=_ops_scenarios(msd,rho);out={};rngs=np.random.default_rng(seed);Z=rngs.standard_normal((N,20,6))
+    for nm,c in sc.items():
+        mu=np.array(c['means'],float);sd=np.array(c['sds'],float);cov=np.outer(sd,sd)*np.array(c['corr'],float);Lc=np.linalg.cholesky(cov);D=mu+Z@Lc.T
+        p1=np.zeros(N,bool);p2=np.zeros(N,bool);ti=np.zeros(N,bool);gU=np.zeros(N);cv=float(stats.t.ppf(0.95,9))
+        for r in range(N):
+            Y=np.column_stack([D[r],np.zeros(20)]);o1=evaluate_core(*[Y[:10,i] for i in range(7)],look=10);o2=evaluate_core(*[Y[:,i] for i in range(7)],look=20);p1[r]=o1['label'].startswith('3c');p2[r]=o2['label'].startswith('3c')
+            e=Y[:10,1];g=Y[:10,3];ti[r]=bool(e.mean()+cv*e.std(ddof=1)/np.sqrt(10)<P['erec_min']);gU[r]=g.mean()+cv*g.std(ddof=1)/np.sqrt(10)
+        res=dict(power_ignoring_futility=float((p1|p2).mean()),trigger_i_rate=float(ti.mean()),by_sesoi={})
+        pr=dict(nu0=PRIOR['nu0'],sd0=[float(x) for x in sd]+[float(sd[3])],note='ops scenario');ppstop=np.zeros(M,bool)
+        for r in range(M):
+            Y=np.column_stack([D[r,:10],np.zeros(10)]);pp=pp_model(Y,B=B,prior=pr,seed=1000+r);ppstop[r]=bool(pp['PP_3c']<0.10 or pp['PP_3b']<0.10 or pp['PP_3a']<0.10)
+        for se_ in OPS_SESOI:
+            stop=ti|(gU<se_);succ=p1|(~p1&~stop&p2);sp=p1[:M]|(~p1[:M]&~stop[:M]&~ppstop&p2[:M]);ig=float((p1[:M]|p2[:M]).mean())
+            res['by_sesoi'][str(se_)]=dict(power_obeying_triggers=float(succ.mean()),futility_stop_rate_triggers=float((~p1&stop).mean()),power_obeying_triggers_and_PP=float(sp.mean()),power_obeying_PP_se=float(np.sqrt(max(sp.mean(),1e-12)*(1-sp.mean())/M)),power_ignoring_futility_same_M=ig,futility_stop_rate_PP=float((~p1[:M]&(stop[:M]|ppstop)).mean()),M=M)
+        res['PP_stop_rate_M']=float(ppstop.mean());out[nm]=res
+    sdc=contrast_sds(c['sds'],c['corr']);out['contrast_sds']=sdc;out['mde']={t:mde_report(v,'025' if t=='T_R_leak' else '05',N=mde_N) for t,v in sdc.items()}
+    return dict(msd=msd,rho=rho,N=N,M=M,B=B,nu0=PRIOR['nu0'],res=out)
+def ops_grid(N=100_000,M=500,B=300,seed=2026,procs=9):
+    from multiprocessing import Pool
+    cells=[(sd,r,N,M,B,seed) for sd in OPS_SDS for r in OPS_RHOS]
+    with Pool(procs) as pool:res=pool.map(ops_cell,cells)
+    return dict(grid=res,axes=dict(margin_sd=OPS_SDS,rho_GH=OPS_RHOS,sesoi_fact=OPS_SESOI),N=N,common_random_numbers=True,nu0=PRIOR['nu0'],note='power IGNORING futility vs OBEYING triggers (i)/(ii) (all N) and triggers+PP rules (first M); MDE is a single-test quantity (futility of other components does not change it); scenario alt = SCENARIO_657, weakG = G .8 / H .6, h0 = every contrast at its null boundary; token-family SDs fixed at the scenario values; delta_PL .25')
+V7_REQUIRED=[('IUT scope (3c = 7 components, size <= .05)','evaluate_core; components_pass','registration item 6 ("Scope of the intersection-union claim")'),('component timing (verdict uses that look only)','component_status','registration item 6 ("per-component timing")'),('k below target -> k = 8 and recomputed power','choose_k (met=False)','registration item 10 ("otherwise k = 8 with the power tables recomputed")'),('Frechet check','power_report','registration item 10 ("the Frechet bounds")'),('skew grid','boundaries.skew_grid','registration item 6 ("skewness {0, .5, 1, 1.5, 2}")'),('cause of 1.757 vs 1.7553','boundaries.run_report (explanation key)','registration item 6 ("differ by Monte Carlo noise only")')]
 FREEZE_ORDER='A (statistical spec, INPUT_SCHEMA, SESOI/sd0 DERIVATION RULES, no values) -> B (runner + A hash) -> auxiliary 901..908 and instrumentation 91..94 -> A-prime (mechanically derived values + output hashes) -> confirmatory seeds'
-FREEZE_A_FILES=['e57_1280_analyze.py','e57_1280_boundaries.py','e57_1280_registration.py','../../experiments/exp07_write_ladder/e57_1280_boundaries_report.json','../../experiments/exp07_write_ladder/e57_1280_boundaries_skew.json','../../experiments/exp07_write_ladder/e57_1280_power_report.json']
+FREEZE_A_FILES=['e57_1280_analyze.py','e57_1280_boundaries.py','e57_1280_registration.py','../../experiments/exp07_write_ladder/e57_1280_boundaries_report.json','../../experiments/exp07_write_ladder/e57_1280_boundaries_skew.json','../../experiments/exp07_write_ladder/e57_1280_power_report.json','../../experiments/exp07_write_ladder/e57_1280_ops_grid.json']
 FREEZE_B_FILES=['e57_1280_runner.py']
 def canon_check(path):
     """canonical file: UTF-8 decodable, LF line endings only, no BOM"""
@@ -286,7 +362,7 @@ def freeze_manifest(stage,out,root=None,prev=None,instr_dir=None,aux_dir=None,co
         assert prev,'Freeze B needs the Freeze A manifest';assert not nonempty(instr_dir) and not nonempty(aux_dir),'auxiliary/instrumentation output already exists: Freeze B must come first';rec['prev_manifest_sha256']=manifest_hash(prev)
     if stage=='Aprime':
         assert prev and values_file and os.path.exists(values_file),'Freeze A-prime needs the B manifest and the derived values file';assert not nonempty(conf_dir),'confirmatory output exists before Freeze A-prime';assert nonempty(instr_dir) and nonempty(aux_dir),'A-prime needs the auxiliary and instrumentation outputs'
-        rec['prev_manifest_sha256']=manifest_hash(prev);rec['values_file_sha256']=canon_check(values_file);rec['instrumentation_outputs']=_tree_hashes(instr_dir);rec['auxiliary_outputs']=_tree_hashes(aux_dir)
+        rec['prev_manifest_sha256']=manifest_hash(prev);check_aprime_values(json.load(open(values_file)));rec['values_file_sha256']=canon_check(values_file);rec['instrumentation_outputs']=_tree_hashes(instr_dir);rec['auxiliary_outputs']=_tree_hashes(aux_dir)
     rec['manifest_sha256']=None;rec.pop('manifest_sha256');h=write_manifest(rec,out);return dict(rec,manifest_sha256=h)
 def verify_chain(a,b,ap):
     """the confirmatory seeds may start only if A-prime chains B chains A and every sidecar hash matches"""
@@ -299,6 +375,7 @@ TRACE_V6=[dict(t,v5_commit=t['v5_commit']) for t in TRACE_V5]+[dict(item=15,chan
 _V7='ea8ea696b29827bf4392482511cf66c7960c1248'
 TRACE_V7=[dict(item=k,change=c,function=f,v7_commit=_V7,test=t) for k,(c,f,t) in enumerate([('TRACE_V6','TRACE_V6','selftest: trace'),('freeze A/B + input schema contract','freeze_manifest; INPUT_SCHEMA; validate_input','selftest: freeze'),('SESOI split into nat/fact and nat/token','P; look1_report','selftest: sesoi'),('failure definition, spare seeds, actual information fraction, n_final<16','fill_seeds; crit_for; recompute_look2','selftest: seeds'),('marginal and joint power with inputs','power_report','selftest: power'),('IUT scope 3c = 7 components, size <= .05','evaluate_core; components_pass','selftest: verdict rows'),('per-component timing: verdict uses that look only, no carry-over','component_status','selftest: component_status'),('frozen inverse-Wishart prior','PRIOR; pp_model','selftest: pp prior'),('P(futility | E_rec=.30)','futility_report; p_futility_trigger_i','selftest: futility'),('choose_k UCL on both components','choose_k','selftest: choose_k'),('k below target: k = 8 and recomputed power','choose_k (met=False); power_report','selftest: choose_k fallback'),('Frechet bounds of the joint power','power_report','selftest: power'),('skew grid and exact sign-flip, disagreement rule, primary locked','skew_disagreement; assert_primary_unchanged; signflip_components','selftest: skew'),('look 1 df = 9 confirmed','look1_df_check','boundaries selftest'),('amendments merged into one authoritative text','registration.authoritative_text','registration selftest')],start=1)]
 TRACE_V8=[dict(item=k,change=c,function=f,test=t) for k,(c,f,t) in enumerate([('decider role and authority','DECIDER','selftest: decider'),('canonical manifests, per-file sha256, sidecar hash, A -> B -> A-prime chain','freeze_manifest; canon_check; write_manifest; manifest_hash; verify_chain','selftest: freeze chain'),('SESOI coefficient fixed before measurement, units measured separately, instability fallback, delta_PL .25','derive_sesoi; SESOI_COEF; P','selftest: derive_sesoi'),('sd0 derivation rule only, nu0 > p + 1','derive_sd0; PRIOR; pp_model','selftest: sd0'),('boundary report regenerated N=1e7, independent alpha check, 1.757 vs 1.7553 explained, look 1 3.18198','boundaries.run_report; independent_alpha_check; recompute_look2','boundaries selftest'),('power MC N=1e5 common random numbers, joint vs product with paired SE, Frechet, >=.9999, power curve','power_report; power_curve; fmt_power','selftest: power; power_curve'),('skew grid 0/.5/1/1.5/2 both directions, MC SE, two-sided T_R note, option 3 chosen','boundaries.skew_grid; registration item 6','boundaries selftest'),('technical failures, total cap 5, look 1 skip with fixed full alpha, recompute rule','fill_seeds; design_for; evaluate_final','selftest: seeds'),('TRACE_V7 completed (IUT, timing, k fallback, Frechet, skew grid, IW freeze)','TRACE_V7','selftest: trace'),('item 8 wording (x-upper-limit for zero counts), H0 futility probabilities','fmt_mc; fmt_prob; futility_h0_report','selftest: fmt'),('1284 separation: own alpha, disjoint seeds, no output before A-prime','assert_1284_allowed; SEEDS_1284','selftest: 1284')],start=1)]
+TRACE_V9=[dict(item=k,change=c,function=f,test=t) for k,(c,f,t) in enumerate([('nu0 = 11 >= p + 4 (finite prior variance)','PRIOR; pp_model','selftest: nu0 = p+3 rejected'),('(SESOI, sd, rho) operating-characteristics grid, N=1e5 CRN, nu0 consistent, futility ignored vs obeyed','ops_cell; ops_grid','selftest: ops_cell'),('blind automatic failure classification','classify_failure; classification_log','selftest: classify'),('informative-failure sensitivity (per arm, worst/best case)','failure_sensitivity; ARM_COMPONENTS','selftest: failure_sensitivity'),('v7 required items table','V7_REQUIRED','selftest: v7 table'),('A-prime binds values only','check_aprime_values; ALLOWED_APRIME_KEYS','selftest: aprime keys'),('SESOI options (estimator, clamp, nonpositive, rounding, unstable handling)','derive_sesoi; SESOI_OPTIONS','selftest: derive_sesoi options')],start=1)]
 def selftest():
     rng=np.random.default_rng(0);S=10
     def mk(nc=2.0,a=2.5,c=2.0,b=2.5,aP=2.0,bP=2.0,X=0.4,MN=-3.8,MM=-1.8,MR=-1.8,MP=-3.8,gnp=1.1,sd=0.05,ok=True,um=0,tok=7000):
@@ -332,7 +409,7 @@ def selftest():
     rep=look1_report(recs[:10],B=300,sesoi_fact=0.5,prior=PR);assert 'default_actions' in rep and not rep['default_actions']['stop_whole_experiment'] or True
     jp=joint_power_mc([0.07,0.3,0.35,2.0,1.6,0.0],[0.007,0.024,0.024,0.45,0.45,0.45],np.eye(6),N=300);assert 0<=jp['final_look_only']<=jp['cumulative']<=1
     for t in TRACE_V6:assert (t.get('v5_commit') or t.get('v6_commit')) and t['item'] in range(1,20)
-    assert len(TRACE_V7)==15 and len(TRACE_V8)==11
+    assert len(TRACE_V7)==15 and len(TRACE_V8)==11 and len(TRACE_V9)==7
     # v7 / v8
     bad=mk();del bad[0]['nc']
     try:evaluate(bad);raise SystemExit('schema not enforced')
@@ -348,7 +425,9 @@ def selftest():
     assert evaluate_final(mk(a=2.1,b=2.5,X=0.5)+mk(a=2.1,b=2.5,X=0.5),fill_seeds({}))['label'].startswith('3c') and evaluate_final(mk(a=2.1,b=2.5,X=0.5)+mk(a=2.1,b=2.5,X=0.5),f4)['crit_025']==crit_for(None,20,'025')
     assert abs(p_futility_trigger_i(0.25,0.05)-0.05)<1e-9 and futility_report()['by_sd']['0.05']<0.01 and futility_report()['by_sd_text']['0.03']=='<1e-4'
     assert fmt_mc(0,1000).startswith('<3.0e-03 (0 of 1000)') and fmt_mc(5,1000).startswith('0.0050 (5 of') and fmt_power(0.99995)=='>=.9999' and fmt_power(0.8)=='0.800' and fmt_prob(1e-9)=='<1e-4'
-    assert pp_model(Y[:10],B=200,prior=PR)['prior']['nu0']==9 and PRIOR['nu0']>7+1 and PRIOR['sd0'] is None
+    assert pp_model(Y[:10],B=200,prior=PR)['prior']['nu0']==11 and PRIOR['nu0']>7+3 and PRIOR['sd0'] is None
+    try:pp_model(Y[:10],B=10,prior=dict(PR,nu0=10));raise SystemExit('nu0 = p + 3 accepted')
+    except AssertionError:pass
     try:pp_model(Y[:10],B=10,prior=PRIOR);raise SystemExit('pp model ran without derived sd0')
     except AssertionError:pass
     sd0=derive_sd0(Y[:4]);assert len(sd0)==7 and all(x>0 for x in sd0)
@@ -392,7 +471,38 @@ def selftest():
         try:verify_chain(fa,fb,fp);raise SystemExit('tampered manifest accepted')
         except AssertionError:pass
     g_=globals()
-    for tr in TRACE_V7+TRACE_V8:
+    # v9
+    import re as _re,e57_1280_registration as RG
+    txt=RG.authoritative_text()
+    for item,func,where in V7_REQUIRED:
+        for fn in func.split(';'):
+            nm=fn.strip().split(' ')[0].split('.')[-1]
+            assert nm in g_ or hasattr(BD,nm) or nm=='run_report',f'V7 item function missing: {nm}'
+        key=_re.search(r'\("(.+?)"\)',where).group(1);assert key in txt,f'V7 item not in the authoritative registration: {key}'
+    assert 'explanation_c2_1.757_vs_1.7553' in open(_os.path.join(str(HERE),FREEZE_A_FILES[3])).read()
+    assert classify_failure(dict(seed=1,exit_code=1,exception_type='RuntimeError',stderr_tail='RESOURCE_EXHAUSTED: Out of memory while allocating'))=='out_of_memory'
+    assert classify_failure(dict(seed=2,exit_code=1,exception_type='ValueError',stderr_tail='gen_facts failed'))=='world_generation_exception' and classify_failure(dict(seed=3,exit_code=0,finite_flag=False))=='non_finite_value' and classify_failure(dict(seed=4,exit_code=0,determinism_ok=False))=='determinism_check_failed' and classify_failure(dict(seed=5,exit_code=139,stderr_tail='segmentation fault'))=='runner_crash' and classify_failure(dict(seed=6,exit_code=0))=='unclassified'
+    try:classify_failure(dict(seed=7,exit_code=1,nc=2.0));raise SystemExit('outcome leaked into the classification')
+    except AssertionError:pass
+    try:classify_failure(dict(seed=7,exit_code=1,whatever=1));raise SystemExit('unknown field accepted')
+    except AssertionError:pass
+    try:fill_seeds({101:classify_failure(dict(seed=101,exit_code=0))});raise SystemExit('unclassified treated as technical')
+    except AssertionError:pass
+    with tf.TemporaryDirectory() as td:
+        st=classification_log([dict(seed=101,exit_code=1,stderr_tail='Traceback'),dict(seed=102,exit_code=0,finite_flag=False)],_os.path.join(td,'cl.json'));assert st=={101:'runner_crash',102:'non_finite_value'} and manifest_hash(_os.path.join(td,'cl.json'))
+    ysens=np.vstack([Y,Y[:4]+0.0]);fs=failure_sensitivity(Y16,['RECOMP','NATS'],k=2.0);assert fs['cases'].keys()=={'worst','best'} and isinstance(fs['robust_to_informative_failure'],bool)
+    Yst=np.column_stack([rng.normal(m,s_,20) for m,s_ in zip([0.05,0.30,0.35,2.0,1.6,0.0],[0.007,0.024,0.024,0.45,0.45,0.45])]+[np.zeros(20)]);fz=failure_sensitivity(Yst,['ALL']*5,k=4.0);assert fz['cases']['worst']!=fz['observed'] or fz['robust_to_informative_failure'] is True
+    for opt in ({'estimator':'median'},{'estimator':'lcb95'},{'nonpositive':'floor0'},{'nonpositive':'drop'},{'rounding':'dec2'},{'rounding':'floor0.05'}):
+        d1=derive_sesoi([1.9,2.0,2.1,1.95,2.05,2.0,1.9,2.1],[0.30,0.31,0.29,0.30,0.32,0.28,0.30,0.31],opt=opt);assert d1['sesoi_fact']['stable'] and d1['options_frozen'] is False
+    assert derive_sesoi([1.9,2.0,2.1,1.95,2.05,2.0,1.9,2.1],[0.3]*8,opt={'rounding':'floor0.05'})['sesoi_fact']['value']==1.0 and derive_sesoi([1.9,2.0,2.1,1.95,2.05,2.0,1.9,2.1],[0.3]*8,opt={'estimator':'lcb95'})['sesoi_fact']['value']<1.0
+    assert derive_sesoi([4.0,4.1,3.9,4.0,4.05,3.95,4.0,4.0],[0.3]*8,clamp_fact=(0.25,1.0))['sesoi_fact']['value']==1.0
+    try:derive_sesoi([0.1,2.0,-1.5,3.0,0.0,2.5,-2.0,1.0],[0.3]*8,opt={'on_unstable':'amend_rule_before_Aprime'});raise SystemExit('amend option did not raise')
+    except AssertionError:pass
+    assert check_aprime_values({'sesoi_fact':0.5,'sd0':[1]*7})
+    try:check_aprime_values({'sesoi_fact':0.5,'delta_PL':0.5});raise SystemExit('A-prime accepted a rule change')
+    except AssertionError:pass
+    oc=ops_cell((0.45,0.7,300,12,60,1),mde_N=20_000);assert set(oc['res'])>={'alt','weakG','h0','mde','contrast_sds'} and oc['nu0']==11 and oc['res']['alt']['by_sesoi']['0.5']['power_obeying_triggers']<=oc['res']['alt']['power_ignoring_futility']+1e-12
+    for tr in TRACE_V7+TRACE_V8+TRACE_V9:
         for fn in tr['function'].split(';'):
             nm=fn.strip().split(' ')[0].split('.')[-1]
             if nm in ('registration','boundaries','TRACE_V6','TRACE_V7','item'):continue
@@ -401,8 +511,10 @@ def selftest():
     assert P['delta_PL_value']==0.25 and P['sesoi_token'] is None and P['sesoi_fact'] is None and len(IMPLEMENTATION_STATUS)==5 and 'sesoi' not in P
     print('e57_1280_analyze selftest ok')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--json');ap.add_argument('--look',type=int);ap.add_argument('--selftest',action='store_true');ap.add_argument('--power-report');ap.add_argument('--N',type=int,default=100_000);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--json');ap.add_argument('--look',type=int);ap.add_argument('--selftest',action='store_true');ap.add_argument('--power-report');ap.add_argument('--ops-grid');ap.add_argument('--N',type=int,default=100_000);a=ap.parse_args()
     if a.selftest:selftest()
+    elif a.ops_grid:
+        g=ops_grid(N=a.N);json.dump(g,open(a.ops_grid,'w'),indent=1,default=float);print('ops grid written')
     elif a.power_report:
         sc=SCENARIO_657;pr=power_report(sc['means'],sc['sds'],sc['corr'],N=a.N);pc=power_curve(contrast_sds(sc['sds'],sc['corr']),N=a.N);fh=futility_h0_report();fr=futility_report()
         rep=dict(scenario=sc,power=pr,power_curve=pc,contrast_sds=contrast_sds(sc['sds'],sc['corr']),futility_E_rec_030=fr,futility_h0=fh,note='scenario estimates; no claim of achieved power; H0 scenario = every contrast at its null boundary; PP prior sd0 in the H0 report is the scenario SD, not the frozen A-prime value');json.dump(rep,open(a.power_report,'w'),indent=1,default=float);print(json.dumps(rep,indent=1,default=float))
