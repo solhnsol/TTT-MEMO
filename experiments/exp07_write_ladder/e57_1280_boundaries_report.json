@@ -1,0 +1,81 @@
+{
+ "numpy": "2.2.5",
+ "scipy": "1.15.2",
+ "python": "3.12.3",
+ "bit_generator": "PCG64 (numpy default_rng)",
+ "N": 10000000,
+ "rng_seeds": [
+  7,
+  12345
+ ],
+ "results": {
+  "0.05": {
+   "alpha_1": 0.005574596680784305,
+   "c1_analytic": 3.1819836784069713,
+   "c2_estimates": [
+    1.7569072246551514,
+    1.7571104764938354
+   ],
+   "c2_difference": 0.00020325183868408203,
+   "c2_used_mean": 1.7570088505744934,
+   "c2_boundary_mc_se": 0.0007457559819106009,
+   "binomial_se_alpha": 6.892024376045111e-05,
+   "error_check_independent_draws": {
+    "normal": {
+     "look1": 0.005567,
+     "look2_incremental": 0.0444479,
+     "cumulative": 0.0500149
+    },
+    "t5": {
+     "look1": 0.0043334,
+     "look2_incremental": 0.0443655,
+     "cumulative": 0.0486989
+    },
+    "lognormal": {
+     "look1": 3.97e-05,
+     "look2_incremental": 0.0069829,
+     "cumulative": 0.0070226
+    },
+    "lognormal_neg": {
+     "look1": 0.0942257,
+     "look2_incremental": 0.1184135,
+     "cumulative": 0.2126392
+    }
+   }
+  },
+  "0.025": {
+   "alpha_1": 0.0015253227579890005,
+   "c1_analytic": 4.012871402883237,
+   "c2_estimates": [
+    2.1092588901519775,
+    2.1078898906707764
+   ],
+   "c2_difference": 0.0013689994812011719,
+   "c2_used_mean": 2.108574390411377,
+   "c2_boundary_mc_se": 0.0009956593922908358,
+   "binomial_se_alpha": 4.937104414532875e-05,
+   "error_check_independent_draws": {
+    "normal": {
+     "look1": 0.001529,
+     "look2_incremental": 0.0234801,
+     "cumulative": 0.0250091
+    },
+    "t5": {
+     "look1": 0.0010414,
+     "look2_incremental": 0.0223637,
+     "cumulative": 0.0234051
+    },
+    "lognormal": {
+     "look1": 2.9e-06,
+     "look2_incremental": 0.0014569,
+     "cumulative": 0.0014598
+    },
+    "lognormal_neg": {
+     "look1": 0.0593721,
+     "look2_incremental": 0.1005269,
+     "cumulative": 0.159899
+    }
+   }
+  }
+ }
+}
