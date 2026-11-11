@@ -26,7 +26,8 @@ def _signmat(m):
     return _SIGNS[m]
 def signflip_p_exact(x):
     """exact one-sided p = P(S >= S_obs), S = sum s_i x_i, s_i = +-1 uniform: all 2^n sign vectors, meet in the middle (halves of n // 2 and n - n // 2 signs, sorted sums, binary search)"""
-    x=np.asarray(x,float);n=len(x);m=n//2;a=_signmat(m)@x[:m];b=np.sort(_signmat(n-m)@x[m:]);tol=1e-9*np.abs(x).sum()+1e-300;need=x.sum()-a-tol
+    x=np.asarray(x,float);n=len(x);assert n<=32,'exact sign-flip is limited to n <= 32 seeds (2^n sign vectors, meet in the middle); use the Monte Carlo fallback'
+    m=n//2;a=_signmat(m)@x[:m];b=np.sort(_signmat(n-m)@x[m:]);tol=1e-9*np.abs(x).sum()+1e-300;need=x.sum()-a-tol
     ge=len(b)-np.searchsorted(b,need,side='left');return float(ge.sum()/(len(a)*len(b)))
 def t_p(x):
     x=np.asarray(x,float);n=len(x);sd=x.std(ddof=1)
@@ -257,12 +258,14 @@ def selftest():
     pr=power_n30(*[SCENARIO_657[k] for k in ('means','sds','corr')],N=300,exact_N=60);a_=pr['t_only'];assert a_['joint']<=a_['frechet'][1]+1e-9 and a_['joint']>=a_['frechet'][0]-1e-9 and pr['inputs']['n']==30 and fmt_power(0.99995)=='>=.9999'
     gt=gpu_table();assert abs(gt['central']['hours_n30']-30.0)<1e-9 and abs(gt['central']['hours_n20']-20.0)<1e-9
     # v11
+    try:signflip_p_exact(np.ones(34));raise SystemExit('n above the exact limit accepted')
+    except AssertionError:pass
     o=evaluate(mk(a=2.1,b=2.5,X=0.5));assert all(abs(o['holm'][k]['p_max']-max(o['holm'][k]['p_t'],o['holm'][k]['p_exact']))<1e-15 for k in o['holm'])
     assert abs(50**0.5*0+0.050*np.sqrt(2/stats.chi2.ppf(0.05,2))-0.2205)<0.002 and POWER_SDS==(0.05,0.225,0.45,0.90) and all('PILOT-BASED' in SD_SOURCE[k] for k in (0.05,0.225)) and all('ASSUMPTION' in SD_SOURCE[k] for k in (0.45,0.90))
     full=mk(a=2.1,b=2.5,X=0.5);fr=final_report(full);assert fr['below_n_min'] is False and 'n_min = 27' in fr['n_min_note'] and 'missing_seed_worst_case' not in fr
     fr2=final_report(full[:22]);assert fr2['below_n_min'] is True and fr2['label_reported'].startswith('EXPLORATORY') and fr2['missing_seed_worst_case']['imputed']==8 and isinstance(fr2['missing_seed_worst_case']['robust'],bool)
     fr3=final_report(mk(a=2.1,b=2.5,X=0.5,sd=0.02)[:15],p=dict(P,n_min=10));assert fr3['below_n_min'] is False and final_report(full[:28])['below_n_min'] is False and final_report(full[:26])['below_n_min'] is True and fr3['missing_seed_worst_case']['imputed']==15 and fr3['n_available']==15
-    pd=evaluate_core(*[np.array([x_['a']-x_['nc'] for x_ in full]),np.array([x_['b']-x_['c'] for x_ in full]),np.array([x_['X_MASK'] for x_ in full]),np.array([x_['M_MASK']-x_['M_NATS'] for x_ in full]),np.array([x_['M_RECOMP']-x_['M_NATS'] for x_ in full]),np.array([x_['M_RECOMP_PL']-x_['M_NATS'] for x_ in full]),np.zeros(30)],pad=30);assert pd['n_imputed_zero_effect']==30 and pd['tests']['g2a']['n']==60 and pd['tests']['g2a']['mean']<0.5*0.5
+    h15=full[:15];pd=evaluate_core(np.array([x_['a']-x_['nc'] for x_ in h15]),np.array([x_['b']-x_['c'] for x_ in h15]),np.array([x_['X_MASK'] for x_ in h15]),np.array([x_['M_MASK']-x_['M_NATS'] for x_ in h15]),np.array([x_['M_RECOMP']-x_['M_NATS'] for x_ in h15]),np.array([x_['M_RECOMP_PL']-x_['M_NATS'] for x_ in h15]),np.zeros(15),pad=15);assert pd['n_imputed_zero_effect']==15 and pd['tests']['g2a']['n']==30 and abs(pd['tests']['g2a']['mean']-0.5*np.mean([x_['b']-x_['c'] for x_ in h15]))<1e-9
     bm=benchmark_exact(reps=3);assert bm['sign_vectors']==2**30 and bm['seconds_per_test']>0 and bm['sign_matrix_MB']<20
     assert P['delta_PL_value']==0.25 and P['sesoi_fact']==0.5 and P['n_min']==27 and 'sesoi_coef' not in P and len(IMPLEMENTATION_STATUS)==5
     print('e57_1280_analyze selftest ok')
