@@ -1,5 +1,5 @@
 #!/bin/bash
-# JOB 1283 = E57 K0=0 CONFIRMATION, synthetic 16-fact worlds (v3_16_1), NEW seeds 71..78 (Hans 11/10 '추천대로'; GPU start needs Hans' own sentence; Council check of the registration first): original-NAT arms NATS, NATBINF (gate: == NATS bit for bit on every seed), NATMASK, NATMASKC, DIRmaskNORMfull, DIRfullNORMmask, plus the UNCONDITIONAL clip-sensitivity arms NATS_clip10, NATMASK_clip10, NATMASKC_clip10 (sensitivity only), mask from chunk 0 (K0 = 0, tagged in every saved.json); reads at exposures 16/32/64/128, token diag every 8 chunks (paper cost, not the per-chunk mechanism logging). Output $OUT/e57_k0conf16/ tag k0c16. ESTIMATE 9 arms x 8 seeds x 8.5 min ~ 10.2 h. versions.json (library versions, flags, driver, git head, file hashes) is written first and frozen.
+# JOB 1283 = E57 K0=0 CONFIRMATION, synthetic 16-fact worlds (v3_16_1), NEW seeds 71..78 (Hans 11/10 '추천대로'; GPU start needs Hans' own sentence; Council check of the registration first): original-NAT arms NATS, NATBINF (gate: == NATS bit for bit on every seed), NATMASK, NATMASKC, DIRmaskNORMfull, DIRfullNORMmask, plus the UNCONDITIONAL clip-sensitivity arms NATS_clip10, NATMASK_clip10, NATMASKC_clip10 (sensitivity only), mask from chunk 0 (K0 = 0, tagged in every saved.json); reads at exposures 16/32/64/128, token diag every 8 chunks (paper cost, not the per-chunk mechanism logging). Output $OUT/e57_k0conf16/ tag k0c16. ESTIMATE 9 arms x 8 seeds x 8.5 min + canary/state at exposures 16/32/64/128 (--save-apps, Hans 11/11 16:34 KST card 'save addition') ~ 11.7 h, ~375 GB of states. versions.json (library versions, flags, driver, git head, file hashes) is written first and frozen.
 set -eo pipefail
 export PYTHONUNBUFFERED=1
 PY=$(realpath -s "$PY")
@@ -36,6 +36,6 @@ assert R['NATMASK']['K0']==0 and R['NATMASK']['log'][0]['ce']!=n[0]['ce'],'NATMA
 print('smoke ok: finite, NATBINF == NATS (chunks 0-8), NATMASK active from chunk 0, K0 tags',{a:r.get('K0') for a,r in R.items()})
 PYE
 for SEED in 71 72 73 74 75 76 77 78; do
-  $PY $D/e57_oracle_run.py --seed $SEED --out $OUT/e57_k0conf16 --masks none --mask-arm ALLQ256 --arms NATS,NATBINF,NATMASK,NATMASKC,DIRmaskNORMfull,DIRfullNORMmask,NATS_clip10,NATMASK_clip10,NATMASKC_clip10 --nat-loss-every 8 --tag k0c16
+  $PY $D/e57_oracle_run.py --seed $SEED --out $OUT/e57_k0conf16 --masks none --mask-arm ALLQ256 --arms NATS,NATBINF,NATMASK,NATMASKC,DIRmaskNORMfull,DIRfullNORMmask,NATS_clip10,NATMASK_clip10,NATMASKC_clip10 --save-apps 16,32,64,128 --nat-loss-every 8 --tag k0c16
 done
 echo "outputs: $OUT/e57_k0conf16/E55_k0c16_<arm>_s<seed>.{saved,read}.json"
