@@ -29,13 +29,17 @@ def error_rates(alpha,c1,c2,N,seed,dist='normal',batch=500_000):
     for _ in range(N//batch):
         t10,t20=tstats(gen(rng,batch,dist));h1=t10>c1;h2=(~h1)&(t20>c2);r1+=int(h1.sum());r2+=int(h2.sum())
     return dict(look1=r1/N,look2_incremental=r2/N,cumulative=(r1+r2)/N)
+FINAL_C2={0.05:1.7575,0.025:2.1093}         # v8 table = the 4-decimal means of the two 1e7 runs in the regenerated report (1.75748 / 2.10930)
+REGISTERED_C2={0.05:1.757,0.025:2.109}      # the v6/v7 table values (mean of two 1e7 runs of the raw-data sampler)
 def run_report(N=10_000_000,seeds=(7,12345)):
     out={'numpy':np.__version__,'scipy':__import__('scipy').__version__,'python':platform.python_version(),'bit_generator':'PCG64 (numpy default_rng)','N':N,'rng_seeds':list(seeds),'results':{}}
     for alpha in (0.05,0.025):
-        a1,c1=look1(alpha);est=[look2_bound(alpha,N,s)[0] for s in seeds];c2=float(np.mean(est));se=boundary_se(alpha,N,c2)
+        a1,c1=look1(alpha);est=[recompute_look2(alpha,10,20,N=N,seed=s)['c2'] for s in seeds];c2=float(np.mean(est));se=boundary_se(alpha,N,c2)
         chk={d:error_rates(alpha,c1,c2,N,seed=987654 if d=='normal' else 555,dist=d) for d in ('normal','t5','lognormal','lognormal_neg')}
-        out['results'][str(alpha)]=dict(alpha_1=a1,c1_analytic=c1,c2_estimates=est,c2_difference=float(abs(est[0]-est[1])),c2_used_mean=c2,c2_boundary_mc_se=se,binomial_se_alpha=float(np.sqrt(alpha*(1-alpha)/N)),error_check_independent_draws=chk)
-    return out
+        ind=independent_alpha_check(alpha,c1,c2,N=N);ind_reg=independent_alpha_check(alpha,c1,REGISTERED_C2[alpha],N=N,seed=27182);extra=recompute_look2(alpha,10,20,N=2_000_000,seed=99)['c2']
+        out['results'][str(alpha)]=dict(independent_alpha_check_new_c2=ind,independent_alpha_check_registered_c2=dict(c2=REGISTERED_C2[alpha],**ind_reg),c2_at_N_2e6_seed99=extra,alpha_1=a1,c1_analytic=c1,c2_estimates=est,c2_difference=float(abs(est[0]-est[1])),c2_used_mean=c2,c2_boundary_mc_se=se,binomial_se_alpha=float(np.sqrt(alpha*(1-alpha)/N)),error_check_independent_draws=chk)
+    out['explanation_c2_1.757_vs_1.7553']='1.7553 was recompute_look2 at N = 2e6 (boundary MC SE about .0017); the registered 1.757 is the mean of two N = 1e7 runs (SE about .0008 each); the difference (.0017) is Monte Carlo noise, not a design difference (same alpha_1 = A(.5), same t_9 look 1, same 1:1 information fraction); see c2_at_N_2e6_seed99'
+    out['look1_check']=look1_df_check();return out
 
 # ---------------- v7 additions ----------------
 def look1_df_check():
@@ -44,12 +48,23 @@ def look1_df_check():
 def look1_actual(alpha,n,n_planned=20):
     """look-1 boundary for actual n at look 1 out of n_planned final seeds: t_{n-1}^{-1}(1 - A(n/n_planned))"""
     return float(stats.t.ppf(1-spend(alpha,n/n_planned),n-1))
-def recompute_look2(alpha,n1,n2,N=2_000_000,seed=7,batch=250_000):
-    """look-2 boundary for the REAL information fraction t = n1/n2 (n1 seeds at look 1, n2 final seeds): spending alpha_1 = A(n1/n2), c1 = t_{n1-1}^{-1}(1 - alpha_1), c2 by Monte Carlo on the sets not crossing at look 1 with the shared first n1 observations"""
-    z=stats.norm.ppf(1-alpha/2);a1=float(2*(1-stats.norm.cdf(z/np.sqrt(n1/n2))));c1=float(stats.t.ppf(1-a1,n1-1));rng=np.random.default_rng(seed);keep=[];batch=min(batch,N)
+def _suff_t(rng,n1,n2,b):
+    """exact simulation of the two t statistics under H0 from sufficient statistics (independent code path: standard normals and chi-squares instead of raw observations)"""
+    nb=n2-n1;z1=rng.standard_normal(b);z2=rng.standard_normal(b);ssa=rng.chisquare(n1-1,b);ssb=rng.chisquare(nb-1,b)
+    t1=z1/np.sqrt(ssa/(n1-1));tot=np.sqrt(n1)*z1+np.sqrt(nb)*z2;ss=ssa+ssb+z1**2+z2**2-tot**2/n2;t2=(tot/np.sqrt(n2))/np.sqrt(ss/(n2-1));return t1,t2
+def recompute_look2(alpha,n1,n2,N=10_000_000,seed=7,batch=2_500_000):
+    """look-2 boundary for the REAL information fraction t = n1/n2: alpha_1 = A(n1/n2), c1 = t_{n1-1}^{-1}(1 - alpha_1), c2 = the (alpha - alpha_1) upper quantile of t2 among the sets with t1 <= c1 (sufficient-statistic sampler, N rounded down to a multiple of the batch); also returns the boundary MC SE"""
+    z=stats.norm.ppf(1-alpha/2);a1=float(2*(1-stats.norm.cdf(z/np.sqrt(n1/n2))));c1=float(stats.t.ppf(1-a1,n1-1));rng=np.random.default_rng(seed);batch=min(batch,N);keep=[]
     for _ in range(N//batch):
-        x=rng.normal(size=(batch,n2));t1=x[:,:n1].mean(1)/(x[:,:n1].std(1,ddof=1)/np.sqrt(n1));t2=x.mean(1)/(x.std(1,ddof=1)/np.sqrt(n2));keep.append(t2[t1<=c1].astype(np.float32))
-    M=(N//batch)*batch;k=np.sort(np.concatenate(keep))[::-1];return dict(n1=n1,n2=n2,alpha=alpha,alpha_1=a1,c1=c1,c2=float(k[int((alpha-a1)*M)]),N=M,seed=seed)
+        t1,t2=_suff_t(rng,n1,n2,batch);keep.append(t2[t1<=c1].astype(np.float32))
+    M=(N//batch)*batch;k=np.sort(np.concatenate(keep))[::-1];c2=float(k[int((alpha-a1)*M)]);pp=alpha-a1;se=float(np.sqrt(pp*(1-pp)/M)/stats.t.pdf(c2,n2-1))
+    return dict(n1=n1,n2=n2,alpha=alpha,alpha_1=a1,c1=c1,c2=c2,c2_mc_se=se,N=M,seed=seed)
+def independent_alpha_check(alpha,c1,c2,N=10_000_000,seed=31415,n1=10,n2=20,batch=2_500_000):
+    """independent simulation (different RNG seed AND the sufficient-statistic sampler) of the cumulative one-sided type I error of the pair (c1, c2)"""
+    rng=np.random.default_rng(seed);r1=r2=0;batch=min(batch,N)
+    for _ in range(N//batch):
+        t1,t2=_suff_t(rng,n1,n2,batch);h1=t1>c1;h2=(~h1)&(t2>c2);r1+=int(h1.sum());r2+=int(h2.sum())
+    M=(N//batch)*batch;c=(r1+r2)/M;return dict(look1=r1/M,look2_incremental=r2/M,cumulative=c,mc_se=float(np.sqrt(c*(1-c)/M)),N=M,seed=seed,target=alpha)
 def skew_dgp(kind,param,rng,n,m=20):
     """skewed / contaminated data generators for the sensitivity grid (all centred at mean 0): kind 'lognormal' with skewness gamma = param in {.5, 1, 2} (sigma solved from gamma = (e^{s^2}+2) sqrt(e^{s^2}-1)), kind 'contaminated' (90% N(0,1) + 10% N(0, 3^2)), kind 'mirror_lognormal' = the negative of the lognormal (opposite tail)"""
     def sig_for(g):
@@ -64,14 +79,15 @@ def skew_dgp(kind,param,rng,n,m=20):
     if kind=='contaminated':
         z=rng.normal(size=(n,m));mask=rng.random(size=(n,m))<0.10;return np.where(mask,3.0*z,z)
     raise ValueError(kind)
+SKEW_GRID=(0.0,0.5,1.0,1.5,2.0)
 def skew_grid(alpha,c1,c2,N=1_000_000,seed=2026,batch=250_000):
-    out={}
-    for kind,params in (('lognormal',(0.5,1.0,2.0)),('mirror_lognormal',(0.5,1.0,2.0)),('contaminated',(0,))):
-        for pr in params:
-            rng=np.random.default_rng(seed);r1=0;r2=0;b=min(batch,N)
-            for _ in range(N//b):
-                t10,t20=tstats(skew_dgp(kind,pr,rng,b));h1=t10>c1;h2=(~h1)&(t20>c2);r1+=int(h1.sum());r2+=int(h2.sum())
-            out[f'{kind}_{pr}']=dict(look1=r1/N,look2_incremental=r2/N,cumulative=(r1+r2)/N)
+    """cumulative error of the t-based two-look pair (c1, c2) under mean-zero skewed data: skewness in SKEW_GRID, both tail directions ('upper' = the test's tail is the long tail, 'lower' = the opposite tail), look 1, incremental look 2, cumulative, each with its MC SE; skewness 0 = normal; the contaminated normal is added as an extra cell"""
+    out={};cells=[(f'{d}_{g}',('lognormal' if d=='upper' else 'mirror_lognormal') if g>0 else 'normal',g) for g in SKEW_GRID for d in ('upper','lower') if not (g==0 and d=='lower')]+[('contaminated',"contaminated",0)]
+    for name,kind,g in cells:
+        rng=np.random.default_rng(seed);r1=0;r2=0;b=min(batch,N)
+        for _ in range(N//b):
+            x=rng.normal(size=(b,20)) if kind=='normal' else skew_dgp(kind,g,rng,b);t10,t20=tstats(x);h1=t10>c1;h2=(~h1)&(t20>c2);r1+=int(h1.sum());r2+=int(h2.sum())
+        M=(N//b)*b;c=(r1+r2)/M;out[name]=dict(look1=r1/M,look2_incremental=r2/M,cumulative=c,mc_se=float(np.sqrt(max(c,1e-12)*(1-c)/M)),N=M)
     return out
 def signflip_sequential(x,alpha,n1=10,direction='upper'):
     """exact sign-flip sequential test (sensitivity analysis; distribution free under symmetry): data x (length n2 = len(x)); conditional on |x| the 2^n2 sign vectors are enumerated. Look 1 rejects when the exact one-sided p-value of the first n1 observations is <= alpha_1 (alpha_1 = A(n1/n2)); look 2: the smallest threshold c2 on the sum statistic S2 = sum(s_i |x_i|) of all n2 observations such that P(look-1 event OR S2 >= c2) <= alpha, by exact enumeration over the 2^n2 sign vectors; the test rejects at look 2 if the observed S2 >= c2. Returns dict(look1_reject, look2_reject, p1, c2)"""
@@ -92,6 +108,9 @@ def selftest():
     c2,n=look2_bound(0.05,200_000,1);assert 1.6<c2<1.9,c2
     er=error_rates(0.05,c1,c2,200_000,2);assert abs(er['cumulative']-0.05)<0.005
     chk=look1_df_check();assert chk['df']==9
+    r10=recompute_look2(0.05,10,20,N=1_000_000);assert abs(r10['c2']-c2)<0.02 and abs(r10['c1']-c1)<1e-9
+    ia=independent_alpha_check(0.05,c1,r10['c2'],N=1_000_000);assert abs(ia['cumulative']-0.05)<4*ia['mc_se']+0.002,ia
+    sg=skew_grid(0.05,c1,r10['c2'],N=250_000);assert set(sg)>={'upper_0.0','upper_2.0','lower_2.0','contaminated'} and sg['lower_2.0']['cumulative']>sg['upper_2.0']['cumulative']
     r=recompute_look2(0.05,8,16,N=200_000);assert 1.5<r['c2']<2.0 and r['c1']>3.0
     rng=np.random.default_rng(4);sk=skew_dgp('lognormal',1.0,rng,200_000,20);assert abs(sk.mean())<0.02 and 0.8<float(((sk-sk.mean())**3).mean()/sk.var()**1.5)<1.3
     rej=0;M=400
@@ -107,7 +126,7 @@ if __name__=='__main__':
     elif a.skew:
         out={}
         for key,al in (('05',0.05),('025',0.025)):
-            a1,c1=look1(al);c2=1.757 if key=='05' else 2.109;out[key]=dict(c1=c1,c2=c2,grid=skew_grid(al,c1,c2,N=min(a.N,1_000_000)))
+            a1,c1=look1(al);c2=FINAL_C2[al];out[key]=dict(c1=c1,c2=c2,grid=skew_grid(al,c1,c2,N=min(a.N,1_000_000)))
         out['look1_df_check']=look1_df_check();out['note']='sensitivity grid: error rates of the t-based sequential boundaries under skewed/contaminated data (mean-zero nulls); lognormal skewness .5/1/2, mirror_lognormal = opposite tail';json.dump(out,open(a.skew,'w'),indent=1);print(json.dumps(out,indent=1))
     elif a.report:
         r=run_report(a.N);json.dump(r,open(a.report,'w'),indent=1);print(json.dumps(r,indent=1))

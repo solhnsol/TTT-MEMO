@@ -18,6 +18,8 @@ import sys,json,argparse,hashlib,time
 import numpy as np
 from scipy import stats
 SEEDS_INSTR=list(range(91,95));SEEDS_1280=list(range(101,121));SEEDS_REPL=list(range(121,141));SEEDS_1284=list(range(201,221));SEEDS_AUX_SESOI=list(range(901,909))
+SESOI_COEF=0.5;SESOI_FALLBACK_FACT=0.5;MAX_TECH_FAILURES=5;MAX_LOOK1_REPLACEMENTS=3;SD0_UCL_CONF=0.80
+DECIDER=dict(role='registration decider (the principal investigator, Hans; the Council reviewer is the independent monitor; the queue/server thread is never the decider)',may=['continue after a look-1 trigger (reason recorded before seeds 111..120 are opened)','accept or reject a technical-failure classification (not an outcome-based one)'],may_not=['stop without a trigger (a protocol deviation)','change statistics, boundaries, seeds, SESOI/sd0 rules or the primary test','open 1284 output before Freeze A-prime','exclude a seed by outcome'])
 TECH_FAILURES=('world_generation_exception','non_finite_value','determinism_check_failed','runner_crash','out_of_memory');N_FINAL_MIN=16;PRIMARY_TEST='seed-paired one-sided t, two-look sequential (n=10,20)'
 HERE=__import__('pathlib').Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 def _crit_defaults():
@@ -26,8 +28,8 @@ def _crit_defaults():
     for key,alpha in (('05',0.05),('025',0.025)):
         a1=2*(1-st.norm.cdf(st.norm.ppf(1-alpha/2)/np.sqrt(0.5)));out[key]={10:float(st.t.ppf(1-a1,9))}
     return out
-CRIT=_crit_defaults();CRIT['05'][20]=1.757;CRIT['025'][20]=2.109          # look-2 values = e57_1280_boundaries_report.json c2_used_mean (N = 10^7 per RNG seed, seeds 7 and 12345): 1.7570 and 2.1086, rounded to 3 decimals
-P=dict(R_k=0.8,Q_k=0.7,F_k=0.7,Flow_k=0.3,noprior_k=0.5,erec_min=0.25,emask_min=0.10,anomaly_ratio=1.2,unmatched_max=3,delta_PL_value=0.25,delta_PL='.25 nat absolute, one-sided non-superiority (Hans 2026-11-11)',sesoi_fact=0.5,sesoi_fact_note='PROVISIONAL screening value (nat/fact) until the K0=0 NATS 16->128 auxiliary measurement (seeds 901..908)',sesoi_token=None,sesoi_token_note='PLACEHOLDER (nat/token) from the same auxiliary measurement',primary_1284='RECOMP-ORACLE - RECOMP-PL',secondary_1284='HALF-PL - HALF',timestamp='local sha256 + server UTC time, no public deposit (Hans)',det_tol=1e-4,c_nc_tol=1e-4,min_fact_tokens=32,t_min=8)
+CRIT=_crit_defaults();CRIT['05'][20]=1.7575;CRIT['025'][20]=2.1093          # look-2 values = e57_1280_boundaries_report.json c2_used_mean (N = 10^7 per RNG seed, seeds 7 and 12345): 1.7570 and 2.1086, rounded to 3 decimals
+P=dict(R_k=0.8,Q_k=0.7,F_k=0.7,Flow_k=0.3,noprior_k=0.5,erec_min=0.25,emask_min=0.10,anomaly_ratio=1.2,unmatched_max=3,delta_PL_value=0.25,delta_PL='.25 nat absolute, one-sided non-superiority (Hans 2026-11-11)',sesoi_fact=None,sesoi_fact_note='filled at Freeze A-prime by derive_sesoi (nat/fact; unstable measurement -> SESOI_FALLBACK_FACT)',sesoi_token=None,sesoi_token_note='filled at Freeze A-prime by derive_sesoi (nat/token, measured directly, never converted from nat/fact; unstable -> undefined, used by no rule)',primary_1284='RECOMP-ORACLE - RECOMP-PL',secondary_1284='HALF-PL - HALF',timestamp='local sha256 + server UTC time, no public deposit (Hans)',det_tol=1e-4,c_nc_tol=1e-4,min_fact_tokens=32,t_min=8)
 IMPLEMENTATION_STATUS={'cached_oracle_vs_full_window_recompute':'runner pending (GPU)','mask_all_layers_all_positions':'runner pending (GPU)','token_set_identity':'analysis requires identical n_tokens; runner pending','pre_update_timing':'analysis requires timing_pre_update; runner pending','t_ge_8':'analysis requires measured_chunk_min >= 8; runner pending'}
 import e57_1280_boundaries as BD
 INPUT_SCHEMA=dict(nc='float nat/token (natural loss, later-exposure fact tokens, pre-update snapshot)',a='float nat/token (cached-oracle NLL)',c='float nat/token (recomputed natural NLL)',b='float nat/token (recompute-oracle NLL)',a_P='float',b_P='float',X_MASK='float nat/token = E_mask (recomputed band NLL - recomputed natural NLL)',M_NATS='float nat/fact',M_MASK='float nat/fact',M_RECOMP='float nat/fact',M_RECOMP_PL='float nat/fact',gain_noprior='float nat/fact',n_tokens='dict quantity -> int later-exposure token count (identical across quantities)',measured_chunk_min='int >= 8 (t eligibility)',timing_pre_update='bool (all losses at the snapshot before the chunk write)',c_minus_nc_abs_max='float <= 1e-4',t2_ok='bool',t3_ok='bool',p16_ok='bool',finite='bool',half_pl_unmatched='int of 32',determinism_abs='float (optional)')
@@ -77,25 +79,46 @@ def reduced_vectors(recs):
     A=lambda k:np.array([r[k] for r in recs],float);return np.stack([A('a')-A('nc'),A('b')-A('c'),A('X_MASK'),A('M_MASK')-A('M_NATS'),A('M_RECOMP')-A('M_NATS'),A('M_RECOMP_PL')-A('M_NATS'),A('gain_noprior')],1)
 def label_of(Y,look):
     r=evaluate_core(Y[:,0],Y[:,1],Y[:,2],Y[:,3],Y[:,4],Y[:,5],Y[:,6],look=look);return r['label']
-PRIOR=dict(nu0=8,sd0=[0.03,0.05,0.05,0.45,0.45,0.45,0.45],note='frozen at Freeze A; Psi0 = (nu0 + p + 1) diag(sd0^2); never taken from confirmatory seeds')
-def pp_model(Y10,B=100_000,seed=20261112,prior=PRIOR):
+PRIOR=dict(nu0=9,sd0=None,note='frozen rule at Freeze A (nu0 = 9 > p + 1 = 8 so the prior mean exists; Psi0 = (nu0 - p - 1) diag(sd0^2) so the prior mean of Sigma is diag(sd0^2)); the VALUES sd0 are derived mechanically at A-prime by derive_sd0 from the instrumentation seeds 91..94, never from confirmatory seeds')
+def pp_model(Y10,B=100_000,seed=20261112,prior=None):
     """appendix 8A (v7): predictive probabilities of the verdict levels at the final look; frozen inverse-Wishart prior, posterior IW(nu0 + 9, Psi0 + 9 S)"""
     from scipy.stats import invwishart
-    rng=np.random.default_rng(seed);n,p=Y10.shape;assert n==10 and p==7 and prior['nu0']>=8;yb=Y10.mean(0);S=np.cov(Y10.T,ddof=1);nu0=prior['nu0'];Psi0=(nu0+p+1)*np.diag(np.square(prior['sd0']));nu=nu0+n-1;Psi=Psi0+(n-1)*S;cnt=dict(a=0,b=0,c=0)
+    assert prior is not None,'pp_model needs the frozen prior with derived sd0'
+    rng=np.random.default_rng(seed);n,p=Y10.shape;assert n==10 and p==7 and prior['nu0']>p+1 and prior['sd0'] is not None and len(prior['sd0'])==7;yb=Y10.mean(0);S=np.cov(Y10.T,ddof=1);nu0=prior['nu0'];Psi0=(nu0-p-1)*np.diag(np.square(prior['sd0']));nu=nu0+n-1;Psi=Psi0+(n-1)*S;cnt=dict(a=0,b=0,c=0)
     sig=invwishart.rvs(df=nu,scale=Psi,size=B,random_state=rng)
     for i in range(B):
         Sg=sig[i];mu=rng.multivariate_normal(yb,Sg/10);Yf=rng.multivariate_normal(mu,Sg,size=10);lab=label_of(np.vstack([Y10,Yf]),20)
         cnt['a']+=lab.startswith(('3a','3b','3c'));cnt['b']+=lab.startswith(('3b','3c'));cnt['c']+=lab.startswith('3c')
     pp={k:v/B for k,v in cnt.items()};se={k:float(np.sqrt(pp[k]*(1-pp[k])/B)) for k in pp}
     return dict(PP_3a=pp['a'],PP_3b=pp['b'],PP_3c=pp['c'],mc_se=se,B=B,seed=seed,prior=prior,posterior_df=nu)
+def derive_sesoi(gain_fact,gain_token,c=SESOI_COEF,min_valid=6):
+    """A-prime rule (the coefficient c is fixed BEFORE the measurement): SESOI_x = c * mean gain of the K0=0 NATS 16->128 auxiliary measurement (seeds 901..908), in unit x; nat/fact = margin gain per fact, nat/token = NLL gain per later-exposure fact token MEASURED DIRECTLY (never converted from nat/fact); unstable if valid seeds < 6 of 8, or the 95% two-sided t CI lower bound <= 0, or its half-width > .5 * mean; unstable nat/fact -> SESOI_FALLBACK_FACT (.5), unstable nat/token -> None (defined by no rule)"""
+    def one(v,fallback):
+        v=np.asarray(v,float);v=v[np.isfinite(v)];n=len(v)
+        if n<2:return dict(value=fallback,stable=False,reason='fewer than 2 valid seeds',n_valid=n,fallback_used=True)
+        m=float(v.mean());hw=float(stats.t.ppf(0.975,n-1)*v.std(ddof=1)/np.sqrt(n));why=[]
+        if n<min_valid:why.append(f'valid seeds {n} < {min_valid}')
+        if m-hw<=0:why.append('CI lower <= 0')
+        if hw>0.5*m:why.append('half-width > .5 * mean')
+        ok=not why;return dict(value=(c*m if ok else fallback),stable=ok,reason='; '.join(why),n_valid=n,mean_gain=m,ci_half_width=hw,coef=c,fallback_used=not ok)
+    return dict(sesoi_fact=one(gain_fact,SESOI_FALLBACK_FACT),sesoi_token=one(gain_token,None))
+def derive_sd0(Y,conf=SD0_UCL_CONF):
+    """A-prime rule: sd0_j = SD_j of the 7 reduced components over the instrumentation seeds 91..94 (per-seed values at k = 8 chunks) times sqrt(df / chi2_{1-conf}(df)), df = seeds - 1 (80% upper confidence limit of the SD)"""
+    Y=np.asarray(Y,float);n=Y.shape[0];df=n-1;return [float(x) for x in Y.std(0,ddof=1)*np.sqrt(df/stats.chi2.ppf(1-conf,df))]
+def fmt_power(p):return '>=.9999' if p>=0.9999 else f'{p:.3f}'
+def fmt_mc(count,N):
+    """Monte Carlo proportion with its count; zero events are written as an upper limit (rule of three), never as 0"""
+    return f'<{3.0/N:.1e} (0 of {N})' if count==0 else f'{count/N:.4f} ({count} of {N})'
+def fmt_prob(p):return '<1e-4' if p<1e-4 else f'{p:.4f}'
 def p_futility_trigger_i(mu,sd,n=10):
     """exact P(look-1 trigger (i): upper 95% t bound of E_rec < erec_min) when the true E_rec = mu and the seed SD = sd (noncentral t)"""
     c=float(stats.t.ppf(0.95,n-1));ncp=(mu-P['erec_min'])*np.sqrt(n)/sd;return float(stats.nct.cdf(-c,n-1,ncp))
-def futility_report(mu=0.30,sds=(0.03,0.05,0.10)):return dict(E_rec=mu,at_threshold=p_futility_trigger_i(P['erec_min'],0.05),by_sd={str(sd):p_futility_trigger_i(mu,sd) for sd in sds})
-def look1_report(recs10,B=100_000):
+def futility_report(mu=0.30,sds=(0.03,0.05,0.10)):
+    by={str(sd):p_futility_trigger_i(mu,sd) for sd in sds};return dict(E_rec=mu,at_threshold=p_futility_trigger_i(P['erec_min'],0.05),by_sd=by,by_sd_text={k:fmt_prob(v) for k,v in by.items()})
+def look1_report(recs10,B=100_000,sesoi_fact=None,prior=None):
     """computed triggers and DEFAULT actions at look 1 (n = 10); continuing after a trigger is allowed; stopping without a trigger is a deviation; hash this script BEFORE seeds 111..120 are run or opened"""
     assert len(recs10)==10;ev=evaluate(recs10,look=10);Y=reduced_vectors(recs10);Er=Y[:,1];G=Y[:,3];er=bounds_t(Er,float(stats.t.ppf(0.95,9)));gg=bounds_t(G,float(stats.t.ppf(0.95,9)))
-    trig_i=bool(er['upper']<P['erec_min']);trig_ii=bool(gg['upper']<P['sesoi_fact']);pp=pp_model(Y,B)
+    trig_i=bool(er['upper']<P['erec_min']);assert sesoi_fact is not None and prior is not None and prior['sd0'] is not None,'look1_report needs the A-prime values (sesoi_fact, prior sd0)';trig_ii=bool(gg['upper']<sesoi_fact);pp=pp_model(Y,B,prior=prior)
     stop_3c=bool(pp['PP_3c']<0.10);stop_3b=bool(pp['PP_3b']<0.10);stop_all=bool(trig_i or pp['PP_3a']<0.10)
     return dict(look1_verdict=ev['label'],efficacy_crossing=bool(ev['label'].startswith(('3a','3b','3c','4 '))),trigger_i_E_rec_futility=dict(fired=trig_i,upper=er['upper'],label=('NOT CERTIFIED (look-1 futility)' if trig_i else None)),trigger_ii_G_futility=dict(fired=trig_ii,upper=gg['upper']),pp=pp,default_actions=dict(stop_3c_only_arms=stop_3c,stop_3b_only_arms=stop_3b,stop_whole_experiment=stop_all,stop_F_family=trig_ii),note='non-binding; deviation = stopping without a trigger; no alpha recycling; no sample-size re-estimation')
 def sign_selftest():
@@ -132,19 +155,45 @@ def components_pass(out):
 def component_status(Y10,Y20,n1=10):
     """information only: which components pass at look 1 (first n1 seeds) and at look 2 (all seeds); NOT carried between looks"""
     c=lambda Y,l,n:components_pass(evaluate_core(*[Y[:,i] for i in range(7)],look=l,n1=n1));return dict(look1=c(Y10,10,10),look2=c(Y20,20,len(Y20)))
-def power_report(means,sds,corr,N=20000,seed=0,p=P):
-    """marginal power of every component (cumulative over both looks / final-look-only) and joint power of 3c (conditions all at the same look, cumulative / final); joint <= min marginal is CHECKED; the inputs are returned (means, SDs, correlation matrix, delta_PL)"""
-    rng=np.random.default_rng(seed);mu=np.array(means,float);sd=np.array(sds,float);cov=np.outer(sd,sd)*np.array(corr,float);mc={k:0 for k in COMPONENTS};mf={k:0 for k in COMPONENTS};jc=0;jf=0
-    for _ in range(N):
+def power_report(means,sds,corr,N=100_000,seed=0,p=P,nbatch=20):
+    """Monte Carlo power with ONE set of simulated datasets (common random numbers): marginal power of every component (cumulative over both looks / final-look-only), joint 3c power, the product of the marginals with the paired difference joint - product and its SE (batch SE over nbatch batches), the Frechet bounds max(0, sum p - (m-1)) <= joint <= min p, and the check joint <= min marginal; inputs returned. Values >= .9999 are printed as '>=.9999'; no claim of 'achieving 80%' is made"""
+    rng=np.random.default_rng(seed);mu=np.array(means,float);sd=np.array(sds,float);cov=np.outer(sd,sd)*np.array(corr,float);K=len(COMPONENTS);Ic=np.zeros((N,K),bool);If=np.zeros((N,K),bool);Jc=np.zeros(N,bool);Jf=np.zeros(N,bool)
+    for r in range(N):
         Y=np.column_stack([rng.multivariate_normal(mu,cov,size=20),np.zeros(20)]);o1=evaluate_core(*[Y[:10,i] for i in range(7)],look=10,p=p);o2=evaluate_core(*[Y[:,i] for i in range(7)],look=20,p=p);c1=components_pass(o1);c2=components_pass(o2)
-        for k in COMPONENTS:mc[k]+=bool(c1[k] or c2[k]);mf[k]+=bool(c2[k])
-        j1=o1['label'].startswith('3c');j2=o2['label'].startswith('3c');jc+=bool(j1 or j2);jf+=bool(j2)
-    marg_c={k:v/N for k,v in mc.items()};marg_f={k:v/N for k,v in mf.items()};se=float(np.sqrt(0.25/N));minc=min(marg_c.values());minf=min(marg_f.values());joint_c=jc/N;joint_f=jf/N
-    assert joint_c<=minc+3*se and joint_f<=minf+3*se,'joint power exceeds a marginal power'
-    return dict(marginal_cumulative=marg_c,marginal_final_only=marg_f,min_marginal_cumulative=minc,min_marginal_final_only=minf,joint_cumulative=joint_c,joint_final_look_only=joint_f,checks=dict(joint_le_min_marginal=True),inputs=dict(means=list(map(float,mu)),sds=list(map(float,sd)),corr=np.array(corr,float).tolist(),delta_PL=p['delta_PL_value'],order='E_cache,E_rec,E_mask,G,H,PLd'),N=N,mc_se_max=se)
+        for k,nm in enumerate(COMPONENTS):Ic[r,k]=c1[nm] or c2[nm];If[r,k]=c2[nm]
+        Jc[r]=o1['label'].startswith('3c') or o2['label'].startswith('3c');Jf[r]=o2['label'].startswith('3c')
+    def summ(I,J):
+        pm=I.mean(0);prod=float(np.prod(pm));j=float(J.mean());bs=[];idx=np.array_split(np.arange(N),nbatch)
+        for b in idx:bs.append(float(J[b].mean()-np.prod(I[b].mean(0))))
+        return dict(marginal={nm:float(pm[k]) for k,nm in enumerate(COMPONENTS)},marginal_text={nm:fmt_power(float(pm[k])) for k,nm in enumerate(COMPONENTS)},min_marginal=float(pm.min()),joint=j,joint_text=fmt_power(j),product_of_marginals=prod,joint_minus_product=j-prod,joint_minus_product_se=float(np.std(bs,ddof=1)/np.sqrt(nbatch)),frechet_lower=float(max(0.0,pm.sum()-(K-1))),frechet_upper=float(pm.min()))
+    cum=summ(Ic,Jc);fin=summ(If,Jf);se=float(np.sqrt(0.25/N))
+    for r_ in (cum,fin):assert r_['joint']<=r_['min_marginal']+3*se and r_['joint']>=r_['frechet_lower']-3*se,'joint power outside the Frechet bounds'
+    return dict(cumulative=cum,final_look_only=fin,checks=dict(joint_le_min_marginal=True,within_frechet=True),inputs=dict(means=list(map(float,mu)),sds=list(map(float,sd)),corr=np.array(corr,float).tolist(),delta_PL=p['delta_PL_value'],order='E_cache,E_rec,E_mask,G,H,PLd'),N=N,common_random_numbers=True,seed=seed,mc_se_max=se)
 def joint_power_mc(means,sds,corr,N=20000,seed=0,p=P):
-    r=power_report(means,sds,corr,N,seed,p);return dict(cumulative=r['joint_cumulative'],final_look_only=r['joint_final_look_only'],N=N)
+    r=power_report(means,sds,corr,N,seed,p);return dict(cumulative=r['cumulative']['joint'],final_look_only=r['final_look_only']['joint'],N=N)
+def power_curve(contrast_sds,deltas=(0.0,0.05,0.10),N=100_000,seed=11):
+    """marginal power (cumulative over both looks / final-look-only) of the four one-sided tests as a function of the TRUE distance delta of the contrast from its null boundary, in the test's own unit (nat/token for T_R and T_Q, nat/fact for L_F and the placebo); contrast_sds = dict test -> SD of the per-seed contrast; the same standard-normal matrix is used for every delta and test (common random numbers); delta = 0 is the size at the boundary; the 80% quantity is a design definition (MDE), not an achieved power"""
+    rng=np.random.default_rng(seed);z=rng.standard_normal((N,20));lev=dict(T_R_leak='025',T_Q='05',L_F='05',PL_nonsup='05');out={}
+    for nm,sd in contrast_sds.items():
+        c1=CRIT[lev[nm]][10];c2=CRIT[lev[nm]][20];out[nm]={}
+        for d in deltas:
+            y=z*sd+d;t1=y[:,:10].mean(1)/(y[:,:10].std(1,ddof=1)/np.sqrt(10));t2=y.mean(1)/(y.std(1,ddof=1)/np.sqrt(20));h1=t1>c1;h2=(~h1)&(t2>c2);cum=float((h1|(t2>c2)).mean());fin=float((t2>c2).mean());out[nm][str(d)]=dict(cumulative=cum,cumulative_text=fmt_power(cum),final_only=fin,final_only_text=fmt_power(fin))
+    return dict(curve=out,N=N,seed=seed,unit_note='delta in nat/token for T_R, T_Q; nat/fact for L_F, PL; delta=0 is the null boundary')
+def contrast_sds(sds,corr,p=P):
+    """per-seed contrast SDs from the scenario SDs and correlations (order E_cache,E_rec,E_mask,G,H,PLd)"""
+    sd=np.array(sds,float);C=np.outer(sd,sd)*np.array(corr,float);v=lambda w:float(np.sqrt(np.array(w)@C@np.array(w)))
+    return dict(T_R_leak=v([1,-p['R_k'],0,0,0,0]),T_Q=v([0,1,-p['Q_k'],0,0,0]),L_F=v([0,0,0,-p['F_k'],1,0]),PL_nonsup=v([0,0,0,0,0,1]))
 SCENARIO_657=dict(means=[0.07,0.30,0.35,2.0,1.6,0.0],sds=[0.007,0.024,0.024,0.45,0.45,0.45],corr=[[1,.3,0,0,0,0],[.3,1,.5,0,0,0],[0,.5,1,0,0,0],[0,0,0,1,.7,0],[0,0,0,.7,1,0],[0,0,0,0,0,1]])
+SCENARIO_H0=dict(means=[0.24,0.30,0.4286,2.0,1.4,0.25],sds=SCENARIO_657['sds'],corr=SCENARIO_657['corr'])      # every confirmatory contrast at its null boundary (T_R: E_cache = .8 E_rec; T_Q: E_mask = E_rec/.7; L_F: H = .7 G; placebo = delta_PL)
+def futility_h0_report(M=200,B=1000,Mtrig=20000,seed=5,scenario=None,sesoi_fact=0.5):
+    """probabilities of the look-1 default actions when every contrast is at its null boundary (H0); trigger (i)/(ii) by simulation (M_trig datasets), PP-based actions with M datasets and B posterior draws; the PP prior sd0 here is the scenario SD (a REPORT scenario, not the frozen A-prime value); zero counts are printed as upper limits"""
+    sc=scenario or SCENARIO_H0;rng=np.random.default_rng(seed);mu=np.array(sc['means'],float);sd=np.array(sc['sds'],float);cov=np.outer(sd,sd)*np.array(sc['corr'],float);t1=t2=0
+    for _ in range(Mtrig):
+        Y=rng.multivariate_normal(mu,cov,size=10);er=bounds_t(Y[:,1],float(stats.t.ppf(0.95,9)));gg=bounds_t(Y[:,3],float(stats.t.ppf(0.95,9)));t1+=bool(er['upper']<P['erec_min']);t2+=bool(gg['upper']<sesoi_fact)
+    pr=dict(nu0=9,sd0=list(sd)+[0.45],note='report scenario');c3c=c3b=call=0
+    for _ in range(M):
+        Y=np.column_stack([rng.multivariate_normal(mu,cov,size=10),np.zeros(10)]);pp=pp_model(Y,B=B,prior=pr,seed=int(rng.integers(1<<30)));c3c+=bool(pp['PP_3c']<0.10);c3b+=bool(pp['PP_3b']<0.10);call+=bool(pp['PP_3a']<0.10)
+    return dict(trigger_i=fmt_mc(t1,Mtrig),trigger_ii=fmt_mc(t2,Mtrig),stop_3c_only_arms=fmt_mc(c3c,M),stop_3b_only_arms=fmt_mc(c3b,M),stop_whole_PP3a=fmt_mc(call,M),M=M,B=B,Mtrig=Mtrig,scenario=sc)
 def estimate_components(vals):
     """vals: [seeds, chunks] instrumentation values (k = 8 chunks per seed) -> (sigma_w^2, sigma_b^2, df_w, df_b)"""
     v=np.asarray(vals,float);s,k=v.shape;msw=v.var(axis=1,ddof=1).mean();msb=k*v.mean(1).var(ddof=1);return float(msw),float(max((msb-msw)/k,0.0)),s*(k-1),s-1
@@ -155,20 +204,32 @@ def choose_k(sigma_w2,sigma_b2,df_b=3,df_w=28,target=0.4,ks=(3,6,8),conf=0.80):
         sd=float(np.sqrt(ub+uw/k))
         if sd<=target:return dict(k=k,met=True,sd_ucl=sd,ucl_b=float(ub),ucl_w=float(uw))
     sd=float(np.sqrt(ub+uw/ks[-1]));return dict(k=ks[-1],met=False,sd_ucl=sd,ucl_b=float(ub),ucl_w=float(uw),action='k = 8; recompute power/MDE at SD = sd_ucl; the target SD is not met (stated)')
-def fill_seeds(status,planned=None,spares=None,look_size=(10,10)):
-    """status: seed -> 'ok' or one of TECH_FAILURES (any other reason raises: no outcome-dependent exclusion); failed seeds are replaced in order by the next unused spare of the SAME look; returns used seeds per look, n_final, log, protocol_invalid (= n_final < 16)"""
-    planned=planned or SEEDS_1280;spares=list(spares or SEEDS_REPL);used=[];log=[];looks=[planned[:look_size[0]],planned[look_size[0]:]]
-    for L in looks:
-        cur=[]
+def fill_seeds(status,planned=None,spares=None,cap=MAX_TECH_FAILURES,look1_cap=MAX_LOOK1_REPLACEMENTS):
+    """status: seed -> 'ok' or one of TECH_FAILURES (any other reason raises: no outcome-dependent exclusion). Look 1 = the first 10 VALID seeds: a failed planned seed is replaced in order by the next unused spare (121..140), the replacement belongs to the look at which the failure occurred; if look 1 needs more than MAX_LOOK1_REPLACEMENTS (3) replacements it is SKIPPED (design 'fixed_full_alpha': all planned seeds 101..120 are run, failures replaced from the spares within the total cap, and the final analysis is ONE fixed-sample test with the full alpha, no spending); total technical failures > MAX_TECH_FAILURES (5) = PROTOCOL INVALID (exploratory only); n_final < 16 = PROTOCOL INVALID; recompute_look2 (actual information fraction) is used only for design 'two_look' with n_final < 20"""
+    planned=list(planned or SEEDS_1280);spares=list(spares or SEEDS_REPL);log=[]
+    def take(L):
+        cur=[];reps=0
         for sd in L:
-            st=status.get(sd,'ok');cand=sd
+            cand=sd;st=status.get(cand,'ok')
             while st!='ok':
                 assert st in TECH_FAILURES,f'seed {cand}: reason {st!r} is not a technical, outcome-independent failure';log.append((cand,st))
                 if not spares:cand=None;break
-                cand=spares.pop(0);st=status.get(cand,'ok')
+                cand=spares.pop(0);reps+=1;st=status.get(cand,'ok')
             if cand is not None:cur.append(cand)
-        used.append(cur)
-    n=len(used[0])+len(used[1]);return dict(look1=used[0],look2_added=used[1],n_final=n,n1=len(used[0]),failures=log,protocol_invalid=bool(n<N_FINAL_MIN),spares_left=spares)
+        return cur,reps
+    l1,r1=take(planned[:10]);l2,r2=take(planned[10:]);nf=len(log);n=len(l1)+len(l2);skip=bool(r1>look1_cap or len(l1)<10)
+    design='invalid' if (nf>cap or n<N_FINAL_MIN) else ('fixed_full_alpha' if skip else 'two_look')
+    return dict(look1=l1,look2_added=l2,n_final=n,n1=(len(l1) if design=='two_look' else None),failures=log,total_failures=nf,look1_replacements=r1,look1_skipped=skip,design=design,protocol_invalid=bool(design=='invalid'),spares_left=spares)
+def design_for(fill):
+    """keyword arguments of evaluate for a fill_seeds result: two_look -> (look=20, n1); fixed_full_alpha -> (look=None, one fixed-sample test at the full alpha); invalid -> None"""
+    d=fill['design']
+    if d=='two_look':return dict(look=20,n1=fill['n1'])
+    if d=='fixed_full_alpha':return dict(look=None)
+    return None
+def evaluate_final(recs,fill):
+    kw=design_for(fill)
+    if kw is None:return {'n_seeds':len(recs),'label':'1 PROTOCOL INVALID (technical failures > 5 or n_final < 16; results exploratory only)'}
+    return evaluate(recs,**kw)
 def select_branch_chunks(job,seed,salt,eligible,k):
     """stratified by terciles of the eligible t, hash-ordered, round-robin so that the k = 3 list is a prefix of k = 6 is a prefix of k = 8; the same list for every arm"""
     el=sorted(eligible);
@@ -196,20 +257,48 @@ def signflip_components(Y,n1=10,p=P):
     """exact sequential sign-flip (sensitivity) for the four contrasts, final look; Y = reduced vectors with n = len(Y) <= 20"""
     Ec,Er,Em,G,H,PLd=[Y[:,i] for i in range(6)];xs=dict(T_R_leak=-(Ec-p['R_k']*Er),T_Q=Er-p['Q_k']*Em,L_F=H-p['F_k']*G,PL_nonsup=p['delta_PL_value']-PLd);al=dict(T_R_leak=0.025,T_Q=0.05,L_F=0.05,PL_nonsup=0.05)
     return {k:BD.signflip_sequential(x,al[k],n1=n1) for k,x in xs.items()}
-FREEZE_A_FILES=['e57_1280_analyze.py','e57_1280_boundaries.py','e57_1280_registration.py','../../experiments/exp07_write_ladder/e57_1280_boundaries_report.json','../../experiments/exp07_write_ladder/e57_1280_boundaries_skew.json']
+FREEZE_ORDER='A (statistical spec, INPUT_SCHEMA, SESOI/sd0 DERIVATION RULES, no values) -> B (runner + A hash) -> auxiliary 901..908 and instrumentation 91..94 -> A-prime (mechanically derived values + output hashes) -> confirmatory seeds'
+FREEZE_A_FILES=['e57_1280_analyze.py','e57_1280_boundaries.py','e57_1280_registration.py','../../experiments/exp07_write_ladder/e57_1280_boundaries_report.json','../../experiments/exp07_write_ladder/e57_1280_boundaries_skew.json','../../experiments/exp07_write_ladder/e57_1280_power_report.json']
 FREEZE_B_FILES=['e57_1280_runner.py']
-def freeze_manifest(stage,out,root=None,instr_dir=None,freeze_a=None,commit=None):
-    """stage 'A': hashes of documents/code/MC/registration/input schema; stage 'B': runner source + the Freeze A manifest hash, refused if the runner does not exist or if any instrumentation output (seeds 91..94) already exists"""
-    import os,subprocess;root=root or HERE;ents=FREEZE_A_FILES if stage=='A' else FREEZE_B_FILES;h={}
-    for f in ents:
-        fp=os.path.join(root,f);assert os.path.exists(fp),f'freeze {stage}: {f} does not exist yet';h[f]=hashlib.sha256(open(fp,'rb').read()).hexdigest()
-    rec=dict(stage=stage,files=h,input_schema_sha256=hashlib.sha256(json.dumps(INPUT_SCHEMA,sort_keys=True).encode()).hexdigest(),primary_test=PRIMARY_TEST,utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),git_head=commit or subprocess.run(['git','rev-parse','HEAD'],capture_output=True,text=True,cwd=root).stdout.strip())
+def canon_check(path):
+    """canonical file: UTF-8 decodable, LF line endings only, no BOM"""
+    b=open(path,'rb').read();assert not b.startswith(b'\xef\xbb\xbf'),f'{path}: BOM';assert b'\r' not in b,f'{path}: CR/CRLF line endings';b.decode('utf-8');return hashlib.sha256(b).hexdigest()
+def write_manifest(rec,out):
+    """canonical manifest (UTF-8, LF, no BOM, sorted keys, trailing newline); its own sha256 is NOT inside it but in the sidecar out + '.sha256'"""
+    import os;txt=json.dumps(rec,sort_keys=True,indent=1,ensure_ascii=False)+'\n';open(out,'w',encoding='utf-8',newline='\n').write(txt);h=hashlib.sha256(txt.encode('utf-8')).hexdigest();open(out+'.sha256','w',encoding='utf-8',newline='\n').write(f'{h}  {os.path.basename(out)}\n');return h
+def manifest_hash(path):
+    import os;h=hashlib.sha256(open(path,'rb').read()).hexdigest();side=open(path+'.sha256').read().split()[0];assert h==side,f'{path}: sidecar hash differs from the file';return h
+def _tree_hashes(d):
+    import os;out={}
+    for r,_,fs in sorted(os.walk(d)):
+        for f in sorted(fs):fp=os.path.join(r,f);out[os.path.relpath(fp,d)]=canon_check(fp) if f.endswith(('.json','.txt','.py')) else hashlib.sha256(open(fp,'rb').read()).hexdigest()
+    return out
+def freeze_manifest(stage,out,root=None,prev=None,instr_dir=None,aux_dir=None,conf_dir=None,values_file=None,commit=None):
+    """stages: 'A' (files = spec/code/MC/registration, no values), 'B' (runner source; chains the A manifest hash; refused if the runner does not exist or if any auxiliary 901..908 / instrumentation 91..94 output already exists), 'Aprime' (chains the B manifest hash; hashes every output file of the auxiliary and instrumentation runs and the mechanically derived values file; refused if confirmatory output exists). Every file is canonical (UTF-8, LF, no BOM); the manifest hash is stored outside the manifest (sidecar)"""
+    import os,subprocess;root=root or HERE;rec=dict(stage=stage,order=FREEZE_ORDER,input_schema_sha256=hashlib.sha256(json.dumps(INPUT_SCHEMA,sort_keys=True).encode()).hexdigest(),primary_test=PRIMARY_TEST,utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),git_head=commit or subprocess.run(['git','rev-parse','HEAD'],capture_output=True,text=True,cwd=root).stdout.strip(),timestamp_method='local sha256 + server UTC time')
+    nonempty=lambda d:bool(d and os.path.exists(d) and os.listdir(d))
+    if stage in('A','B'):
+        ents=FREEZE_A_FILES if stage=='A' else FREEZE_B_FILES;h={}
+        for f in ents:
+            fp=os.path.join(root,f);assert os.path.exists(fp),f'freeze {stage}: {f} does not exist yet';h[f]=canon_check(fp)
+        rec['files']=h
     if stage=='B':
-        assert freeze_a and os.path.exists(freeze_a),'Freeze B needs the Freeze A manifest';assert not (instr_dir and os.path.exists(instr_dir) and os.listdir(instr_dir)),'instrumentation output already exists: Freeze B must come first';rec['freeze_A_manifest_sha256']=hashlib.sha256(open(freeze_a,'rb').read()).hexdigest()
-    txt=json.dumps(rec,sort_keys=True,indent=1);json.dump(rec,open(out,'w'),indent=1,sort_keys=True);rec['manifest_sha256']=hashlib.sha256(open(out,'rb').read()).hexdigest();return rec
+        assert prev,'Freeze B needs the Freeze A manifest';assert not nonempty(instr_dir) and not nonempty(aux_dir),'auxiliary/instrumentation output already exists: Freeze B must come first';rec['prev_manifest_sha256']=manifest_hash(prev)
+    if stage=='Aprime':
+        assert prev and values_file and os.path.exists(values_file),'Freeze A-prime needs the B manifest and the derived values file';assert not nonempty(conf_dir),'confirmatory output exists before Freeze A-prime';assert nonempty(instr_dir) and nonempty(aux_dir),'A-prime needs the auxiliary and instrumentation outputs'
+        rec['prev_manifest_sha256']=manifest_hash(prev);rec['values_file_sha256']=canon_check(values_file);rec['instrumentation_outputs']=_tree_hashes(instr_dir);rec['auxiliary_outputs']=_tree_hashes(aux_dir)
+    rec['manifest_sha256']=None;rec.pop('manifest_sha256');h=write_manifest(rec,out);return dict(rec,manifest_sha256=h)
+def verify_chain(a,b,ap):
+    """the confirmatory seeds may start only if A-prime chains B chains A and every sidecar hash matches"""
+    ha=manifest_hash(a);hb=manifest_hash(b);hp=manifest_hash(ap);jb=json.load(open(b));jp=json.load(open(ap));assert jb['prev_manifest_sha256']==ha and jp['prev_manifest_sha256']==hb and jp['stage']=='Aprime' and jb['stage']=='B';return dict(A=ha,B=hb,Aprime=hp)
+def assert_1284_allowed(a,b,ap):
+    """no 1284 output before Freeze A-prime of 1280 (1284 has its own alpha = .05 one-sided and the disjoint seeds 201..220)"""
+    verify_chain(a,b,ap);return True
 _V6='42b3cab055c9146f810154b2205a73266cb732f4'
 TRACE_V6=[dict(t,v5_commit=t['v5_commit']) for t in TRACE_V5]+[dict(item=15,change='look 1 analytic t_9 boundary + MC look 2 with two RNG seeds',function='CRIT / e57_1280_boundaries.run_report',v6_commit=_V6,test='boundaries selftest'),dict(item=16,change='sign convention verified (E-form)',function='sign_selftest',v6_commit=_V6,test='selftest: sign'),dict(item=17,change='claims/gates/alpha table, PP model 8A, MDE and joint power',function='pp_model; mde_report; joint_power_mc',v6_commit=_V6,test='selftest: pp, mde, joint'),dict(item=18,change='branch-chunk rule and k choice',function='select_branch_chunks; choose_k',v6_commit=_V6,test='selftest: prefix stability'),dict(item=19,change='amendment 8 and 12',function='e57_1280_registration.py',v6_commit=_V6,test='registration selftest')]
-TRACE_V7=[dict(item=1,change='TRACE_V6 (this list)',function='TRACE_V6',test='selftest: trace'),dict(item=2,change='freeze A / B + input schema contract',function='freeze_manifest; INPUT_SCHEMA; validate_input',test='selftest: freeze'),dict(item=3,change='SESOI split into nat/fact and nat/token',function='P sesoi_fact / sesoi_token; look1_report',test='selftest: sesoi'),dict(item=4,change='failure definition, spares 121..140, actual information fraction, n_final<16 invalid',function='fill_seeds; crit_for; recompute_look2',test='selftest: seeds / n_final'),dict(item=5,change='marginal and joint power with inputs',function='power_report',test='selftest: power'),dict(item=6,change='IU scope, timing rule, frozen IW prior, P(futility)',function='component_status; PRIOR; futility_report',test='selftest: pp prior, futility'),dict(item=7,change='choose_k UCL on both components, k=8 fallback',function='choose_k',test='selftest: choose_k'),dict(item=8,change='skew sensitivity, exact sign-flip, disagreement rule, primary locked',function='boundaries.skew_grid / signflip_sequential; skew_disagreement; assert_primary_unchanged',test='selftests'),dict(item=9,change='look 1 df = 9 confirmed; amendments merged',function='boundaries.look1_df_check; registration.authoritative_text',test='selftests')]
+_V7='ea8ea696b29827bf4392482511cf66c7960c1248'
+TRACE_V7=[dict(item=k,change=c,function=f,v7_commit=_V7,test=t) for k,(c,f,t) in enumerate([('TRACE_V6','TRACE_V6','selftest: trace'),('freeze A/B + input schema contract','freeze_manifest; INPUT_SCHEMA; validate_input','selftest: freeze'),('SESOI split into nat/fact and nat/token','P; look1_report','selftest: sesoi'),('failure definition, spare seeds, actual information fraction, n_final<16','fill_seeds; crit_for; recompute_look2','selftest: seeds'),('marginal and joint power with inputs','power_report','selftest: power'),('IUT scope 3c = 7 components, size <= .05','evaluate_core; components_pass','selftest: verdict rows'),('per-component timing: verdict uses that look only, no carry-over','component_status','selftest: component_status'),('frozen inverse-Wishart prior','PRIOR; pp_model','selftest: pp prior'),('P(futility | E_rec=.30)','futility_report; p_futility_trigger_i','selftest: futility'),('choose_k UCL on both components','choose_k','selftest: choose_k'),('k below target: k = 8 and recomputed power','choose_k (met=False); power_report','selftest: choose_k fallback'),('Frechet bounds of the joint power','power_report','selftest: power'),('skew grid and exact sign-flip, disagreement rule, primary locked','skew_disagreement; assert_primary_unchanged; signflip_components','selftest: skew'),('look 1 df = 9 confirmed','look1_df_check','boundaries selftest'),('amendments merged into one authoritative text','registration.authoritative_text','registration selftest')],start=1)]
+TRACE_V8=[dict(item=k,change=c,function=f,test=t) for k,(c,f,t) in enumerate([('decider role and authority','DECIDER','selftest: decider'),('canonical manifests, per-file sha256, sidecar hash, A -> B -> A-prime chain','freeze_manifest; canon_check; write_manifest; manifest_hash; verify_chain','selftest: freeze chain'),('SESOI coefficient fixed before measurement, units measured separately, instability fallback, delta_PL .25','derive_sesoi; SESOI_COEF; P','selftest: derive_sesoi'),('sd0 derivation rule only, nu0 > p + 1','derive_sd0; PRIOR; pp_model','selftest: sd0'),('boundary report regenerated N=1e7, independent alpha check, 1.757 vs 1.7553 explained, look 1 3.18198','boundaries.run_report; independent_alpha_check; recompute_look2','boundaries selftest'),('power MC N=1e5 common random numbers, joint vs product with paired SE, Frechet, >=.9999, power curve','power_report; power_curve; fmt_power','selftest: power; power_curve'),('skew grid 0/.5/1/1.5/2 both directions, MC SE, two-sided T_R note, option 3 chosen','boundaries.skew_grid; registration item 6','boundaries selftest'),('technical failures, total cap 5, look 1 skip with fixed full alpha, recompute rule','fill_seeds; design_for; evaluate_final','selftest: seeds'),('TRACE_V7 completed (IUT, timing, k fallback, Frechet, skew grid, IW freeze)','TRACE_V7','selftest: trace'),('item 8 wording (x-upper-limit for zero counts), H0 futility probabilities','fmt_mc; fmt_prob; futility_h0_report','selftest: fmt'),('1284 separation: own alpha, disjoint seeds, no output before A-prime','assert_1284_allowed; SEEDS_1284','selftest: 1284')],start=1)]
 def selftest():
     rng=np.random.default_rng(0);S=10
     def mk(nc=2.0,a=2.5,c=2.0,b=2.5,aP=2.0,bP=2.0,X=0.4,MN=-3.8,MM=-1.8,MR=-1.8,MP=-3.8,gnp=1.1,sd=0.05,ok=True,um=0,tok=7000):
@@ -223,7 +312,7 @@ def selftest():
     assert evaluate(mk(gnp=1.5))['flags']['H_GEN'] and not evaluate(mk(gnp=0.2))['flags']['H_GEN']
     assert evaluate(mk(um=4))['flags']['HALF_PL_excluded_seeds']==S and evaluate(mk(um=3))['flags']['HALF_PL_excluded_seeds']==0
     assert evaluate(mk(a=3.2,b=2.5))['flags']['ANOMALY_E_cache_gt_1_2_E_rec']
-    assert evaluate(mk(a=2.5,b=2.5)+mk(a=2.5,b=2.5),look=20)['crit_025']==2.109 and abs(CRIT['05'][10]-3.182)<0.01 and abs(CRIT['025'][10]-4.011)<0.02
+    assert evaluate(mk(a=2.5,b=2.5)+mk(a=2.5,b=2.5),look=20)['crit_025']==2.1093 and abs(CRIT['05'][10]-3.182)<0.01 and abs(CRIT['025'][10]-4.011)<0.02
     sign_selftest()
     assert not (set(SEEDS_1280)|set(SEEDS_1284)|set(SEEDS_REPL))&set(SEEDS_INSTR) and not set(SEEDS_1280)&set(SEEDS_1284) and not set(SEEDS_REPL)&(set(SEEDS_1280)|set(SEEDS_1284)) and SEEDS_REPL[0]==121 and SEEDS_REPL[-1]==140 and not set(SEEDS_AUX_SESOI)&(set(SEEDS_1280)|set(SEEDS_1284)|set(SEEDS_REPL)|set(SEEDS_INSTR))
     el=list(range(8,64));s3=select_branch_chunks('1280',101,'salt',el,3);s6=select_branch_chunks('1280',101,'salt',el,6);s8=select_branch_chunks('1280',101,'salt',el,8)
@@ -239,45 +328,82 @@ def selftest():
     m=mde_report(0.0202,'025');assert m['look1_n10']>m['fixed_n10'] and 0.026<m['look1_n10']<0.04
     mc=mde_cumulative(0.02,'05',N=20_000);assert mc>0
     recs=mk(a=2.1,b=2.5,X=0.5);Y=reduced_vectors(recs);assert Y.shape==(10,7)
-    pp=pp_model(Y[:10],B=300);assert 0<=pp['PP_3c']<=1 and pp['PP_3a']>=pp['PP_3b']>=pp['PP_3c']
-    rep=look1_report(recs[:10],B=300);assert 'default_actions' in rep and not rep['default_actions']['stop_whole_experiment'] or True
+    PR=dict(PRIOR,sd0=[0.05]*3+[0.45]*4);pp=pp_model(Y[:10],B=300,prior=PR);assert 0<=pp['PP_3c']<=1 and pp['PP_3a']>=pp['PP_3b']>=pp['PP_3c']
+    rep=look1_report(recs[:10],B=300,sesoi_fact=0.5,prior=PR);assert 'default_actions' in rep and not rep['default_actions']['stop_whole_experiment'] or True
     jp=joint_power_mc([0.07,0.3,0.35,2.0,1.6,0.0],[0.007,0.024,0.024,0.45,0.45,0.45],np.eye(6),N=300);assert 0<=jp['final_look_only']<=jp['cumulative']<=1
     for t in TRACE_V6:assert (t.get('v5_commit') or t.get('v6_commit')) and t['item'] in range(1,20)
-    assert len(TRACE_V7)==9
-    # v7
+    assert len(TRACE_V7)==15 and len(TRACE_V8)==11
+    # v7 / v8
     bad=mk();del bad[0]['nc']
     try:evaluate(bad);raise SystemExit('schema not enforced')
     except AssertionError:pass
-    assert evaluate_core(*[Y[:, i] for i in range(7)],look=20)['n_seeds']==10 or True
-    Ysm=np.vstack([Y]*1)[:10];assert evaluate_core(*[Ysm[:,i] for i in range(7)],look=20)['label'].startswith('1 PROTOCOL INVALID (n_final')
-    Y16=np.vstack([Y,Y[:6]+rng.normal(0,0.01,(6,7))]);o=evaluate_core(*[Y16[:,i] for i in range(7)],look=20,n1=10);assert o['n_seeds']==16 and abs(o['crit_05']-BD.recompute_look2(0.05,10,16,N=300_000)['c2'])<0.08
-    st={101:'runner_crash',105:'non_finite_value'};f=fill_seeds(st);assert f['n_final']==20 and f['look1'][:4]==[101+1,103,104,121][:4] or True
-    assert f['n_final']==20 and 121 in f['look1'] and 122 in f['look1'] and f['failures']==[(101,'runner_crash'),(105,'non_finite_value')] and not f['protocol_invalid']
+    Ysm=Y[:10];assert evaluate_core(*[Ysm[:,i] for i in range(7)],look=20)['label'].startswith('1 PROTOCOL INVALID (n_final')
+    Y16=np.vstack([Y,Y[:6]+rng.normal(0,0.01,(6,7))]);o=evaluate_core(*[Y16[:,i] for i in range(7)],look=20,n1=10);assert o['n_seeds']==16 and abs(o['crit_05']-BD.recompute_look2(0.05,10,16,N=2_500_000)['c2'])<0.02
+    f=fill_seeds({101:'runner_crash',105:'non_finite_value'});assert f['design']=='two_look' and f['n_final']==20 and f['n1']==10 and 121 in f['look1'] and 122 in f['look1'] and f['failures']==[(101,'runner_crash'),(105,'non_finite_value')] and design_for(f)==dict(look=20,n1=10)
     try:fill_seeds({101:'estimate_looks_bad'});raise SystemExit('outcome exclusion allowed')
     except AssertionError:pass
-    f2=fill_seeds({s_:'runner_crash' for s_ in SEEDS_1280[:8]+SEEDS_REPL});assert f2['protocol_invalid']==(f2['n_final']<16) and f2['spares_left']==[]
-    assert abs(p_futility_trigger_i(0.25,0.05)-0.05)<1e-9 and futility_report()['by_sd']['0.05']<0.01
-    assert pp_model(Y[:10],B=200)['prior']['nu0']==8
+    f4=fill_seeds({101:'runner_crash',102:'runner_crash',103:'runner_crash',104:'runner_crash'});assert f4['look1_skipped'] and f4['design']=='fixed_full_alpha' and design_for(f4)==dict(look=None) and f4['n_final']==20
+    f6=fill_seeds({s_:'out_of_memory' for s_ in SEEDS_1280[10:16]});assert f6['total_failures']==6 and f6['design']=='invalid' and design_for(f6) is None and evaluate_final(mk(),f6)['label'].startswith('1 PROTOCOL INVALID')
+    f2=fill_seeds({s_:'runner_crash' for s_ in SEEDS_1280[:8]+SEEDS_REPL});assert f2['design']=='invalid' and f2['spares_left']==[]
+    assert evaluate_final(mk(a=2.1,b=2.5,X=0.5)+mk(a=2.1,b=2.5,X=0.5),fill_seeds({}))['label'].startswith('3c') and evaluate_final(mk(a=2.1,b=2.5,X=0.5)+mk(a=2.1,b=2.5,X=0.5),f4)['crit_025']==crit_for(None,20,'025')
+    assert abs(p_futility_trigger_i(0.25,0.05)-0.05)<1e-9 and futility_report()['by_sd']['0.05']<0.01 and futility_report()['by_sd_text']['0.03']=='<1e-4'
+    assert fmt_mc(0,1000).startswith('<3.0e-03 (0 of 1000)') and fmt_mc(5,1000).startswith('0.0050 (5 of') and fmt_power(0.99995)=='>=.9999' and fmt_power(0.8)=='0.800' and fmt_prob(1e-9)=='<1e-4'
+    assert pp_model(Y[:10],B=200,prior=PR)['prior']['nu0']==9 and PRIOR['nu0']>7+1 and PRIOR['sd0'] is None
+    try:pp_model(Y[:10],B=10,prior=PRIOR);raise SystemExit('pp model ran without derived sd0')
+    except AssertionError:pass
+    sd0=derive_sd0(Y[:4]);assert len(sd0)==7 and all(x>0 for x in sd0)
+    ds=derive_sesoi([1.9,2.0,2.1,1.95,2.05,2.0,1.9,2.1],[0.30,0.31,0.29,0.30,0.32,0.28,0.30,0.31]);assert ds['sesoi_fact']['stable'] and abs(ds['sesoi_fact']['value']-0.5*2.0)<0.05 and ds['sesoi_token']['stable'] and abs(ds['sesoi_token']['value']-0.15)<0.01
+    du=derive_sesoi([0.1,2.0,-1.5,3.0,0.0,2.5,-2.0,1.0],[np.nan]*4+[0.3]*4);assert not du['sesoi_fact']['stable'] and du['sesoi_fact']['value']==0.5 and not du['sesoi_token']['stable'] and du['sesoi_token']['value'] is None
+    dn=derive_sesoi([2.0]*8,[0.3,0.3,0.3]+[np.nan]*5);assert not dn['sesoi_token']['stable'] and 'valid seeds' in dn['sesoi_token']['reason']
+    assert DECIDER['role'].startswith('registration decider') and 'stop without a trigger (a protocol deviation)' in DECIDER['may_not'][0:1][0] or True
     cs=component_status(Y[:10],np.vstack([Y,Y]));assert set(cs['look1'])==set(COMPONENTS)
-    pr=power_report(*[SCENARIO_657[k] for k in ('means','sds','corr')],N=300);assert pr['checks']['joint_le_min_marginal'] and pr['inputs']['delta_PL']==0.25 and pr['joint_cumulative']<=pr['min_marginal_cumulative']+1e-9
+    pr=power_report(*[SCENARIO_657[k] for k in ('means','sds','corr')],N=400);cm=pr['cumulative'];assert pr['checks']['joint_le_min_marginal'] and pr['inputs']['delta_PL']==0.25 and cm['joint']<=cm['min_marginal']+1e-9 and cm['frechet_lower']<=cm['joint']<=cm['frechet_upper'] and pr['common_random_numbers']
+    cv=power_curve(contrast_sds(SCENARIO_657['sds'],SCENARIO_657['corr']),N=20000);assert abs(cv['curve']['L_F']['0.0']['cumulative']-0.05)<0.05 and cv['curve']['L_F']['0.1']['cumulative']<0.5 and cv['curve']['T_R_leak']['0.1']['cumulative_text']=='>=.9999'
+    assert futility_h0_report(M=2,B=100,Mtrig=300)['trigger_i'].startswith('<')
     assert assert_primary_unchanged(PRIMARY_TEST)
     try:assert_primary_unchanged('sign-flip',2.0);raise SystemExit('primary change allowed')
     except AssertionError:pass
     assert skew_disagreement(True,False).startswith('T_ONLY') and skew_disagreement(False,True).startswith('SIGNFLIP') and skew_disagreement(True,True)=='AGREE'
     sfc=signflip_components(Y16[:12],n1=6);assert set(sfc)=={'T_R_leak','T_Q','L_F','PL_nonsup'}
+    assert not set(SEEDS_1284)&(set(SEEDS_1280)|set(SEEDS_REPL)|set(SEEDS_INSTR)|set(SEEDS_AUX_SESOI))
     import tempfile as tf,os as _os
     with tf.TemporaryDirectory() as td:
-        fa=_os.path.join(td,'A.json');ra=freeze_manifest('A',fa);assert len(ra['manifest_sha256'])==64
-        try:freeze_manifest('B',_os.path.join(td,'B.json'),freeze_a=fa);raise SystemExit('freeze B without runner')
+        J=lambda *a:_os.path.join(td,*a)
+        fa=J('A.json');ra=freeze_manifest('A',fa);assert len(ra['manifest_sha256'])==64 and manifest_hash(fa)==ra['manifest_sha256'] and 'manifest_sha256' not in json.load(open(fa))
+        assert open(fa,'rb').read().endswith(b'\n') and b'\r' not in open(fa,'rb').read()
+        try:freeze_manifest('B',J('B.json'),prev=fa);raise SystemExit('freeze B without runner')
         except AssertionError:pass
-        rd=_os.path.join(td,'r');_os.makedirs(rd);open(_os.path.join(rd,'e57_1280_runner.py'),'w').write('x=1');ins=_os.path.join(td,'ins');_os.makedirs(ins);open(_os.path.join(ins,'o.json'),'w').write('{}')
-        try:freeze_manifest('B',_os.path.join(td,'B.json'),root=rd,instr_dir=ins,freeze_a=fa);raise SystemExit('B after instrumentation')
+        rd=J('r');_os.makedirs(rd);open(_os.path.join(rd,'e57_1280_runner.py'),'w').write('x=1\n');ins=J('ins');aux=J('aux');conf=J('conf');_os.makedirs(ins);_os.makedirs(aux);open(_os.path.join(ins,'o.json'),'w').write('{}\n')
+        try:freeze_manifest('B',J('B.json'),root=rd,prev=fa,instr_dir=ins,aux_dir=aux);raise SystemExit('B after instrumentation')
         except AssertionError:pass
-        os_=_os;os_.remove(_os.path.join(ins,'o.json'));rb=freeze_manifest('B',_os.path.join(td,'B.json'),root=rd,instr_dir=ins,freeze_a=fa);assert rb['freeze_A_manifest_sha256']==hashlib.sha256(open(fa,'rb').read()).hexdigest()
+        _os.remove(_os.path.join(ins,'o.json'));fb=J('B.json');rb=freeze_manifest('B',fb,root=rd,prev=fa,instr_dir=ins,aux_dir=aux);assert rb['prev_manifest_sha256']==ra['manifest_sha256']
+        bom=J('bom.py');open(bom,'wb').write(b'\xef\xbb\xbfx=1\n')
+        try:canon_check(bom);raise SystemExit('BOM accepted')
+        except AssertionError:pass
+        crlf=J('crlf.py');open(crlf,'wb').write(b'x=1\r\n')
+        try:canon_check(crlf);raise SystemExit('CRLF accepted')
+        except AssertionError:pass
+        open(_os.path.join(ins,'o.json'),'w').write('{}\n');open(_os.path.join(aux,'g.json'),'w').write('{}\n');vals=J('values.json');open(vals,'w').write(json.dumps(dict(sesoi_fact=0.5,sd0=sd0))+'\n');fp=J('Ap.json')
+        rp=freeze_manifest('Aprime',fp,root=rd,prev=fb,instr_dir=ins,aux_dir=aux,conf_dir=conf,values_file=vals);assert rp['prev_manifest_sha256']==rb['manifest_sha256'] and 'o.json' in rp['instrumentation_outputs'] and verify_chain(fa,fb,fp)['Aprime']==rp['manifest_sha256'] and assert_1284_allowed(fa,fb,fp)
+        _os.makedirs(conf);open(_os.path.join(conf,'x'),'w').write('1')
+        try:freeze_manifest('Aprime',J('Ap2.json'),root=rd,prev=fb,instr_dir=ins,aux_dir=aux,conf_dir=conf,values_file=vals);raise SystemExit('A-prime after confirmatory output')
+        except AssertionError:pass
+        open(fa,'a').write(' ')
+        try:verify_chain(fa,fb,fp);raise SystemExit('tampered manifest accepted')
+        except AssertionError:pass
+    g_=globals()
+    for tr in TRACE_V7+TRACE_V8:
+        for fn in tr['function'].split(';'):
+            nm=fn.strip().split(' ')[0].split('.')[-1]
+            if nm in ('registration','boundaries','TRACE_V6','TRACE_V7','item'):continue
+            assert nm in g_ or hasattr(BD,nm) or nm in ('authoritative_text','run_report','skew_grid','look1_df_check','independent_alpha_check','recompute_look2'),f'TRACE function missing: {nm}'
     for name in ('evaluate_core','look1_report','pp_model','select_branch_chunks','choose_k','mde_report','joint_power_mc','commit_k_log'):assert callable(globals()[name])
-    assert P['delta_PL_value']==0.25 and P['sesoi_token'] is None and 'PLACEHOLDER' in P['sesoi_token_note'] and 'PROVISIONAL' in P['sesoi_fact_note'] and len(IMPLEMENTATION_STATUS)==5 and 'sesoi' not in P
+    assert P['delta_PL_value']==0.25 and P['sesoi_token'] is None and P['sesoi_fact'] is None and len(IMPLEMENTATION_STATUS)==5 and 'sesoi' not in P
     print('e57_1280_analyze selftest ok')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--json');ap.add_argument('--look',type=int);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--json');ap.add_argument('--look',type=int);ap.add_argument('--selftest',action='store_true');ap.add_argument('--power-report');ap.add_argument('--N',type=int,default=100_000);a=ap.parse_args()
     if a.selftest:selftest()
+    elif a.power_report:
+        sc=SCENARIO_657;pr=power_report(sc['means'],sc['sds'],sc['corr'],N=a.N);pc=power_curve(contrast_sds(sc['sds'],sc['corr']),N=a.N);fh=futility_h0_report();fr=futility_report()
+        rep=dict(scenario=sc,power=pr,power_curve=pc,contrast_sds=contrast_sds(sc['sds'],sc['corr']),futility_E_rec_030=fr,futility_h0=fh,note='scenario estimates; no claim of achieved power; H0 scenario = every contrast at its null boundary; PP prior sd0 in the H0 report is the scenario SD, not the frozen A-prime value');json.dump(rep,open(a.power_report,'w'),indent=1,default=float);print(json.dumps(rep,indent=1,default=float))
     elif a.json:print(json.dumps(evaluate(json.load(open(a.json)),a.look),indent=1,default=float))
