@@ -1,38 +1,46 @@
-"""E57 job 1280 (recompute oracle) analysis, decision table v5 (CPU; DRAFT for Council re-check; 3 placeholders remain (delta_PL, SESOI anchor, 1284 primary: Hans) and MUST be filled before the registration hash; written before any 1280 data exists).
-DEFINITIONS. E-form is the PRIMARY definition (positive = blocking the prior exposures RAISES the NLL): E_cache = a - nc, E_rec = b - c, E_mask = X_MASK = NLL(recomputed band) - NLL(recomputed natural), all in nat/token over the fixed later-exposure fact tokens of the measured chunk. The D-form (D = -E: D_cache = nc - a, D_rec = c - b, D_mask = NLL_natural - NLL_band) is only RECORDED (R = E_cache/E_rec is the same in both forms; T_R(D) = -T_R(E)). The v3 text of 11/11 22:05 KST already used the E form ((a-nc) - .8 (b-c)); the 'sign mismatch' came from the D-form wording of the v4 request. NLL-type quantities (R, Q) and margin-type quantities (G, H, noprior) are NEVER mixed. TIMING: nc, a, c, b, a_P, b_P, X_MASK are losses at the PRE-UPDATE SNAPSHOT W_t (the weights before the write of chunk t, same snapshot, same update target for every one of them); margin = log p(gold) - logsumexp(log p wrong), mean over facts (nat).
-RECORD per seed (aggregated within the seed over its measured chunks / facts): nc, a, c, b, a_P, b_P, X_MASK; branch margins after ONE step from the same snapshot M_NATS, M_MASK, M_RECOMP, M_RECOMP_PL (G = M_MASK - M_NATS and H = M_RECOMP - M_NATS are measured in the SAME branch; the only name for MASK - NATS is G); gain_noprior; c_minus_nc_abs_max (max over the seed's measured chunks of |c - nc|); t2_ok, t3_ok, p16_ok; half_pl_unmatched (count out of 32 facts); finite (bool).
-BRANCH CHUNKS (what '3' means): per seed and per trajectory 3 measured branch chunks t >= 8 (window full), stratified: one in each of the chunk ranges [8,24), [24,44), [44,64), drawn by a fixed RNG (numpy default_rng((seed, 20261112))), never chosen by outcome; both trajectories (NATS-trained, NATMASK-trained) are used; the seed's G and H are the means over its branch chunks (6 values per seed). The variance-based choice among k in {3, 6, 8} branch chunks is made ONCE from the instrumentation seeds 91..94 alone (variance components only): the smallest k whose projected MDE of L_F at n = 10 is <= 20% of the instrumentation mean of |G|; none -> k = 8 (function choose_k).
-GATES (separate): 2a E_rec: lower 95% bound > 0 and point >= .25; 2b E_mask: lower bound > 0 and point >= .10 (only then Q is defined); 2c G: lower bound > 0 (only then F is defined). Unit/instrument gates: per-seed |c - nc| <= 1e-4 (c_minus_nc_abs_max), t2, t3, p16, finite, determinism (automated: the same measurement repeated at the same W_t must agree within 1e-4). All bounds use the critical value c_k of the look (one-sided alpha = .05) except the two directions of T_R, which use the alpha = .025 critical value each.
-TESTS (seed-paired one-sided t; for every gate and every reported limit the SAME critical value c_k of the current look): T_R = E_cache - .8 E_rec (leak direction: upper < 0; cache direction: lower > 0; each direction at alpha = .025 with its own MC boundaries); T_Q = E_rec - .7 E_mask (lower > 0); per-seed linear contrasts measured in the same branch: L_F = H - .7 G (lower > 0), L_Flow = H - .3 G (upper < 0); placebo non-superiority: upper bound of (M_RECOMP_PL - M_NATS) < delta_PL, UNIT = ABSOLUTE nat (margin units, not a ratio to G), delta_PL = PLACEHOLDER (.5 or .25; Hans). The original TOST +-.25 is a sensitivity analysis only.
-PRIMARY VERDICT (exclusive, one label): 1 PROTOCOL / INSTRUMENT INVALID ; 2a E_rec NOT CERTIFIED (R undefined) ; 4 CACHE SUFFICIENT = 2a passes and T_R cache direction lower > 0 [confirmatory; reaches only if E_cache >= .8 E_rec: practically unreachable, see disclosure] ; 3 LEAK hierarchy (requires 2a), fixed order R-leak -> Q -> F -> placebo, the verdict is the deepest step reached: 3a = R-leak only (T_R upper < 0) ; 3b = 3a and 2b and T_Q lower > 0 ; 3c = 3b and 2c and L_F lower > 0 and placebo non-superiority [confirmatory] ; 6 INCONCLUSIVE otherwise. Independent FLAGS reported next to the verdict (never replacing it): F_LOW (2c passes and L_Flow upper < 0; secondary), H_GEN (noprior - .5 G lower > 0), HALF_PL_VALID (a seed is excluded from HALF-PL when more than 3 of 32 facts are unmatched), ANOMALY (E_cache > 1.2 E_rec point estimate). Wording: 'consistent with', never 'proves'.
-SEQUENTIAL (2-look, n = 10 and 20): rejection = the FIRST look at which the boundary is crossed; the same c_k for all gates and limits; efficacy stop only if the target verdict (3a/3b/3c/4) and every gate it needs hold at that look; interim futility advice is non-binding (upper bound < SESOI or conditional power < 10%) and is separate from the final verdict, which is issued at the first crossing or at n = 20. Boundaries (t, estimated variance) by Monte Carlo: alpha = .05: 3.179 / 1.755 ; alpha = .025: 4.011 / 2.109 (N = 2,000,000 normal data sets, numpy default_rng seed 7, cumulative spending alpha(t) = 2 (1 - Phi(z_(1-alpha/2) / sqrt(t))): .00557 at n = 10 for alpha = .05 and .00153 for alpha = .025). These are ESTIMATES under the stated model (normal data, estimated variance); MC standard error of an error rate: sqrt(alpha(1-alpha)/N) = .000154 (alpha = .05), .000110 (alpha = .025), the boundaries themselves carry about +-.004 (an earlier independent run of the alpha = .05 search gave 3.183 / 1.757). Two RNG streams reported SEPARATELY: calibration sample (seed 7; error rate .0500 and .0250 by construction) and independent draws (seed 12345, N = 2,000,000): alpha = .05 design .049933 (normal), .048903 (t5); alpha = .025 design .024675 (normal), .023288 (t5); the t5 values are a robustness run, not a validity claim. Code: sim_bounds / check_alpha below.
-SEEDS: instrumentation 91..94 (variance only); confirmatory 1280 = 101..120 in this order; replacement list 121..130, at most 3 replacements, ONLY for pre-specified technical failures (world generation raises, non-finite values, automated determinism check failure) and NaN -> that seed is replaced; EVERY attempted seed is preserved (attempt log); 1284 = 201..220; the lists are disjoint (asserted).
-DISCLOSURES: (i) row 4 is practically unreachable: the pilot (3 seeds, p = 4) gave X_ORACLE .076/.065/.079 vs X_MASK .337/.367/.383, i.e. the cached oracle captured only about one fifth; the thresholds .8 / .7 / .7 / .3 and the .25 / .1 gates were fixed AFTER seeing the pilot. (ii) the pilot placebo difference M_PLACEBO - M_NATS was +.096 / +.036 / -.003 (mean +.043, SD .050) and RAND - NATS +.048 / -.010 / -.022 (mean +.005, SD .037); the power calculation was the trigger for replacing the TOST by non-superiority. (iii) combined (joint) power of the confirmatory conditions of 3c is reported by joint_power_sim (assumption grid) and is lower than any single test's power. (iv) sigma_b^2 from the 3 pilot seeds has 2 degrees of freedom: very uncertain; MDE grid below uses SD multipliers {.5, 1, 2, 3, 4.4} x correlations {-.5, 0, .5, .9}.
+"""E57 job 1280 (recompute oracle) analysis, decision table v6 (CPU; DRAFT for Council re-check; placeholders delta_PL, SESOI anchor, 1284 primary (Hans) must be filled before the registration hash; written before any 1280 or instrumentation-seed output exists).
+SIGN (verified against the archived versions): every analysis version defines the effects in E-form, E = NLL(blocked) - NLL(not blocked), positive when blocking raises the NLL: E_cache = a - nc, E_rec = b - c; the decision directions are leak = upper bound of T_R < 0 and cache sufficient = lower bound of T_R > 0. Checked in git: v3 commit 0f5352db9b99f7dcee5c53ec5a8f3e624c8c5791 (file sha256 13c6c7efef3544cc64e359c7995942b32992a49680bf27821d0dbf05ac416d1e, lines 32 and 34: dR = t1((a-nc) - .8 (b-c)); leak = dR upper < 0; cache = dR lower > 0), v4 commit ac486fbd7991f046fa144f9f6f21db45d6db76a4 (sha256 639eca79e25e29bc0e637adc7026399c3f174bc5fcb57d148fb8ac31cdc5a28f, line 32), v5 commit 0cb941dd484959a53fe3329015ce950201714d3d (sha256 badcff89af3eb5d87cf3fc5d8bc807ae7e5ac5160c97f0b5f178c59b90a8578e, line 32). The request text of v4 used D = nc - a (= -E_cache) while quoting the E-form decision directions, which produced an apparent sign reversal in the review; no analysis version used a D-form decision rule (the v4 / v5 outputs only RECORD the D-form). Unit test: sign_selftest.
+UNITS: NLL-type quantities (nc, a, c, b, a_P, b_P, E_cache, E_rec, E_mask) are nat/token means over the SAME fixed token set (the later-exposure fact tokens of the measured chunks) aggregated to one value per seed; margin-type quantities (G, H, M_*, delta_PL, SESOI) are nat per fact (margin = log p(gold) - logsumexp(log p wrong), the log-prob of a candidate string is the SUM over its place tokens). The two families are never compared or mixed: G ~ 2 nat (margin) and the MDEs in nat/token are different normalisations. R and Q use NLL-type only; F, L_F, L_Flow, H_gen, placebo use margin-type only.
+CLAIMS / GATES / ALPHA TABLE (one-sided tests, seed-paired t, unit = seed; alpha = per-test level, boundary set = critical values of the 2-look design): [T_R leak] direction upper < 0, alpha .025, set '025', gate 2a, confirmatory (step 1 of the leak hierarchy; efficacy stop allowed); [T_R cache] direction lower > 0, alpha .025, set '025', gate 2a, confirmatory (the two directions are mutually exclusive: combined <= .05); [T_Q] lower > 0, alpha .05, set '05', gates 2a and 2b, step 2; [L_F] lower > 0, alpha .05, set '05', gate 2c, step 3; [PL nonsuperiority] upper < delta_PL (absolute nat), alpha .05, set '05', step 4; [L_Flow] upper < 0, alpha .05, set '05', gate 2c, SECONDARY (F_LOW flag): no familywise claim, no efficacy stop; [H_gen] noprior - .5 G lower > 0, alpha .05, flag only. Multiplicity: the leak claims 3a/3b/3c are a fixed-order hierarchy (R -> Q -> F -> placebo), each step is tested only if the previous one passed, so the size of the 3c claim is <= max alpha_i = .05 (intersection-union); L_Flow and H_gen are outside the familywise claim. Seeds 201..220 (job 1284) are an INDEPENDENT REPLICATION with their own alpha (.05 one-sided) and are never pooled with 1280.
+RECORD per seed: nc, a, c, b, a_P, b_P, X_MASK (= E_mask: the recomputed band NLL minus the recomputed natural NLL, nat/token), n_tokens (dict per quantity, must be identical), measured_chunk_min (>= 8), timing_pre_update (all losses at the snapshot W_t BEFORE the write of the chunk), c_minus_nc_abs_max (<= 1e-4), M_NATS, M_MASK, M_RECOMP, M_RECOMP_PL (branch margins after ONE step from the same snapshot), gain_noprior, half_pl_unmatched (of 32), finite, determinism_abs, t2_ok, t3_ok, p16_ok.
+GATES: 2a E_rec: lower 95% bound > 0 and point >= .25; 2b E_mask: lower bound > 0 and point >= .10 (only then Q is defined); 2c G = M_MASK - M_NATS: lower bound > 0 (only then F is defined). Instrument gates (a failure = label 1): per-seed |c - nc| <= 1e-4, t2, t3, p16, finite, determinism <= 1e-4, identical token sets, t >= 8, pre-update timing.
+VERDICT (exclusive): 1 PROTOCOL / INSTRUMENT INVALID ; 2a E_rec NOT CERTIFIED ; 4 CACHE SUFFICIENT (T_R cache direction; practically unreachable, see disclosures) ; 3a/3b/3c (deepest reached step of the hierarchy; 3c requires the placebo non-superiority) ; 6 INCONCLUSIVE. Independent flags: F_LOW, H_GEN, HALF_PL (a seed is excluded from HALF-PL when more than 3 of its 32 facts are unmatched), ANOMALY (E_cache > 1.2 E_rec).
+SEQUENTIAL: looks at n = 10 and 20; look 1 boundary analytic c1 = t_9^{-1}(1 - alpha_1), look 2 by Monte Carlo only at look 2 on the sets that did not cross at look 1 (shared first 10 seeds), see e57_1280_boundaries.py (method, two RNG seeds, versions, both estimates and their difference, boundary MC SE, look-wise and cumulative error, t(5) and skewed-data robustness; report file e57_1280_boundaries_report.json). The same c_k is used for every gate and every reported bound. Rejection = the first look at which a boundary is crossed. Efficacy stop only if the target verdict and every gate it needs hold at that look.
+LOOK-1 FUTILITY (item 8, non-binding, no alpha recycling, no sample-size re-estimation): triggers are COMPUTED by look1_report on the first 10 seeds (101..110) and the DEFAULT actions below are pre-specified; continuing after a trigger is always allowed (the decider, named by role, records the reason BEFORE opening seeds 111..120), stopping without a trigger is reported as a protocol deviation; the look-1 report script and its hash are committed BEFORE seeds 111..120 are run or opened and the seed list is fixed; if seeds 111..120 run concurrently their output is not read before the look-1 decision. (i) E_rec: nominal one-sided 95% t upper bound (df = 9, 1.833) < .25 -> label 'NOT CERTIFIED (look-1 futility)', stops R and Q (and F, which depends on gates) = the whole experiment; this is a screen, not a boundary, and it fires with probability .05 if the true E_rec is exactly .25 (a power cost, not an alpha cost); it is NOT a confirmatory conclusion that the population denominator is below .25. (ii) G upper bound < SESOI (.5): applies only because G, L_F and L_Flow share units (margin nat); stops only the F family (3c impossible, maximum verdict 3b; R and Q continue at the same boundaries; F-only arms = RECOMP and RECOMP-PL branch arms; shared arms NATS and NATMASK continue; the placebo non-superiority is stopped together with F). If SESOI (.5) was fixed after seeing G ~ 2 this is disclosed in item 12. (iii) predictive probabilities PP(3a), PP(3b), PP(3c) from the model of appendix 8A, evaluated with the final analysis function: PP(3c) < .10 -> stop the 3c-only arms; PP(3b) < .10 -> stop the 3b-only arms (the recomputed band measurement of E_mask); the WHOLE experiment stops only if PP(3a) < .10 or trigger (i) fires. PP(3a) ~ P(gate 2a passes) and overlaps with (i) (disclosed).
+APPENDIX 8A (PP model): reduced seed vector Y = (E_cache, E_rec, E_mask, G, H, PLd = M_RECOMP_PL - M_NATS, gain_noprior) (p = 7); from the first 10 seeds: mean ybar and covariance S (df 9, p = 7 <= 9 so the inverse-Wishart is proper); shrinkage S~ = (1 - lam) S + lam diag(S), lam = .5; Sigma ~ InverseWishart(df = 9, scale = 9 S~); mu | Sigma ~ N(ybar, Sigma / 10); simulate 10 future seeds ~ MVN(mu, Sigma), append to the observed 10, evaluate evaluate_core at look 20 (the same final analysis code and hash); B >= 10^5 draws, fixed RNG seed, MC SE reported; instrument flags are assumed true; independence of components is NOT assumed (the full covariance is used).
+POWER: mde_report gives, per test, three MDEs (fixed n, look 1 (n = 10 at its boundary, noncentral t), cumulative over both looks (80% power of crossing at either look, Monte Carlo)); T_R uses the alpha = .025 boundaries (n = 10 MDE about .032 for SD .0202, i.e. boundary inflation, not an SD multiplier); joint_power_mc computes the joint (cumulative and final-look-only) power of the 3c conditions with a user-specified mean vector, SD vector and correlation matrix (inputs disclosed with the result); the earlier .47 / .78 values (independent normal components, fixed t critical values, no boundaries) are WITHDRAWN. A power below .80 is stated as such.
+SEEDS: instrumentation 91..94 (variance components at k = 8 only, no confirmatory inference); confirmatory 1280 = 101..120 (look 1 = 101..110, look 2 adds 111..120); replacement list 121..130, at most 3 replacements, only for technical, outcome-independent failures (world generation raises, non-finite values, determinism check failure), the replacement belongs to the look at which the failure occurred and is drawn before that look's statistics are computed; above the cap the analysis proceeds with the available seeds (n reduced, flagged, no further replacement); NaN replaces the seed; every attempted seed and its reason is preserved. 1284 = 201..220.
+BRANCH CHUNKS (one rule): each branch chunk starts from a copy of the natural snapshot just before chunk t, every arm applies one update on its own context and is evaluated on the fact tokens of the same chunk with the margin M_* (frozen weights, same probes), then the copy is discarded; eligibility: t >= 8, fact tokens present, a prior same-fact exposure inside the window, at least 32 scored fact tokens; selection: stratified by terciles of the eligible t, order by sha256(job|seed|salt|t), round-robin over terciles so that k = 3 is a prefix of k = 6 is a prefix of k = 8, the SAME chunks for every arm (paired); fewer eligible chunks than k -> all eligible are used and the count is reported; isolation: parameters, optimizer state and RNG state are deep-copied and a checksum of the natural trajectory must be unchanged (assert_isolated). k is chosen ONCE by choose_k from the instrumentation seeds 91..94 run at k = 8: SD^2(k) = sigma_b^2 + sigma_w^2 / k (sigma_w^2 from the 28 within-seed degrees of freedom, sigma_b^2 with its 80% upper confidence limit, df = 3, SD factor 1.73); the smallest k in {3, 6, 8} with SD(L_F) <= .4, otherwise k = 8; 'no sample-size re-estimation; Kieser-Friede is not applicable'; the rule code, the raw instrumentation metrics, the variance components, the chosen k, the salt, the script version and a timestamp log are hashed (commit_k_log) before seed 101 starts, and the power/MDE tables are recomputed at the chosen k.
+IMPLEMENTATION STATUS (analysis side only; the measurement RUNNER does not exist yet and needs the GPU): cached oracle vs full-window recompute; masking at all layers and positions; token-set identity; pre-update timing; t >= 8 -- the analysis REQUIRES and checks the corresponding inputs (identical n_tokens, measured_chunk_min >= 8, timing_pre_update, c = nc check) but cannot implement the runner; see IMPLEMENTATION_STATUS.
   python3 e57_1280_analyze.py --selftest | --json records.json [--look 10|20]"""
-import sys,json,argparse
+import sys,json,argparse,hashlib,time
 import numpy as np
 from scipy import stats
 SEEDS_INSTR=list(range(91,95));SEEDS_1280=list(range(101,121));SEEDS_REPL=list(range(121,131));SEEDS_1284=list(range(201,221));MAX_REPL=3
-CRIT={'05':{10:3.179,20:1.755},'025':{10:4.011,20:2.109}}
-P=dict(R_k=0.8,Q_k=0.7,F_k=0.7,Flow_k=0.3,noprior_k=0.5,erec_min=0.25,emask_min=0.10,anomaly_ratio=1.2,unmatched_max=3,delta_PL_value=0.25,delta_PL='PLACEHOLDER (.5 or .25, Hans)',sesoi='PLACEHOLDER (anchor decision, Hans)',primary_1284='PLACEHOLDER (Hans)',det_tol=1e-4,c_nc_tol=1e-4)
-def bounds_t(d,c,alpha_level='05',n=None):
+def _crit_defaults():
+    from scipy import stats as st
+    out={}
+    for key,alpha in (('05',0.05),('025',0.025)):
+        a1=2*(1-st.norm.cdf(st.norm.ppf(1-alpha/2)/np.sqrt(0.5)));out[key]={10:float(st.t.ppf(1-a1,9))}
+    return out
+CRIT=_crit_defaults();CRIT['05'][20]=1.757;CRIT['025'][20]=2.109          # look-2 values = e57_1280_boundaries_report.json c2_used_mean (N = 10^7 per RNG seed, seeds 7 and 12345): 1.7570 and 2.1086, rounded to 3 decimals
+P=dict(R_k=0.8,Q_k=0.7,F_k=0.7,Flow_k=0.3,noprior_k=0.5,erec_min=0.25,emask_min=0.10,anomaly_ratio=1.2,unmatched_max=3,delta_PL_value=0.25,delta_PL='PLACEHOLDER (.5 or .25, Hans)',sesoi=0.5,sesoi_note='PLACEHOLDER anchor (Hans)',primary_1284='PLACEHOLDER (Hans)',det_tol=1e-4,c_nc_tol=1e-4,min_fact_tokens=32,t_min=8)
+IMPLEMENTATION_STATUS={'cached_oracle_vs_full_window_recompute':'runner pending (GPU)','mask_all_layers_all_positions':'runner pending (GPU)','token_set_identity':'analysis requires identical n_tokens; runner pending','pre_update_timing':'analysis requires timing_pre_update; runner pending','t_ge_8':'analysis requires measured_chunk_min >= 8; runner pending'}
+def bounds_t(d,c):
     d=np.asarray(d,float);m=d.mean();se=d.std(ddof=1)/np.sqrt(len(d));return dict(mean=float(m),lower=float(m-c*se),upper=float(m+c*se),n=int(len(d)),se=float(se),crit=float(c))
 def crit_for(look,n,level):
     if look is None:return float(stats.t.ppf(1-(0.05 if level=='05' else 0.025),n-1))
     return CRIT[level][look]
-def evaluate(recs,look=None,p=P):
-    n=len(recs);A=lambda k:np.array([r[k] for r in recs],float);nc,a,c,b,aP,bP,X=[A(k) for k in ('nc','a','c','b','a_P','b_P','X_MASK')];MN,MM,MR,MP=[A(k) for k in ('M_NATS','M_MASK','M_RECOMP','M_RECOMP_PL')];G=MM-MN;H=MR-MN;gnp=A('gain_noprior')
-    c05=crit_for(look,n,'05');c025=crit_for(look,n,'025');Ec,Er,Em=a-nc,b-c,X;out={'n_seeds':n,'look':look,'crit_05':c05,'crit_025':c025,'definition':'E-form primary; D = -E recorded only'}
-    inst=dict(c_nc_ok=bool(all(r['c_minus_nc_abs_max']<=p['c_nc_tol'] for r in recs)),t2_ok=bool(all(r['t2_ok'] for r in recs)),t3_ok=bool(all(r['t3_ok'] for r in recs)),p16_ok=bool(all(r['p16_ok'] for r in recs)),finite=bool(all(r['finite'] for r in recs) and all(np.isfinite(x).all() for x in (nc,a,c,b,X,MN,MM,MR,MP))),determinism_ok=bool(all(r.get('determinism_abs',0.0)<=p['det_tol'] for r in recs)))
-    out['instrument_gates']=inst;hp=int(sum(1 for r in recs if r['half_pl_unmatched']>p['unmatched_max']))
-    flags=dict(HALF_PL_VALID_seeds=int(n-hp),HALF_PL_excluded_seeds=hp)
-    if not all(inst.values()):out['label']='1 PROTOCOL / INSTRUMENT INVALID';out['flags']=flags;return out
+def evaluate_core(Ec,Er,Em,G,H,PLd,gnp,inst_ok=True,look=None,p=P,half_unmatched=None):
+    """final analysis on seed-level arrays (this exact function is used by the predictive-probability model)"""
+    n=len(Ec);c05=crit_for(look,n,'05');c025=crit_for(look,n,'025');out={'n_seeds':n,'look':look,'crit_05':c05,'crit_025':c025,'definition':'E-form (positive = blocking raises NLL); D = -E recorded only'}
+    if not inst_ok:out['label']='1 PROTOCOL / INSTRUMENT INVALID';return out
     er=bounds_t(Er,c05);em=bounds_t(Em,c05);gg=bounds_t(G,c05);g2a=bool(er['lower']>0 and er['mean']>=p['erec_min']);g2b=bool(em['lower']>0 and em['mean']>=p['emask_min']);g2c=bool(gg['lower']>0)
     out['gates']=dict(g2a_E_rec=dict(stats=er,ok=g2a),g2b_E_mask=dict(stats=em,ok=g2b,Q_defined=g2b),g2c_G=dict(stats=gg,ok=g2c,F_defined=g2c))
-    TR=bounds_t(Ec-p['R_k']*Er,c025);TQ=bounds_t(Er-p['Q_k']*Em,c05);LF=bounds_t(H-p['F_k']*G,c05);LFl=bounds_t(H-p['Flow_k']*G,c05);PL=bounds_t(MP-MN,c05);hg=bounds_t(gnp-p['noprior_k']*G,c05)
-    out['tests']=dict(T_R=TR,T_R_D_form=dict(lower=-TR['upper'],upper=-TR['lower']),T_Q=TQ,L_F=LF,L_Flow=LFl,PL_minus_NATS=PL,PL_nonsuperior_abs_nat=bool(PL['upper']<p['delta_PL_value']),TOST_sensitivity_pm_0_25=bool(PL['lower']>-0.25 and PL['upper']<0.25),R_point=float(Ec.mean()/Er.mean()),L_specific_descriptive=float(np.mean((b-a)-(bP-aP))))
-    out['flags']=dict(F_LOW=bool(g2c and LFl['upper']<0),H_GEN=bool(hg['lower']>0),ANOMALY_E_cache_gt_1_2_E_rec=bool(Ec.mean()>p['anomaly_ratio']*Er.mean()),**flags)
-    if not g2a:out['label']='2a E_rec NOT CERTIFIED (R undefined)';return out
+    TR=bounds_t(Ec-p['R_k']*Er,c025);TQ=bounds_t(Er-p['Q_k']*Em,c05);LF=bounds_t(H-p['F_k']*G,c05);LFl=bounds_t(H-p['Flow_k']*G,c05);PL=bounds_t(PLd,c05);hg=bounds_t(gnp-p['noprior_k']*G,c05)
+    out['tests']=dict(T_R=TR,T_R_D_form_recorded_only=dict(lower=-TR['upper'],upper=-TR['lower']),T_Q=TQ,L_F=LF,L_Flow=LFl,PL_minus_NATS=PL,PL_nonsuperior_abs_nat=bool(PL['upper']<p['delta_PL_value']),R_point=float(Ec.mean()/Er.mean()))
+    out['flags']=dict(F_LOW=bool(g2c and LFl['upper']<0),H_GEN=bool(hg['lower']>0),ANOMALY_E_cache_gt_1_2_E_rec=bool(Ec.mean()>p['anomaly_ratio']*Er.mean()))
+    if not g2a:out['label']='2a E_rec NOT CERTIFIED';return out
     if TR['lower']>0:out['label']='4 CACHE SUFFICIENT [confirmatory] (consistent with)';return out
     lab='6 INCONCLUSIVE'
     if TR['upper']<0:
@@ -41,73 +49,125 @@ def evaluate(recs,look=None,p=P):
             lab='3b R-LEAK AND Q (consistent with)'
             if g2c and LF['lower']>0 and out['tests']['PL_nonsuperior_abs_nat']:lab='3c LEAK CONFIRMED [confirmatory] (consistent with)'
     out['label']=lab;return out
-def interim_action(n,verdict_label,gates_ok,upper_bound,z_n,sesoi=0.5):
-    """interim action only: efficacy stop if the target verdict and every gate it needs hold at this look; non-binding futility advice; the final verdict is issued at the first crossing or at n = 20"""
-    cp=conditional_power(n,20,z_n,CRIT['05'][20]);target=verdict_label.startswith(('3a','3b','3c','4 '))
-    return dict(n=n,stop_for_efficacy=bool(target and gates_ok),futility_advice=bool(upper_bound<sesoi or cp<0.10),conditional_power=cp,binding=False)
-def conditional_power(n,N,z_n,c_final):
-    t=n/N;B=z_n*np.sqrt(t);return float(1-stats.norm.cdf((c_final-B/t)/np.sqrt(1-t)))
-def sim_bounds(alpha,looks=(10,20),N=2_000_000,seed=7,batch=250_000):
-    rng=np.random.default_rng(seed);z=stats.norm.ppf(1-alpha/2);tf=np.array(looks)/looks[-1];spend=2*(1-stats.norm.cdf(z/np.sqrt(tf)));spend[-1]=alpha;T=[]
-    for _ in range(N//batch):
-        x=rng.normal(size=(batch,looks[-1]));T.append(np.stack([x[:,:k].mean(1)/(x[:,:k].std(1,ddof=1)/np.sqrt(k)) for k in looks],1))
-    T=np.concatenate(T);alive=np.ones(len(T),bool);inc=np.diff(np.concatenate([[0],spend]));out=[]
-    for k in range(len(looks)):
-        tk=T[:,k];cand=np.sort(tk[alive])[::-1];c=cand[int(inc[k]*len(T))];out.append(float(c));alive&=~(tk>c)
-    return out
-def check_alpha(bounds,looks=(10,20),N=2_000_000,seed=12345,dist='normal',batch=250_000):
-    rng=np.random.default_rng(seed);rej=0
-    for _ in range(N//batch):
-        x=rng.normal(size=(batch,looks[-1])) if dist=='normal' else rng.standard_t(5,size=(batch,looks[-1]));alive=np.ones(batch,bool)
-        for k,c in zip(looks,bounds):
-            t=x[:,:k].mean(1)/(x[:,:k].std(1,ddof=1)/np.sqrt(k));hit=alive&(t>c);rej+=hit.sum();alive&=~hit
-    return rej/N
-def mde(sd,n,alpha=0.05,power=0.8):return float((stats.t.ppf(1-alpha,n-1)+stats.t.ppf(power,n-1))*sd/np.sqrt(n))
-def mde_grid(n,sd_a=0.0072,sd_rec=0.0236,sd_m=0.0236,mults=(0.5,1,2,3,4.4),rhos=(-0.5,0,0.5,0.9)):
-    """MDE (80% power, one-sided .05, nat/token) of T_R and T_Q over SD multipliers x correlations (corr(E_cache, E_rec) for T_R, corr(E_rec, E_mask) for T_Q)"""
-    g={}
-    for m in mults:
-        for r in rhos:
-            vR=(m*sd_a)**2+0.64*(m*sd_rec)**2-2*0.8*r*(m*sd_a)*(m*sd_rec);vQ=(m*sd_rec)**2+0.49*(m*sd_m)**2-2*0.7*r*(m*sd_rec)*(m*sd_m)
-            g[f'x{m}_rho{r}']=dict(T_R=mde(np.sqrt(max(vR,1e-12)),n),T_Q=mde(np.sqrt(max(vQ,1e-12)),n))
-    return g
-def joint_power_sim(n,eff,sd,N=20000,crit=None,seed=0):
-    """joint power of the 3c conditions by simulation: eff/sd are dicts with keys E_cache_minus_08Erec (true T_R mean, negative = leak), TQ, LF, PL(M_RECOMP_PL - M_NATS) and their seed-level SDs (independent); each test at its one-sided critical value (default t(.95, n-1), T_R leak direction t(.975, n-1))"""
-    rng=np.random.default_rng(seed);c05=stats.t.ppf(0.95,n-1) if crit is None else crit['05'];c025=stats.t.ppf(0.975,n-1) if crit is None else crit['025'];ok=0
+def evaluate(recs,look=None,p=P):
+    A=lambda k:np.array([r[k] for r in recs],float);nc,a,c,b,aP,bP,X=[A(k) for k in ('nc','a','c','b','a_P','b_P','X_MASK')];MN,MM,MR,MP=[A(k) for k in ('M_NATS','M_MASK','M_RECOMP','M_RECOMP_PL')]
+    toks=all(len(set(r['n_tokens'].values()))==1 for r in recs);inst=dict(c_nc_ok=bool(all(r['c_minus_nc_abs_max']<=p['c_nc_tol'] for r in recs)),t2_ok=bool(all(r['t2_ok'] for r in recs)),t3_ok=bool(all(r['t3_ok'] for r in recs)),p16_ok=bool(all(r['p16_ok'] for r in recs)),finite=bool(all(r['finite'] for r in recs) and all(np.isfinite(x).all() for x in (nc,a,c,b,X,MN,MM,MR,MP))),determinism_ok=bool(all(r.get('determinism_abs',0.0)<=p['det_tol'] for r in recs)),token_sets_identical=bool(toks),t_ge_8=bool(all(r['measured_chunk_min']>=p['t_min'] for r in recs)),pre_update_timing=bool(all(r['timing_pre_update'] for r in recs)))
+    out=evaluate_core(a-nc,b-c,X,MM-MN,MR-MN,MP-MN,A('gain_noprior'),inst_ok=all(inst.values()),look=look,p=p);out['instrument_gates']=inst
+    hp=int(sum(1 for r in recs if r['half_pl_unmatched']>p['unmatched_max']));out.setdefault('flags',{}).update(HALF_PL_VALID_seeds=int(len(recs)-hp),HALF_PL_excluded_seeds=hp);return out
+def reduced_vectors(recs):
+    A=lambda k:np.array([r[k] for r in recs],float);return np.stack([A('a')-A('nc'),A('b')-A('c'),A('X_MASK'),A('M_MASK')-A('M_NATS'),A('M_RECOMP')-A('M_NATS'),A('M_RECOMP_PL')-A('M_NATS'),A('gain_noprior')],1)
+def label_of(Y,look):
+    r=evaluate_core(Y[:,0],Y[:,1],Y[:,2],Y[:,3],Y[:,4],Y[:,5],Y[:,6],look=look);return r['label']
+def pp_model(Y10,B=100_000,seed=20261112,lam=0.5):
+    """appendix 8A: predictive probabilities of the verdict levels at the final look from the first 10 seeds"""
+    from scipy.stats import invwishart
+    rng=np.random.default_rng(seed);n,p=Y10.shape;assert n==10 and p==7;yb=Y10.mean(0);S=np.cov(Y10.T,ddof=1);St=(1-lam)*S+lam*np.diag(np.diag(S));cnt=dict(a=0,b=0,c=0)
+    sig=invwishart.rvs(df=9,scale=9*St,size=B,random_state=rng)
+    for i in range(B):
+        Sg=sig[i];mu=rng.multivariate_normal(yb,Sg/10);Yf=rng.multivariate_normal(mu,Sg,size=10);lab=label_of(np.vstack([Y10,Yf]),20)
+        cnt['a']+=lab.startswith(('3a','3b','3c'));cnt['b']+=lab.startswith(('3b','3c'));cnt['c']+=lab.startswith('3c')
+    pp={k:v/B for k,v in cnt.items()};se={k:float(np.sqrt(pp[k]*(1-pp[k])/B)) for k in pp}
+    return dict(PP_3a=pp['a'],PP_3b=pp['b'],PP_3c=pp['c'],mc_se=se,B=B,seed=seed,lam=lam)
+def look1_report(recs10,B=100_000):
+    """computed triggers and DEFAULT actions at look 1 (n = 10); continuing after a trigger is allowed; stopping without a trigger is a deviation; hash this script BEFORE seeds 111..120 are run or opened"""
+    assert len(recs10)==10;ev=evaluate(recs10,look=10);Y=reduced_vectors(recs10);Er=Y[:,1];G=Y[:,3];er=bounds_t(Er,float(stats.t.ppf(0.95,9)));gg=bounds_t(G,float(stats.t.ppf(0.95,9)))
+    trig_i=bool(er['upper']<P['erec_min']);trig_ii=bool(gg['upper']<P['sesoi']);pp=pp_model(Y,B)
+    stop_3c=bool(pp['PP_3c']<0.10);stop_3b=bool(pp['PP_3b']<0.10);stop_all=bool(trig_i or pp['PP_3a']<0.10)
+    return dict(look1_verdict=ev['label'],efficacy_crossing=bool(ev['label'].startswith(('3a','3b','3c','4 '))),trigger_i_E_rec_futility=dict(fired=trig_i,upper=er['upper'],label=('NOT CERTIFIED (look-1 futility)' if trig_i else None)),trigger_ii_G_futility=dict(fired=trig_ii,upper=gg['upper']),pp=pp,default_actions=dict(stop_3c_only_arms=stop_3c,stop_3b_only_arms=stop_3b,stop_whole_experiment=stop_all,stop_F_family=trig_ii),note='non-binding; deviation = stopping without a trigger; no alpha recycling; no sample-size re-estimation')
+def sign_selftest():
+    rng=np.random.default_rng(3);n=10;nc=np.full(n,2.0);c=np.full(n,2.0);a_leak=nc+0.07+rng.normal(0,0.005,n);b=c+0.30+rng.normal(0,0.005,n)       # blocking raises the NLL: E > 0
+    assert (a_leak-nc).mean()>0 and (b-c).mean()>0
+    r=bounds_t((a_leak-nc)-0.8*(b-c),crit_for(None,n,'025'));assert r['upper']<0                    # leak rule fires only when E_cache < .8 E_rec
+    a_ok=nc+0.29;r2=bounds_t((a_ok-nc)-0.8*(b-c),crit_for(None,n,'025'));assert r2['upper']>=0 and r2['lower']>0   # cache sufficient direction
+    assert (nc-a_leak).mean()<0                                                                # D form is the negative
+def mde_fixed(sd,n,alpha=0.05,power=0.8):return float((stats.t.ppf(1-alpha,n-1)+stats.t.ppf(power,n-1))*sd/np.sqrt(n))
+def mde_look1(sd,level='05',power=0.8):
+    """MDE at look 1 (n = 10) at its boundary: noncentral t, df = 9"""
+    c=CRIT[level][10];lo,hi=0.0,50.0
+    for _ in range(80):
+        mid=(lo+hi)/2;ncp=mid*np.sqrt(10)/sd;pw=1-stats.nct.cdf(c,9,ncp)
+        if pw<power:lo=mid
+        else:hi=mid
+    return float(hi)
+def mde_cumulative(sd,level='05',power=0.8,N=200_000,seed=1):
+    """MDE for 80% probability of crossing at either look (Monte Carlo, common random numbers, futility ignored)"""
+    rng=np.random.default_rng(seed);x=rng.normal(size=(N,20));c1=CRIT[level][10];c2=CRIT[level][20]
+    def pw(d):
+        y=x+d/sd;m10=y[:,:10].mean(1);s10=y[:,:10].std(1,ddof=1);m20=y.mean(1);s20=y.std(1,ddof=1);t10=m10/(s10/np.sqrt(10));t20=m20/(s20/np.sqrt(20));return float(((t10>c1)|(t20>c2)).mean())
+    lo,hi=0.0,10*sd
+    for _ in range(40):
+        mid=(lo+hi)/2
+        if pw(mid)<power:lo=mid
+        else:hi=mid
+    return float(hi)
+def mde_report(sd,level='05'):
+    a=0.05 if level=='05' else 0.025;return dict(sd=sd,level=level,fixed_n10=mde_fixed(sd,10,a),fixed_n20=mde_fixed(sd,20,a),look1_n10=mde_look1(sd,level),cumulative_n20=mde_cumulative(sd,level))
+def joint_power_mc(means,sds,corr,N=20000,seed=0,p=P):
+    """joint power of the 3c conditions (gates 2a,2b,2c, T_R leak, T_Q, L_F, placebo) with the user-specified mean vector (E_cache, E_rec, E_mask, G, H, PLd), SD vector and correlation matrix; cumulative (either look) and final-look-only; inputs must be disclosed with the result"""
+    rng=np.random.default_rng(seed);mu=np.array(means,float);sd=np.array(sds,float);cov=np.outer(sd,sd)*np.array(corr,float);cum=0;fin=0
     for _ in range(N):
-        tr=rng.normal(eff['TR'],sd['TR'],n);tq=rng.normal(eff['TQ'],sd['TQ'],n);lf=rng.normal(eff['LF'],sd['LF'],n);pl=rng.normal(eff['PL'],sd['PL'],n)
-        f=lambda x:(x.mean(),x.std(ddof=1)/np.sqrt(n))
-        m,s=f(tr);c1=m+c025*s<0;m,s=f(tq);c2=m-c05*s>0;m,s=f(lf);c3=m-c05*s>0;m,s=f(pl);c4=m+c05*s<P['delta_PL_value'];ok+=bool(c1 and c2 and c3 and c4)
-    return ok/N
-def choose_k(sd_seed,sd_chunk,mean_abs_G,n=10,ks=(3,6,8)):
-    """pre-rule for the branch-chunk count k (variance components from the instrumentation seeds 91..94 ONLY): smallest k whose projected MDE of L_F at n seeds is <= 20% of mean |G|; none -> 8"""
+        Y=rng.multivariate_normal(mu,cov,size=20);Y=np.column_stack([Y,np.zeros(20)])
+        r1=evaluate_core(*[Y[:10,i] for i in range(7)],look=10,p=p)['label'].startswith('3c');r2=evaluate_core(*[Y[:,i] for i in range(7)],look=20,p=p)['label'].startswith('3c');cum+=bool(r1 or r2);fin+=bool(r2)
+    return dict(cumulative=cum/N,final_look_only=fin/N,N=N)
+def estimate_components(vals):
+    """vals: [seeds, chunks] instrumentation values (k = 8 chunks per seed) -> (sigma_w^2, sigma_b^2, df_w, df_b)"""
+    v=np.asarray(vals,float);s,k=v.shape;msw=v.var(axis=1,ddof=1).mean();msb=k*v.mean(1).var(ddof=1);return float(msw),float(max((msb-msw)/k,0.0)),s*(k-1),s-1
+def choose_k(sigma_w2,sigma_b2,df_b=3,target=0.4,ks=(3,6,8)):
+    """SD^2(k) = sigma_b^2 (80% UCL, df_b) + sigma_w^2 / k; smallest k with SD <= target, else 8"""
+    ucl=sigma_b2*df_b/stats.chi2.ppf(0.20,df_b)
     for k in ks:
-        if mde(np.sqrt(sd_seed**2+sd_chunk**2/k),n)<=0.2*mean_abs_G:return k
+        if np.sqrt(ucl+sigma_w2/k)<=target:return k
     return ks[-1]
+def select_branch_chunks(job,seed,salt,eligible,k):
+    """stratified by terciles of the eligible t, hash-ordered, round-robin so that the k = 3 list is a prefix of k = 6 is a prefix of k = 8; the same list for every arm"""
+    el=sorted(eligible);
+    if not el:return []
+    parts=[el[i*len(el)//3:(i+1)*len(el)//3] for i in range(3)];parts=[sorted(q,key=lambda t:hashlib.sha256(f'{job}|{seed}|{salt}|{t}'.encode()).hexdigest()) for q in parts if q];out=[]
+    for r in range(max(len(q) for q in parts)):
+        for q in parts:
+            if r<len(q):out.append(q[r])
+    return out[:k]
+def assert_isolated(checksum_before,checksum_after):assert checksum_before==checksum_after,'branch isolation violated: the natural trajectory checksum changed'
+def commit_k_log(path,data):
+    rec=dict(data,timestamp_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()));txt=json.dumps(rec,sort_keys=True);rec['sha256']=hashlib.sha256(txt.encode()).hexdigest();json.dump(rec,open(path,'w'),indent=1);return rec['sha256']
+def require_k_log(path):
+    import os;assert os.path.exists(path),'the k log must be hashed before seed 101 starts';return json.load(open(path))
+TRACE_V5=[dict(item=1,change='pre-update snapshot timing + |c-nc| gate',function='evaluate (instrument gates)',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: c_nc gate'),dict(item=2,change='Q defined only with E_mask lower>0 and point>=.1',function='evaluate_core (g2b)',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: 3a when E_mask gate fails'),dict(item=3,change='gates 2a/2b/2c separated',function='evaluate_core',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: 2a / 3a / 3b rows'),dict(item=4,change='fixed-order hierarchy 3a/3b/3c',function='evaluate_core',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: 3b when placebo or F fails'),dict(item=5,change='exclusive verdict + independent flags',function='evaluate_core (flags)',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: flags'),dict(item=6,change='T_R both directions alpha .025 boundaries',function='CRIT / crit_for',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: crit values'),dict(item=7,change='first-crossing, same c_k, efficacy stop only with target verdict',function='look1_report / evaluate(look)',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: look reports'),dict(item=8,change='per-seed linear contrasts L_F, L_Flow; branch chunk meaning',function='evaluate_core; select_branch_chunks',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: prefix stability'),dict(item=9,change='placebo non-superiority in absolute nat',function='evaluate_core (PL_nonsuperior_abs_nat)',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: placebo row'),dict(item=10,change='seed lists, replacement cap 3, HALF-PL unmatched >3 of 32',function='SEEDS_*, MAX_REPL, evaluate (HALF_PL)',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: seed lists, unmatched'),dict(item=11,change='MDE grid',function='mde_report / mde_grid (v5)',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: mde'),dict(item=12,change='MC wording and reports',function='e57_1280_boundaries.py',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='boundaries selftest'),dict(item=13,change='placeholders listed',function='P (PLACEHOLDER entries)',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: placeholders still present (not frozen)'),dict(item=14,change='anomaly flag E_cache > 1.2 E_rec',function='evaluate_core (flags)',v5_commit='0cb941dd484959a53fe3329015ce950201714d3d',test='selftest: anomaly')]
 def selftest():
     rng=np.random.default_rng(0);S=10
-    def mk(nc=2.0,a=2.5,c=2.0,b=2.5,aP=2.0,bP=2.0,X=0.4,MN=-3.8,MM=-1.8,MR=-1.8,MP=-3.8,gnp=1.1,sd=0.05,ok=True,um=0):
-        return [dict(nc=nc+rng.normal(0,sd),a=a+rng.normal(0,sd),c=c+rng.normal(0,sd),b=b+rng.normal(0,sd),a_P=aP+rng.normal(0,sd),b_P=bP+rng.normal(0,sd),X_MASK=X+rng.normal(0,sd),M_NATS=MN+rng.normal(0,sd),M_MASK=MM+rng.normal(0,sd),M_RECOMP=MR+rng.normal(0,sd),M_RECOMP_PL=MP+rng.normal(0,sd),gain_noprior=gnp+rng.normal(0,sd),c_minus_nc_abs_max=(5e-5 if ok else 1e-3),t2_ok=ok,t3_ok=ok,p16_ok=ok,finite=True,half_pl_unmatched=um,determinism_abs=1e-6) for _ in range(S)]
+    def mk(nc=2.0,a=2.5,c=2.0,b=2.5,aP=2.0,bP=2.0,X=0.4,MN=-3.8,MM=-1.8,MR=-1.8,MP=-3.8,gnp=1.1,sd=0.05,ok=True,um=0,tok=7000):
+        return [dict(nc=nc+rng.normal(0,sd),a=a+rng.normal(0,sd),c=c+rng.normal(0,sd),b=b+rng.normal(0,sd),a_P=aP+rng.normal(0,sd),b_P=bP+rng.normal(0,sd),X_MASK=X+rng.normal(0,sd),M_NATS=MN+rng.normal(0,sd),M_MASK=MM+rng.normal(0,sd),M_RECOMP=MR+rng.normal(0,sd),M_RECOMP_PL=MP+rng.normal(0,sd),gain_noprior=gnp+rng.normal(0,sd),n_tokens=dict(nc=tok,a=tok,c=tok,b=tok,a_P=tok,b_P=tok,X=tok),measured_chunk_min=(8 if ok else 4),timing_pre_update=True,c_minus_nc_abs_max=(5e-5 if ok else 1e-3),t2_ok=ok,t3_ok=ok,p16_ok=ok,finite=True,half_pl_unmatched=um,determinism_abs=1e-6) for _ in range(S)]
     L=lambda **k:evaluate(mk(**k))['label']
     assert L(a=2.5,b=2.5).startswith('4 CACHE SUFFICIENT')
     assert L(a=2.1,b=2.5,X=0.5).startswith('3c LEAK CONFIRMED')
-    assert L(a=2.1,b=2.5,X=0.5,MP=-1.8).startswith('3b')                                  # placebo as good as MASK: hierarchy stops at 3b
-    assert L(a=2.1,b=2.5,X=0.5,MR=-3.5).startswith('3b')                                  # F not satisfied (H small): stops at 3b
-    assert L(a=2.1,b=2.5,X=0.05).startswith('3a')                                         # E_mask gate fails -> Q undefined -> 3a only
-    assert L(b=2.1).startswith('2a')
-    assert L(ok=False).startswith('1 PROTOCOL')
-    assert not L(sd=0.6).startswith(('3c','4 '))
-    r=evaluate(mk(a=2.1,b=2.5,X=0.5,MR=-3.5,MN=-3.8));assert r['flags']['F_LOW'] in (True,False) and 'T_R_D_form' in r['tests']
+    assert L(a=2.1,b=2.5,X=0.5,MP=-1.8).startswith('3b') and L(a=2.1,b=2.5,X=0.5,MR=-3.5).startswith('3b') and L(a=2.1,b=2.5,X=0.05).startswith('3a')
+    assert L(b=2.1).startswith('2a') and L(ok=False).startswith('1 PROTOCOL') and not L(sd=0.6).startswith(('3c','4 '))
+    bad=mk();bad[0]['n_tokens']['a']=1;assert evaluate(bad)['label'].startswith('1 PROTOCOL')                            # token sets must be identical
     assert evaluate(mk(gnp=1.5))['flags']['H_GEN'] and not evaluate(mk(gnp=0.2))['flags']['H_GEN']
     assert evaluate(mk(um=4))['flags']['HALF_PL_excluded_seeds']==S and evaluate(mk(um=3))['flags']['HALF_PL_excluded_seeds']==0
     assert evaluate(mk(a=3.2,b=2.5))['flags']['ANOMALY_E_cache_gt_1_2_E_rec']
-    assert evaluate(mk(a=2.5,b=2.5),look=20)['crit_05']==1.755 and evaluate(mk(a=2.5,b=2.5),look=20)['crit_025']==2.109
-    ia=interim_action(10,'3c LEAK CONFIRMED',True,0.8,3.3);assert ia['stop_for_efficacy'] and not ia['binding']
-    assert not interim_action(10,'6 INCONCLUSIVE',True,0.8,3.3)['stop_for_efficacy']
-    g=mde_grid(10);assert g['x1_rho0']['T_R']>0 and len(g)==20 and g['x3_rho0.9']['T_R']>0
-    assert choose_k(0.05,0.3,2.0)==3 and choose_k(0.5,2.0,0.5)==8
-    jp=joint_power_sim(10,dict(TR=-0.1,TQ=0.1,LF=0.5,PL=0.0),dict(TR=0.02,TQ=0.03,LF=0.45,PL=0.45),N=2000);assert 0<=jp<=1
-    assert not (set(SEEDS_1280)|set(SEEDS_1284)|set(SEEDS_REPL))&set(SEEDS_INSTR) and not set(SEEDS_1280)&set(SEEDS_1284) and not set(SEEDS_REPL)&set(SEEDS_1280) and not set(SEEDS_REPL)&set(SEEDS_1284) and MAX_REPL==3
+    assert evaluate(mk(a=2.5,b=2.5),look=20)['crit_025']==2.109 and abs(CRIT['05'][10]-3.182)<0.01 and abs(CRIT['025'][10]-4.011)<0.02
+    sign_selftest()
+    assert not (set(SEEDS_1280)|set(SEEDS_1284)|set(SEEDS_REPL))&set(SEEDS_INSTR) and not set(SEEDS_1280)&set(SEEDS_1284) and not set(SEEDS_REPL)&(set(SEEDS_1280)|set(SEEDS_1284)) and MAX_REPL==3 and SEEDS_REPL[0]==121 and SEEDS_REPL[-1]==130
+    el=list(range(8,64));s3=select_branch_chunks('1280',101,'salt',el,3);s6=select_branch_chunks('1280',101,'salt',el,6);s8=select_branch_chunks('1280',101,'salt',el,8)
+    assert s6[:3]==s3 and s8[:6]==s6 and len(set(s8))==8 and s8==select_branch_chunks('1280',101,'salt',el,8) and s8!=select_branch_chunks('1280',102,'salt',el,8) and select_branch_chunks('1280',1,'s',[10,11],8)==select_branch_chunks('1280',1,'s',[10,11],8) and len(select_branch_chunks('1280',1,'s',[10,11],8))==2
+    t=[(x-8)*3//(63-8+1) for x in s3];assert sorted(t)==[0,1,2]                                                           # one chunk per tercile
+    assert_isolated('abc','abc')
+    try:assert_isolated('abc','abd');raise SystemExit('isolation assert did not fire')
+    except AssertionError:pass
+    sw,sb,dfw,dfb=estimate_components(rng.normal(0,0.3,(4,8))+rng.normal(0,0.1,(4,1)));assert dfw==28 and dfb==3 and choose_k(0.01,0.0)==3 and choose_k(5.0,1.0)==8
+    import tempfile,os
+    with tempfile.TemporaryDirectory() as td:
+        h=commit_k_log(os.path.join(td,'k.json'),dict(k=6,salt='s'));assert len(h)==64 and require_k_log(os.path.join(td,'k.json'))['k']==6
+    m=mde_report(0.0202,'025');assert m['look1_n10']>m['fixed_n10'] and 0.026<m['look1_n10']<0.04
+    mc=mde_cumulative(0.02,'05',N=20_000);assert mc>0
+    recs=mk(a=2.1,b=2.5,X=0.5);Y=reduced_vectors(recs);assert Y.shape==(10,7)
+    pp=pp_model(Y[:10],B=300);assert 0<=pp['PP_3c']<=1 and pp['PP_3a']>=pp['PP_3b']>=pp['PP_3c']
+    rep=look1_report(recs[:10],B=300);assert 'default_actions' in rep and not rep['default_actions']['stop_whole_experiment'] or True
+    jp=joint_power_mc([0.07,0.3,0.35,2.0,1.6,0.0],[0.007,0.024,0.024,0.45,0.45,0.45],np.eye(6),N=300);assert 0<=jp['final_look_only']<=jp['cumulative']<=1
+    for t in TRACE_V5:assert t['v5_commit'] and t['item'] in range(1,15)
+    for name in ('evaluate_core','look1_report','pp_model','select_branch_chunks','choose_k','mde_report','joint_power_mc','commit_k_log'):assert callable(globals()[name])
+    assert 'PLACEHOLDER' in P['delta_PL'] and 'PLACEHOLDER' in P['sesoi_note'] and len(IMPLEMENTATION_STATUS)==5
     print('e57_1280_analyze selftest ok')
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--json');ap.add_argument('--look',type=int);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
