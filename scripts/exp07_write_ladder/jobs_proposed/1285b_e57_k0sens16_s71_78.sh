@@ -51,7 +51,7 @@ import json,sys
 o,r,s=sys.argv[1],sys.argv[2],sys.argv[3]
 a=json.load(open(f'{o}/E55_k0s16_NATMASK_K08_s{s}.read.json'));b=json.load(open(f'{r}/E55_k0c16_NATMASK_s{s}.read.json'))
 ma={k:v for k,v in a['meta'].items() if k!='arm'};mb={k:v for k,v in b['meta'].items() if k!='arm'}
-assert ma==mb and a['W0']==b['W0'],('read item meta or W0 reads differ between K0 = 8 and K0 = 0',s)
+assert ma==mb and a['W0']==b['W0'] and a['place_len']==b['place_len'],('read item meta, W0 reads or place length differ between K0 = 8 and K0 = 0',s)
 sa=json.load(open(f'{o}/E55_k0s16_NATMASK_K08_s{s}.saved.json'));sb=json.load(open(f'{r}/E55_k0c16_NATMASK_s{s}.saved.json'))
 for k in ('stream_sha','world_seed','cell','k','n','p','bank','n_chunks','read_apps_out','read_apps_in','save_apps','mask_arm','band','lr_mult','engine'):assert sa[k]==sb[k],('configuration differs between K0 = 8 and K0 = 0',s,k)
 assert sa['K0']==8 and sb['K0']==0
