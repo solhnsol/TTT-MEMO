@@ -22,13 +22,25 @@ def validate_input(r):
 _SIGNS={}
 def _signmat(m):
     if m not in _SIGNS:
-        idx=np.arange(2**m,dtype=np.uint32);_SIGNS[m]=((idx[:,None]>>np.arange(m,dtype=np.uint32))&1).astype(np.float64)*2-1
+        idx=np.arange(2**m,dtype=np.uint32);_SIGNS[m]=((idx[:,None]>>np.arange(m,dtype=np.uint32))&1).astype(np.int64)*2-1
     return _SIGNS[m]
+QUANT=1e-9   # integer arithmetic rule (v12): every seed-level value is rounded to an integer multiple of 1e-9 BEFORE the exact test; sums are exact int64, so ties are decided exactly and p = count / 2^n is an exact rational
+def _quantize(x):
+    x=np.asarray(x,float);assert np.isfinite(x).all(),'non-finite value in the exact test';xi=np.rint(x/QUANT);assert np.abs(xi).sum()<2**62,'integer overflow guard';return xi.astype(np.int64)
+def signflip_count_exact(x):
+    """exact count of sign vectors s in {+-1}^n with sum(s_i x_i) >= sum(x_i) (ties count as extreme, >=); integer arithmetic on x rounded to multiples of 1e-9; returns (count, 2^n) as Python ints. ALGORITHM = meet in the middle: left half of m = n // 2 signs gives 2^m partial sums a, right half of n - m signs gives 2^(n-m) partial sums b, SORTED once; for every a the number of b with a + b >= S_obs is found by binary search (np.searchsorted), so the cost is about 2^(n/2) * n instead of 2^n * n; the only large arrays are the two sign matrices (2^m * m + 2^(n-m) * (n-m) int64 entries)"""
+    xi=_quantize(x);n=len(xi);assert n<=32,'exact sign-flip is limited to n <= 32 seeds (2^n sign vectors, meet in the middle); use the Monte Carlo fallback'
+    m=n//2;a=_signmat(m)@xi[:m];b=np.sort(_signmat(n-m)@xi[m:]);need=int(xi.sum())-a
+    ge=len(b)-np.searchsorted(b,need,side='left');return int(ge.sum()),2**n
 def signflip_p_exact(x):
-    """exact one-sided p = P(S >= S_obs), S = sum s_i x_i, s_i = +-1 uniform: all 2^n sign vectors, meet in the middle (halves of n // 2 and n - n // 2 signs, sorted sums, binary search)"""
-    x=np.asarray(x,float);n=len(x);assert n<=32,'exact sign-flip is limited to n <= 32 seeds (2^n sign vectors, meet in the middle); use the Monte Carlo fallback'
-    m=n//2;a=_signmat(m)@x[:m];b=np.sort(_signmat(n-m)@x[m:]);tol=1e-9*np.abs(x).sum()+1e-300;need=x.sum()-a-tol
-    ge=len(b)-np.searchsorted(b,need,side='left');return float(ge.sum()/(len(a)*len(b)))
+    """exact one-sided p = P(S >= S_obs), S = sum s_i x_i with s_i = +-1 uniform = count / 2^n (integer count from signflip_count_exact, one final division)"""
+    c,t=signflip_count_exact(x);return float(c/t)
+def signflip_count_bruteforce(x):
+    """reference for n <= 20 only: enumerates all 2^n sign vectors one by one with Python integers (no matrices, no sorting, no binary search); used to verify signflip_count_exact exactly"""
+    xi=[int(v) for v in _quantize(x)];n=len(xi);assert n<=20;obs=sum(xi);c=0
+    for mk in range(2**n):
+        if sum(xi[i] if (mk>>i)&1 else -xi[i] for i in range(n))>=obs:c+=1
+    return c,2**n
 def t_p(x):
     x=np.asarray(x,float);n=len(x);sd=x.std(ddof=1)
     if sd==0:return 0.0 if x.mean()>0 else 1.0
@@ -41,7 +53,7 @@ def _one(x,exact):
     x=np.asarray(x,float);pt=t_p(x);pe=signflip_p_exact(x) if exact else None;return dict(mean=float(x.mean()),n=int(len(x)),p_t=pt,p_exact=pe,rej_t=bool(pt<=ALPHA),rej_exact=(bool(pe<=ALPHA) if exact else None))
 EXACT_TESTS=('g2a','g2b','g2c','leak','cache','Q','F','PL')
 def evaluate_core(Ec,Er,Em,G,H,PLd,gnp,inst_ok=True,p=P,exact=True,pad=0):
-    """final fixed-sample analysis on seed-level arrays; exact = also the exact sign-flip test; pad = number of missing seeds imputed as ZERO EFFECT (every contrast and gate quantity 0) for the worst-case missing-seed sensitivity"""
+    """final fixed-sample analysis on seed-level arrays; exact = also the exact sign-flip test; pad = number of missing seeds imputed as ZERO EFFECT (every contrast and gate quantity 0) for the zero-effect sensitivity analysis"""
     n=len(Ec);out={'n_seeds':n,'n_imputed_zero_effect':int(pad),'definition':'E-form (positive = blocking raises NLL); D = -E recorded only'}
     if not inst_ok:out['label']='1 PROTOCOL / INSTRUMENT INVALID';return out
     TR=Ec-p['R_k']*Er;x=dict(g2a=Er,g2b=Em,g2c=G,leak=-TR,cache=TR,Q=Er-p['Q_k']*Em,F=H-p['F_k']*G,PL=p['delta_PL_value']-PLd,Flow=p['Flow_k']*G-H,hgen=gnp-p['noprior_k']*G)
@@ -90,21 +102,25 @@ def evaluate(recs,p=P,exact=True):
     out=evaluate_core(a-nc,b-c,X,MM-MN,MR-MN,MP-MN,A('gain_noprior'),inst_ok=all(inst.values()),p=p,exact=exact);out['instrument_gates']=inst
     hp=int(sum(1 for r in recs if r['half_pl_unmatched']>p['unmatched_max']));out.setdefault('flags',{}).update(HALF_PL_VALID_seeds=int(len(recs)-hp),HALF_PL_excluded_seeds=hp);return out
 def final_report(recs,n_planned=N_FIXED,p=P,exact=True):
-    """the reported analysis: the evaluation on the available seeds; if the number of seeds is below n_min (n_min = 27, Hans 2026-11-11) the result is labelled EXPLORATORY; if seeds are missing the WORST-CASE missing-seed sensitivity imputes every missing seed as ZERO EFFECT (all contrasts and gate quantities 0) and reports whether the verdict level is unchanged"""
+    """the reported analysis: the evaluation on the available seeds; if the number of seeds is below n_min (n_min = 27, Hans 2026-11-11) the result is labelled EXPLORATORY; if seeds are missing the ZERO-EFFECT sensitivity analysis (missing-seed imputation) imputes every missing seed as ZERO EFFECT (all contrasts and gate quantities 0) and reports whether the verdict level is unchanged"""
     out=evaluate(recs,p=p,exact=exact);n=len(recs);out['n_available']=n;out['n_planned']=n_planned;nm=p.get('n_min')
     out['below_n_min']=(bool(n<nm) if nm is not None else None);out['n_min_note']='n_min is not set' if nm is None else f'n_min = {nm}'
     if nm is not None and n<nm:out['label_reported']='EXPLORATORY: '+out['label']
     else:out['label_reported']=out['label']
     if n<n_planned and 'tests' in out:
         A=lambda k:np.array([r[k] for r in recs],float);nc,a,c,b,X=[A(k) for k in ('nc','a','c','b','X_MASK')];MN,MM,MR,MP=[A(k) for k in ('M_NATS','M_MASK','M_RECOMP','M_RECOMP_PL')]
-        w=evaluate_core(a-nc,b-c,X,MM-MN,MR-MN,MP-MN,A('gain_noprior'),p=p,exact=exact,pad=n_planned-n);out['missing_seed_worst_case']=dict(label=w['label'],imputed=n_planned-n,robust=bool(w['label'][:2]==out['label'][:2]))
+        w=evaluate_core(a-nc,b-c,X,MM-MN,MR-MN,MP-MN,A('gain_noprior'),p=p,exact=exact,pad=n_planned-n);out['missing_seed_zero_effect_sensitivity']=dict(label=w['label'],imputed=n_planned-n,robust=bool(w['label'][:2]==out['label'][:2]))
     return out
 def benchmark_exact(n=30,reps=20,seed=1):
     """CPU benchmark of the exact sign-flip test at n seeds (2^n sign vectors, meet in the middle): wall time per test, per 8-test analysis, and the memory of the two cached sign matrices"""
-    import resource;rng=np.random.default_rng(seed);x=[rng.normal(0.2,1,n) for _ in range(reps)];signflip_p_exact(x[0]);t0=time.perf_counter()
+    import resource
+    def rss():
+        try:return int(open('/proc/self/statm').read().split()[1])*os.sysconf('SC_PAGE_SIZE')/1e6
+        except Exception:return float('nan')
+    base=rss();rng=np.random.default_rng(seed);x=[rng.normal(0.2,1,n) for _ in range(reps)];signflip_p_exact(x[0]);t0=time.perf_counter()
     for v in x:signflip_p_exact(v)
     dt=(time.perf_counter()-t0)/reps;m=n//2;mb=((2**m)*m+(2**(n-m))*(n-m))*8/1e6
-    return dict(n=n,sign_vectors=2**n,seconds_per_test=dt,seconds_per_analysis_8_tests=8*dt,sign_matrix_MB=mb,peak_rss_MB=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024,cpu=os.cpu_count(),threads_note='single process',fallback='if infeasible: Monte Carlo sign-flip with >= 1e6 sign vectors and a fixed RNG seed (numpy PCG64 seed 20261112), p = (1 + count) / (1 + 1e6)')
+    return dict(n=n,sign_vectors=2**n,seconds_per_test=dt,seconds_per_analysis_8_tests=8*dt,sign_matrix_MB=mb,peak_rss_MB=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024,rss_at_start_MB=base,rss_after_MB=rss(),memory_note='sign_matrix_MB (7.9) is only the two cached int64 sign matrices; peak_rss_MB is the whole process (Python + numpy + scipy and the interpreter, rss_at_start_MB, plus per-test temporaries: two int64 partial-sum arrays of 2^15 entries, the sorted array, the searchsorted result); the 102 MB is therefore not the memory of the algorithm',cpu=os.cpu_count(),threads_note='single process',fallback='if infeasible: Monte Carlo sign-flip with >= 1e6 sign vectors and a fixed RNG seed (numpy PCG64 seed 20261112), p = (1 + count) / (1 + 1e6)')
 # ---------------- seeds and failures ----------------
 FAILURE_DEF='a seed whose run diverges or yields a non-finite value'
 def fill_seeds(status,planned=None,spares=None,cap=MAX_REPL):
@@ -157,12 +173,18 @@ def github_release_time(repo,tag):
     """server-side creation time (epoch seconds) of the GitHub release attached to the signed tag in the private registry repo (gh api; the pusher cannot set this time)"""
     import datetime;r=subprocess.run(['gh','api',f'repos/{repo}/releases/tags/{tag}','--jq','.created_at'],capture_output=True,text=True);assert r.returncode==0,'release not found: '+r.stderr[:200]
     return datetime.datetime.fromisoformat(r.stdout.strip().replace('Z','+00:00')).timestamp()
-def check_external_record(tag,scripts,results_dir,repo='.',remote_time_fn=None,require_signature=True):
-    """external record (Hans 2026-11-11): a SIGNED tag pushed to the private remote; the checker verifies (1) the tag signature (git tag -v), (2) every script is identical in the tag and in the working tree, (3) the REMOTE time of the tag (remote_time_fn(tag) -> epoch seconds, default = the server-side creation time of the release on the private registry repo) precedes the oldest file in results_dir; returns the tag commit"""
+def file_sha256_in_tag(tag,path,repo='.'):
+    r=subprocess.run(['git','show',f'{tag}:{path}'],capture_output=True,cwd=repo);assert r.returncode==0,f'{path} is not in tag {tag}';return hashlib.sha256(r.stdout).hexdigest()
+def check_external_record(tag,scripts,results_dir,repo='.',remote_time_fn=None,require_signature=True,require_plan_hashes=True):
+    """external record (Hans 2026-11-11; v12: commit SHA + plan-file SHA-256 recorded together): a SIGNED tag pushed to the private remote whose message lists the SHA-256 of every plan/script file ('sha256 <hex> <path>' per line); the checker verifies (0, v12) each listed SHA-256 equals the SHA-256 of that file in the tagged commit and of the working-tree file, so the commit SHA (rev-list of the tag) and the content hashes are checked together, (1) the tag signature (git tag -v), (2) every script is identical in the tag and in the working tree, (3) the REMOTE time of the tag (remote_time_fn(tag) -> epoch seconds, default = the server-side creation time of the release on the private registry repo) precedes the oldest file in results_dir; returns the tag commit"""
     def git(*a):return subprocess.run(['git',*a],capture_output=True,text=True,cwd=repo)
     if require_signature:assert git('tag','-v',tag).returncode==0,'tag signature does not verify'
     commit=git('rev-list','-n','1',tag);assert commit.returncode==0,f'tag {tag} not found';commit=commit.stdout.strip()
     for sc in scripts:assert git('diff','--quiet',tag,'--',sc).returncode==0,f'{sc} differs from the tagged version'
+    if require_plan_hashes:
+        msg=git('tag','-l','--format=%(contents)',tag).stdout
+        for sc in scripts:
+            h=file_sha256_in_tag(tag,sc,repo);assert f'sha256 {h} {sc}' in msg,f'the tag message does not list the SHA-256 of {sc}';assert hashlib.sha256(open(os.path.join(repo,sc),'rb').read()).hexdigest()==h,f'{sc}: working-tree SHA-256 differs from the tag'
     files=[os.path.join(r,f) for r,_,fs in os.walk(results_dir) for f in fs];first=min(os.path.getmtime(f) for f in files) if files else float('inf');rt=(remote_time_fn or (lambda t:github_release_time(REGISTRY_REPO,t)))(tag)
     assert rt<first,'the remote record is not older than the first result file';return commit
 REGISTRY_REPO='PRIVATE-REGISTRY-REPO (to be created by Hans: <owner>/<name>, private)'
@@ -172,26 +194,29 @@ COMPONENTS=('g2a','g2b','g2c','leak','Q','F','PL')
 SCENARIO_657=dict(means=[0.07,0.30,0.35,2.0,1.6,0.0],sds=[0.007,0.024,0.024,0.45,0.45,0.45],corr=[[1,.3,0,0,0,0],[.3,1,.5,0,0,0],[0,.5,1,0,0,0],[0,0,0,1,.7,0],[0,0,0,.7,1,0],[0,0,0,0,0,1]])
 def power_n30(means,sds,corr,N=100_000,exact_N=10_000,seed=0,p=P,n=N_FIXED):
     """power at n = 30 (common random numbers): t-only for N datasets (marginal per component, joint 3c, product of marginals, Frechet bounds, joint-minus-product with paired batch SE) and 'significant' = t AND exact sign-flip for the first exact_N datasets; values >= .9999 printed '>=.9999'"""
-    rng=np.random.default_rng(seed);mu=np.array(means,float);sd=np.array(sds,float);cov=np.outer(sd,sd)*np.array(corr,float);Lc=np.linalg.cholesky(cov);Z=rng.standard_normal((N,n,6));D=mu+Z@Lc.T;K=len(COMPONENTS);It=np.zeros((N,K),bool);Jt=np.zeros(N,bool);Ie=np.zeros((exact_N,K),bool);Je=np.zeros(exact_N,bool)
+    rng=np.random.default_rng(seed);mu=np.array(means,float);sd=np.array(sds,float);cov=np.outer(sd,sd)*np.array(corr,float);Lc=np.linalg.cholesky(cov);Z=rng.standard_normal((N,n,6));D=mu+Z@Lc.T;K=len(COMPONENTS);It=np.zeros((N,K),bool);Jt=np.zeros(N,bool);Ie=np.zeros((exact_N,K),bool);Je=np.zeros(exact_N,bool);HK=('leak','Q','F','PL');Ht=np.zeros((N,4),bool);He=np.zeros((exact_N,4),bool)
     for r in range(N):
         Y=D[r];o=evaluate_core(Y[:,0],Y[:,1],Y[:,2],Y[:,3],Y[:,4],Y[:,5],np.zeros(n),p=p,exact=(r<exact_N));tt=o['tests']
         for k,nm in enumerate(COMPONENTS):It[r,k]=tt[nm]['rej_t']
         Jt[r]=o['label'].startswith('3c')
+        for k,nm in enumerate(HK):Ht[r,k]=o['holm'][nm]['p_holm']<=ALPHA
         if r<exact_N:
             for k,nm in enumerate(COMPONENTS):Ie[r,k]=tt[nm]['rej_t'] and tt[nm]['rej_exact']
             Je[r]=o['label'].startswith('3c') and 'significant' in o['label']
-    def summ(I,J):
-        pm=I.mean(0);m=len(I);bs=[float(J[b].mean()-np.prod(I[b].mean(0))) for b in np.array_split(np.arange(m),20)];return dict(marginal={nm:fmt_power(float(pm[k])) for k,nm in enumerate(COMPONENTS)},marginal_num={nm:float(pm[k]) for k,nm in enumerate(COMPONENTS)},joint=float(J.mean()),joint_text=fmt_power(float(J.mean())),product=float(np.prod(pm)),joint_minus_product=float(J.mean()-np.prod(pm)),joint_minus_product_se=float(np.std(bs,ddof=1)/np.sqrt(20)),frechet=[float(max(0,pm.sum()-(K-1))),float(pm.min())],N=m)
-    return dict(t_only=summ(It,Jt),significant_t_and_exact=summ(Ie,Je),inputs=dict(means=list(map(float,mu)),sds=list(map(float,sd)),corr=np.array(corr,float).tolist(),delta_PL=p['delta_PL_value'],n=n))
+            for k,nm in enumerate(HK):He[r,k]=bool(o['holm'][nm]['significant_individual'])
+    def summ(I,J,Hm):
+        # v12: three different things are reported: (i) marginal power of each component test at its own .05 (no multiplicity), (ii) 'joint' = the intersection-union claim 3c (all gates and the chain 3a->3b->3c reject; no multiplicity correction needed for the IUT), (iii) Holm: individual component claims after Holm over the 4 components leak/Q/F/PL (marginal_holm), and 'overall' = the 3c claim AND all 4 Holm-adjusted components significant
+        hm=Hm.mean(0);ov=(J&Hm.all(1));pm=I.mean(0);m=len(I);bs=[float(J[b].mean()-np.prod(I[b].mean(0))) for b in np.array_split(np.arange(m),20)];return dict(marginal={nm:fmt_power(float(pm[k])) for k,nm in enumerate(COMPONENTS)},marginal_num={nm:float(pm[k]) for k,nm in enumerate(COMPONENTS)},joint=float(J.mean()),joint_text=fmt_power(float(J.mean())),product=float(np.prod(pm)),joint_minus_product=float(J.mean()-np.prod(pm)),joint_minus_product_se=float(np.std(bs,ddof=1)/np.sqrt(20)),frechet=[float(max(0,pm.sum()-(K-1))),float(pm.min())],N=m,marginal_holm_num={nm:float(hm[k]) for k,nm in enumerate(HK)},marginal_holm={nm:fmt_power(float(hm[k])) for k,nm in enumerate(HK)},overall_IUT_and_Holm=float(ov.mean()),overall_IUT_and_Holm_text=fmt_power(float(ov.mean())))
+    return dict(t_only=summ(It,Jt,Ht),significant_t_and_exact=summ(Ie,Je,He),inputs=dict(means=list(map(float,mu)),sds=list(map(float,sd)),corr=np.array(corr,float).tolist(),delta_PL=p['delta_PL_value'],n=n))
 POWER_SDS=(0.05,0.225,0.45,0.90)
 SD_SOURCE={0.05:'PILOT-BASED: SD of the pilot placebo difference PL - NATS (3 seeds, df = 2; point estimate .050)',0.225:'PILOT-BASED upper limit: .050 * sqrt(2 / chi2_.05(2)) = .22 (95% upper confidence limit of that SD, df = 2)',0.45:'ASSUMPTION (working value of the margin-family SD; origin not re-derived in this thread, not pilot-based)',0.90:'ASSUMPTION (twice the working value; stress case, not pilot-based)'}
 def _grid_cell(a):
-    msd,rho,N,eN,seed=a;sc=SCENARIO_657;sd=list(sc['sds'][:3])+[msd]*3;corr=[r[:] for r in sc['corr']];corr[3][4]=corr[4][3]=rho;return (msd,rho,power_n30(sc['means'],sd,corr,N=N,exact_N=eN,seed=seed))
-def power_grid(N=100_000,exact_N=10_000,seed=2026,procs=9):
+    msd,rho,N,eN,seed=a[:5];nn=a[5] if len(a)>5 else N_FIXED;sc=SCENARIO_657;sd=list(sc['sds'][:3])+[msd]*3;corr=[r[:] for r in sc['corr']];corr[3][4]=corr[4][3]=rho;return (msd,rho,power_n30(sc['means'],sd,corr,N=N,exact_N=eN,seed=seed,n=nn))
+def power_grid(N=100_000,exact_N=10_000,seed=2026,procs=9,n=N_FIXED):
     from multiprocessing import Pool
-    cells=[(sd,r,N,exact_N,seed) for sd in POWER_SDS for r in (0.0,0.7,0.9)]
+    cells=[(sd,r,N,exact_N,seed,n) for sd in POWER_SDS for r in (0.0,0.7,0.9)]
     with Pool(procs) as pool:res=pool.map(_grid_cell,cells)
-    return dict(grid=[dict(margin_sd=a,sd_source=SD_SOURCE[a],rho_GH=b,**c) for a,b,c in res],n=N_FIXED,note='alt scenario = SCENARIO_657 (means E_cache .07, E_rec .30, E_mask .35, G 2.0, H 1.6, PLd 0), delta_PL .25, token-family SDs fixed; t_only uses N datasets, significant_t_and_exact the first exact_N')
+    return dict(grid=[dict(margin_sd=a,sd_source=SD_SOURCE[a],rho_GH=b,**c) for a,b,c in res],n=n,note='alt scenario = SCENARIO_657 (means E_cache .07, E_rec .30, E_mask .35, G 2.0, H 1.6, PLd 0), delta_PL .25, token-family SDs fixed; t_only uses N datasets, significant_t_and_exact the first exact_N')
 def gpu_hours(n_seeds,per_seed_minutes):return n_seeds*per_seed_minutes/60.0
 GPU_ASSUMPTION=dict(basis='measured: NATS 1.9 s/chunk, NATMASK 3.2 s/chunk, one full read about 5 min (291-313 s), 1283 about 10 min per arm; UNMEASURED: the 1280 branch arms (recompute oracle, RECOMP, RECOMP-PL, ORACLE, ORACLE-PL) at k = 8 chunks per seed',per_seed_minutes={'optimistic':45,'central':60,'pessimistic':90})
 def gpu_table(n=N_FIXED,old_n=20):return {k:dict(hours_n30=gpu_hours(n,v),hours_n20=gpu_hours(old_n,v)) for k,v in GPU_ASSUMPTION['per_seed_minutes'].items()}
@@ -243,9 +268,11 @@ def selftest():
         try:check_commit_precedes_results(['s.py'],os.path.join(td,'res'),td);raise SystemExit('commit after results accepted')
         except AssertionError:pass
     with tf.TemporaryDirectory() as td:
-        g=lambda *a:subprocess.run(['git',*a],cwd=td,capture_output=True,text=True,check=True);g('init','-q');g('config','user.email','a@b');g('config','user.name','t');open(os.path.join(td,'s.py'),'w').write('x=1\n');g('add','s.py');g('commit','-qm','s');g('tag','-a','reg','-m','reg');os.makedirs(os.path.join(td,'res'));time.sleep(1.1);open(os.path.join(td,'res','r.json'),'w').write('{}')
+        g=lambda *a:subprocess.run(['git',*a],cwd=td,capture_output=True,text=True,check=True);g('init','-q');g('config','user.email','a@b');g('config','user.name','t');open(os.path.join(td,'s.py'),'w').write('x=1\n');g('add','s.py');g('commit','-qm','s');g('tag','-a','reg','-m','reg\nsha256 '+hashlib.sha256(b'x=1\n').hexdigest()+' s.py');g('tag','-a','reg0','-m','reg without the plan hash');os.makedirs(os.path.join(td,'res'));time.sleep(1.1);open(os.path.join(td,'res','r.json'),'w').write('{}')
         old=lambda t:time.time()-100;new=lambda t:time.time()+100
         assert len(check_external_record('reg',['s.py'],os.path.join(td,'res'),td,remote_time_fn=old,require_signature=False))==40
+        try:check_external_record('reg0',['s.py'],os.path.join(td,'res'),td,remote_time_fn=old,require_signature=False);raise SystemExit('tag without the plan-file SHA-256 accepted')
+        except AssertionError:pass
         try:check_external_record('reg',['s.py'],os.path.join(td,'res'),td,remote_time_fn=new,require_signature=False);raise SystemExit('remote time after results accepted')
         except AssertionError:pass
         try:check_external_record('reg',['s.py'],os.path.join(td,'res'),td,remote_time_fn=old,require_signature=True);raise SystemExit('unsigned tag accepted')
@@ -257,22 +284,28 @@ def selftest():
         except AssertionError:pass
     pr=power_n30(*[SCENARIO_657[k] for k in ('means','sds','corr')],N=300,exact_N=60);a_=pr['t_only'];assert a_['joint']<=a_['frechet'][1]+1e-9 and a_['joint']>=a_['frechet'][0]-1e-9 and pr['inputs']['n']==30 and fmt_power(0.99995)=='>=.9999'
     gt=gpu_table();assert abs(gt['central']['hours_n30']-30.0)<1e-9 and abs(gt['central']['hours_n20']-20.0)<1e-9
-    # v11
+    # v12: exact sign-flip = meet in the middle with integer arithmetic, checked against brute force (n <= 20), ties counted as >=
+    bf=np.random.default_rng(7);cases=[bf.normal(0.3,1,n_) for n_ in range(1,17)]+[bf.integers(-3,6,n_).astype(float) for n_ in (5,8,12,13,16)]+[np.zeros(9),np.ones(11),np.array([0.5,0.5,-0.5,0.0,1.0,1.0,0.25]),bf.normal(0.2,1,20),bf.integers(-4,8,20).astype(float)]
+    for x_ in cases:assert signflip_count_exact(x_)==signflip_count_bruteforce(x_),('exact != brute force',len(x_))
+    assert signflip_count_exact(np.zeros(9))==(2**9,2**9) and signflip_count_exact(np.ones(10))==(1,1024) and signflip_p_exact(np.array([1.0,-1.0]))==0.75 and isinstance(signflip_count_exact(cases[3])[0],int)
+    assert signflip_count_exact(np.array([0.1+0.2,0.3,0.1]))[0]==signflip_count_exact(np.array([0.3,0.3,0.1]))[0]   # 0.1+0.2 != 0.3 in floating point, equal after the 1e-9 integer rounding
+    try:signflip_p_exact(np.array([1.0,np.nan]));raise SystemExit('non-finite accepted')
+    except AssertionError:pass
     try:signflip_p_exact(np.ones(34));raise SystemExit('n above the exact limit accepted')
     except AssertionError:pass
     o=evaluate(mk(a=2.1,b=2.5,X=0.5));assert all(abs(o['holm'][k]['p_max']-max(o['holm'][k]['p_t'],o['holm'][k]['p_exact']))<1e-15 for k in o['holm'])
     assert abs(50**0.5*0+0.050*np.sqrt(2/stats.chi2.ppf(0.05,2))-0.2205)<0.002 and POWER_SDS==(0.05,0.225,0.45,0.90) and all('PILOT-BASED' in SD_SOURCE[k] for k in (0.05,0.225)) and all('ASSUMPTION' in SD_SOURCE[k] for k in (0.45,0.90))
-    full=mk(a=2.1,b=2.5,X=0.5);fr=final_report(full);assert fr['below_n_min'] is False and 'n_min = 27' in fr['n_min_note'] and 'missing_seed_worst_case' not in fr
-    fr2=final_report(full[:22]);assert fr2['below_n_min'] is True and fr2['label_reported'].startswith('EXPLORATORY') and fr2['missing_seed_worst_case']['imputed']==8 and isinstance(fr2['missing_seed_worst_case']['robust'],bool)
-    fr3=final_report(mk(a=2.1,b=2.5,X=0.5,sd=0.02)[:15],p=dict(P,n_min=10));assert fr3['below_n_min'] is False and final_report(full[:28])['below_n_min'] is False and final_report(full[:26])['below_n_min'] is True and fr3['missing_seed_worst_case']['imputed']==15 and fr3['n_available']==15
+    full=mk(a=2.1,b=2.5,X=0.5);fr=final_report(full);assert fr['below_n_min'] is False and 'n_min = 27' in fr['n_min_note'] and 'missing_seed_zero_effect_sensitivity' not in fr
+    fr2=final_report(full[:22]);assert fr2['below_n_min'] is True and fr2['label_reported'].startswith('EXPLORATORY') and fr2['missing_seed_zero_effect_sensitivity']['imputed']==8 and isinstance(fr2['missing_seed_zero_effect_sensitivity']['robust'],bool)
+    fr3=final_report(mk(a=2.1,b=2.5,X=0.5,sd=0.02)[:15],p=dict(P,n_min=10));assert fr3['below_n_min'] is False and final_report(full[:28])['below_n_min'] is False and final_report(full[:26])['below_n_min'] is True and fr3['missing_seed_zero_effect_sensitivity']['imputed']==15 and fr3['n_available']==15
     h15=full[:15];pd=evaluate_core(np.array([x_['a']-x_['nc'] for x_ in h15]),np.array([x_['b']-x_['c'] for x_ in h15]),np.array([x_['X_MASK'] for x_ in h15]),np.array([x_['M_MASK']-x_['M_NATS'] for x_ in h15]),np.array([x_['M_RECOMP']-x_['M_NATS'] for x_ in h15]),np.array([x_['M_RECOMP_PL']-x_['M_NATS'] for x_ in h15]),np.zeros(15),pad=15);assert pd['n_imputed_zero_effect']==15 and pd['tests']['g2a']['n']==30 and abs(pd['tests']['g2a']['mean']-0.5*np.mean([x_['b']-x_['c'] for x_ in h15]))<1e-9
     bm=benchmark_exact(reps=3);assert bm['sign_vectors']==2**30 and bm['seconds_per_test']>0 and bm['sign_matrix_MB']<20
     assert P['delta_PL_value']==0.25 and P['sesoi_fact']==0.5 and P['n_min']==27 and 'sesoi_coef' not in P and len(IMPLEMENTATION_STATUS)==5
     print('e57_1280_analyze selftest ok')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--json');ap.add_argument('--selftest',action='store_true');ap.add_argument('--power-report');ap.add_argument('--bench',action='store_true');ap.add_argument('--N',type=int,default=100_000);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--json');ap.add_argument('--selftest',action='store_true');ap.add_argument('--power-report');ap.add_argument('--bench',action='store_true');ap.add_argument('--N',type=int,default=100_000);ap.add_argument('--n',type=int,default=N_FIXED);ap.add_argument('--procs',type=int,default=9);a=ap.parse_args()
     if a.selftest:selftest()
     elif a.bench:print(json.dumps(benchmark_exact(),indent=1))
     elif a.power_report:
-        g=power_grid(N=a.N);g['gpu_hours']=gpu_table();g['gpu_assumption']=GPU_ASSUMPTION;json.dump(g,open(a.power_report,'w'),indent=1,default=float);print('power grid written')
+        g=power_grid(N=a.N,n=a.n,procs=a.procs);g['gpu_hours']=gpu_table();g['gpu_assumption']=GPU_ASSUMPTION;json.dump(g,open(a.power_report,'w'),indent=1,default=float);print('power grid written')
     elif a.json:print(json.dumps(evaluate(json.load(open(a.json))),indent=1,default=float))
