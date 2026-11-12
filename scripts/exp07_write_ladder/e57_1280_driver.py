@@ -6,7 +6,7 @@ import sys,json,hashlib,argparse,subprocess,pathlib
 import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1];sys.path.insert(0,str(HERE))
 import e57_1280_margin as MG,e57_1280_runner_records as RR
-PINNED=['e57_1280_t3_sensitivity.py','e57_1280_runner_records.py','e57_1280_analyze.py','e57_1280_registration.py','e57_natmask_run.py','e57_oracle_masks.py','e57_oracle_run.py','e55_read.py','e55_gpu.py','e55_core.py','e57_1280_margin.py','e57_1280_validity.py','e57_1280_gainnp.py','e57_1280_recomp.py','e57_1280_runner.py','e57_1280_p16.py','e57_1280_driver.py','ladder.py','s3.py']
+PINNED=['e57_1280_t3_sensitivity.py','e57_1280_runner_records.py','e57_1280_analyze.py','e57_1280_analyze_a1b.py','e57_1280_registration.py','e57_natmask_run.py','e57_oracle_masks.py','e57_oracle_run.py','e55_read.py','e55_gpu.py','e55_core.py','e57_1280_margin.py','e57_1280_validity.py','e57_1280_gainnp.py','e57_1280_recomp.py','e57_1280_runner.py','e57_1280_p16.py','e57_1280_driver.py','ladder.py','s3.py']
 OTHER=['scripts/exp04_what_ttt_retains/gen_facts.py']
 def sha(path):return hashlib.sha256(open(path,'rb').read()).hexdigest()
 def manifest(out=None,repo=ROOT):
