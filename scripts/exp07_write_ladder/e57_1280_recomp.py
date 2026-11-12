@@ -3,7 +3,7 @@ For a branch chunk k (>= 8) the window of chunk k is the 8 chunks lo..k-1 (lo = 
   * queries of chunk j attending to the previous WIN = 8192 positions: for positions before lo * CH the NATURAL recorded K,V (exact: they cannot depend on any token at or after lo * CH), for positions inside the window the K,V recomputed here (the layer-l K,V of chunk j depend on the hidden states of chunk j at layer l, which depend on the recomputed K,V of the earlier layers),
   * the keys at the stream positions `hidden` (absolute token positions, S_i) hidden from EVERY query row at every layer (a row at a hidden position keeps its own key; otherwise a row with no visible key is possible), RoPE positions unchanged.
 With hidden = empty the result is the recomputed natural window K,V (the c of freeze A); it is compared with the cached natural K,V of the same window (nc), which is what the gate c_minus_nc_abs_max <= 1e-4 measures downstream (numerical agreement of the XLA attention used here with the cuDNN attention used for the recording is checked by the smoke run, not assumed).
-  window_kv(L, LD, m, Kh, Vh, ids_stream, k, hidden=())  -> (Kw, Vw) device arrays [24, WIN, nh, d]
+  window_kv(L, LD, m, Kh, Vh, ids_stream, k, hidden=(), keep_fn=None)  -> (Kw, Vw) device arrays [24, WIN, nh, d]; keep_fn(j) overrides the hidden-key matrix by an explicit 2-D keep per chunk (used for the band mask)
 Needs the lab modules (server only): L = the Ladder55 object (L.embed), LD / s3 for S3 and Batch."""
 import numpy as np
 CH=1024;NW=8;WIN=NW*CH
@@ -33,7 +33,7 @@ def keep_matrix(j,hidden):
             if 0<=r<CH:keep[r,c]=True
     return keep
 _JIT={}
-def window_kv(L,LD,m,Kh,Vh,ids_stream,k,hidden=()):
+def window_kv(L,LD,m,Kh,Vh,ids_stream,k,hidden=(),keep_fn=None):
     jax,jnp,eqx=LD.jax,LD.jnp,LD.eqx;import s3 as S3M
     from ttt.model.data import Batch
     install_patch(S3M,jax,jnp,S3M.SWA)
@@ -50,7 +50,7 @@ def window_kv(L,LD,m,Kh,Vh,ids_stream,k,hidden=()):
         _JIT['blk']=blk_rctx
     blk_rctx=_JIT['blk'];ids=np.asarray(ids_stream)
     ids_c={j:jnp.asarray(ids[j*CH:(j+1)*CH],dtype=jnp.int32) for j in range(lo,k)};h={j:L.embed(m,ids_c[j]) for j in range(lo,k)}
-    keeps={j:jnp.asarray(keep_matrix(j,hidden)) for j in range(lo,k)};Kout=[];Vout=[]
+    keeps={j:jnp.asarray(keep_fn(j) if keep_fn is not None else keep_matrix(j,hidden)) for j in range(lo,k)};Kout=[];Vout=[]
     for l in range(nl):
         blk=jax.tree.map(lambda a:a[l] if eqx.is_array(a) else a,blocks)
         nat_lo=max(0,(lo-NW)*CH)                                          # natural K,V of the positions before the window: [nat_lo, lo*CH)
