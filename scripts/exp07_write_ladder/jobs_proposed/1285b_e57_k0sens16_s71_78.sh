@@ -28,6 +28,9 @@ bad=[k for k in ('python','XLA_FLAGS','jax','jaxlib','numpy','scipy','driver') i
 if bad:print('REUSE REFUSED: differs from the 1283 versions.json:',bad);sys.exit(12)
 print('versions equal to the 1283 versions.json (library versions, flags, driver, runner code hashes); git head',v['git_head'][:8],'(1283:',ref['git_head'][:8]+')')
 PYE
+# CPU PRE-CHECK of the read items and candidate token spans (all seeds 71..78, 16 candidates of every item with token ids, spans, order and gold index): the stored manifest file must have the pinned SHA-256 and every regenerated per-seed manifest hash must equal the stored one (abort 14)
+echo "d21f596255c4abf3f547d83845ec7fea5c215ac3efcdbe3c2b874dc0949580b4  $O/token_manifest.json" | sha256sum -c - || exit 14
+CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu $PY $D/e57_1285_token_manifest.py --check $O/token_manifest.json || exit 14
 # GATES (about 20 min): NATS and NATMASK (K0 = 0) on seed 71 are rerun with the code path of THIS job and must be bit identical (exact equality, not allclose) to the 1283 NATS and NATMASK on seed 71 in update_norm, ce, gnorm, coef of every chunk, final state hash, and in the run configuration (cell, mask arm, read schedule, save apps, stream hash, chunk count, k, n, bank, K0 tag); the read item meta (kind, gold index) must also be identical. Any failure aborts (13): the K0 = 0 reuse is then refused; a rerun of the K0 = 0 arms (about 4.3 h instead of 1.7 h) needs a NEW principal-investigator sentence.
 $PY $D/e57_oracle_run.py --seed 71 --out $O/gate --masks none --mask-arm ALLQ256 --arms NATS,NATMASK --save-apps 16,32,64,128 --nat-loss-every 8 --tag k0s16gate
 $PY - $O $OUT/e57_k0conf16 <<'PYE'
@@ -35,6 +38,8 @@ import json,sys,hashlib
 o,r=sys.argv[1],sys.argv[2];ok=True
 EXCL={'log','reads','arm','tag','canary_w0','diag','inline','final_hash','clip_bind_frac','cum_update_norm','wlog','read_hash','summary','sec_total'}
 cfgh=lambda d:hashlib.sha256(json.dumps({k:v for k,v in d.items() if k not in EXCL},sort_keys=True).encode()).hexdigest()
+t0=json.load(open(f'{r}/E55_k0c16_NATS_s71.saved.json'));t1=dict(t0);t1['n_chunks']=t0['n_chunks']+1
+assert cfgh(t0)!=cfgh(t1),'negative control: a changed non-excluded configuration key must change the configuration hash'
 for arm in ('NATS','NATMASK'):
     a=json.load(open(f'{o}/gate/E55_k0s16gate_{arm}_s71.saved.json'));b=json.load(open(f'{r}/E55_k0c16_{arm}_s71.saved.json'))
     logs=len(a['log'])==len(b['log']) and all(x[k]==y[k] for x,y in zip(a['log'],b['log']) for k in ('update_norm','ce','gnorm','coef')) and a.get('final_hash')==b.get('final_hash')
@@ -55,8 +60,13 @@ a=json.load(open(f'{o}/E55_k0s16_NATMASK_K08_s{s}.read.json'));b=json.load(open(
 ma={k:v for k,v in a['meta'].items() if k!='arm'};mb={k:v for k,v in b['meta'].items() if k!='arm'}
 assert ma==mb and a['W0']==b['W0'] and a['place_len']==b['place_len'],('read item meta, W0 reads or place length differ between K0 = 8 and K0 = 0',s)
 sa=json.load(open(f'{o}/E55_k0s16_NATMASK_K08_s{s}.saved.json'));sb=json.load(open(f'{r}/E55_k0c16_NATMASK_s{s}.saved.json'))
-for k in ('stream_sha','world_seed','cell','k','n','p','bank','n_chunks','read_apps_out','read_apps_in','save_apps','mask_arm','band','lr_mult','engine'):assert sa[k]==sb[k],('configuration differs between K0 = 8 and K0 = 0',s,k)
-assert sa['K0']==8 and sb['K0']==0
+import hashlib
+EXCL={'log','reads','arm','tag','canary_w0','diag','inline','final_hash','clip_bind_frac','cum_update_norm','wlog','read_hash','summary','sec_total'}
+cfgh=lambda d:hashlib.sha256(json.dumps({k:v for k,v in d.items() if k not in EXCL},sort_keys=True).encode()).hexdigest()
+assert sa['K0']==8 and sb['K0']==0 and sa['arm']=='NATMASK_K08' and sb['arm']=='NATMASK'
+sa0=dict(sa);sa0['K0']=0
+assert cfgh(sa0)==cfgh(sb),('configuration differs between K0 = 8 and K0 = 0 beyond the arm name and the K0 value',s)
+rn=json.load(open(f'{r}/E55_k0c16_NATS_s{s}.read.json'));assert a['W0']==rn['W0'],('W0 reads of the K0 = 8 run differ from the 1283 NATS record',s)
 ga=len(a['read']['128']['in_g0']);gb=len(b['read']['128']['in_g0']);assert ga==gb,('in_g0 item count differs',s,ga,gb)
 nin=sum(1 for k in a['meta']['kind'][:ga] if k=='fact');print('seed',s,'in_g0 items',ga,'n_in (fact items)',nin,'(same items, meta, W0 and stream as 1283)')
 PYE
