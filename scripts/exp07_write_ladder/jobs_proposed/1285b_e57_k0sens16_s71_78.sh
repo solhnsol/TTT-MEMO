@@ -47,6 +47,7 @@ import json,sys
 o,r,s=sys.argv[1],sys.argv[2],sys.argv[3]
 a=json.load(open(f'{o}/E55_k0s16_NATMASK_K08_s{s}.read.json'));b=json.load(open(f'{r}/E55_k0c16_NATMASK_s{s}.read.json'))
 assert a['meta']['kind']==b['meta']['kind'] and a['meta']['gold_idx']==b['meta']['gold_idx'],('read item meta differs between K0 = 8 and K0 = 0',s)
+sa=json.load(open(f'{o}/E55_k0s16_NATMASK_K08_s{s}.saved.json'));sb=json.load(open(f'{r}/E55_k0c16_NATMASK_s{s}.saved.json'));assert sa['stream_sha']==sb['stream_sha'] and sa['world_seed']==sb['world_seed'],('world / stream differs between K0 = 8 and K0 = 0',s)
 ga=len(a['read']['128']['in_g0']);gb=len(b['read']['128']['in_g0']);assert ga==gb,('in_g0 item count differs',s,ga,gb)
 nin=sum(1 for k in a['meta']['kind'][:ga] if k=='fact');print('seed',s,'in_g0 items',ga,'n_in (fact items)',nin,'(same item ids as 1283)')
 PYE
