@@ -45,9 +45,7 @@ def make_factory(cfg):
         log(f'  1280 branch chunks (eligible {len(elig)}): {list(br)}')
         rd_holder={}
         def reader(items,raw,tail):
-            if 'rd' not in rd_holder:
-                import e55_gpu as RG;rd_holder['rd']=RG.Reader55(rt,LD.runtime_fp32(),LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
-            return rd_holder['rd']
+            rd_holder['rd']=STORE['rd'];return rd_holder['rd']       # the Reader55 instance of e57_oracle_run.main (captured in main), a second fp32 runtime does not fit in device memory
         def margins(m,newp,facts,items,raw,tail,P):
             m2=L.set_inner(m,newp)
             with rt.mesh:S=rd_holder['rd'].score(P,m2,len(facts),16)
@@ -148,6 +146,10 @@ def main():
     def tail_c(*args,**kw):
         t=otail(*args,**kw);STORE['tail']=t;return t
     R55.out_tail_8192=tail_c
+    orc=RG.Reader55
+    def reader_c(*args,**kw):
+        o=orc(*args,**kw);STORE['rd']=o;return o
+    RG.Reader55=reader_c
     ob=R55.build
     def build_c(args,seed=None,read_apps=None,arms=None):return ob(args,seed,read_apps=read_apps,arms=list(arms)+['SWB'])      # adds the 'nofact' stream (decoy kind of the generator); the real stream does not depend on it (one half of the background pool in both cases)
     R55.build=build_c
