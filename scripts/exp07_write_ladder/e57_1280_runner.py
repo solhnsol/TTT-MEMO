@@ -68,6 +68,7 @@ def make_factory(cfg):
             hiddenB=sorted(set(S_abs));keepB=RC.keep_matrix(k,hiddenB);KB,VB=RC.window_kv(L,LD,m,Kh,Vh,ids_all,k,hiddenB);lp['B'],pref['B']=lp_of(KB,VB,keepB)
             hiddenBP=sorted(set(hidP));keepBP=RC.keep_matrix(k,hiddenBP);KBP,VBP=RC.window_kv(L,LD,m,Kh,Vh,ids_all,k,hiddenBP);lp['B_P'],pref['B_P']=lp_of(KBP,VBP,keepBP)
             band0=np.ones(WIN+CH,bool);keepBand=CM.band_keep(band0,256)
+            log(f'    chunk {k} t+{time.monotonic()-t0:.0f}s: NLL conditions NC A A_P C B B_P done (recomputes 3)')
             res['n_hidden']=dict(S_i=len(hiddenB),placebo=len(hiddenBP),cached_oracle=len(hidO))
             # band recompute: every window chunk uses the band mask (ALLQ256) in its own rows
             KBd,VBd=RC.window_kv(L,LD,m,Kh,Vh,ids_all,k,(),keep_fn=lambda j:CM.band_keep(band0,256));lp['BAND'],pref['BAND']=lp_of(KBd,VBd,keepBand)
@@ -76,6 +77,7 @@ def make_factory(cfg):
             # t2: the 2-D all-visible suffix key mask versus the 1-D natural mask (bit identical)
             with rt.mesh:lp2=np.asarray(logp_mask(m,st_w,c,pref['C'],jnp.ones((CH,WIN+CH),bool)),np.float64)
             res['t2_ok']=bool(VA.lp_equal(lp2,lp['C'],cfg['fallback']))
+            log(f'    chunk {k} t+{time.monotonic()-t0:.0f}s: band recompute and NLL arrays done')
             # one-step branch margins (arms NATS, NATMASK, RECOMP, RECOMP_PL) from W_t on the facts of chunk k
             items=STORE['items'];raw=STORE['raw'];tail=STORE['tail'];reader(items,raw,tail);rd=rd_holder['rd']
             rows=[r for f in fa for r in raw[f*16:(f+1)*16]];
@@ -90,6 +92,7 @@ def make_factory(cfg):
             for an,(newp,gn,coef,ce) in upd.items():
                 with rt.mesh:S=rd.score(P,L.set_inner(m,newp),len(fa),16)
                 g=[items[f]['gold_idx'] for f in fa];M[an]=MG.margin_primary(S,g).tolist();Ms[an]=MG.margin_secondary(S,g).tolist()
+            log(f'    chunk {k} t+{time.monotonic()-t0:.0f}s: four one-step margin reads done')
             res['margin_primary']=M;res['margin_secondary']=Ms;res['facts']=fa
             # gain_noprior: variant window (S_i replaced by the nofact tokens), NATS and NATMASK updates
             idsv=ids_all.copy();idsv[np.asarray(S_abs)]=nofact[np.asarray(S_abs)];Kv,Vv=RC.window_kv(L,LD,m,Kh,Vh,idsv,k,())
@@ -101,13 +104,14 @@ def make_factory(cfg):
                 with rt.mesh:S=rd.score(P,L.set_inner(m,newp),len(fa),16)
                 gv[an]=(MG.margin_primary(S,[items[f]['gold_idx'] for f in fa]).tolist(),MG.margin_secondary(S,[items[f]['gold_idx'] for f in fa]).tolist())
             res['gain_noprior_variant']=dict(primary=gv['NATMASK'][0],primary_nats=gv['NATS'][0],secondary=gv['NATMASK'][1],secondary_nats=gv['NATS'][1])
+            log(f'    chunk {k} t+{time.monotonic()-t0:.0f}s: gain_noprior variant done')
             # t3: original versus substituted S_i tokens, zero suffix state, oracle path and natural path (fixed W_t)
-            st0=s3.clone_state(rt.state_suffix);E=VA.excluded_positions(S_win);Fp=[t for t in F if t not in set(E)]
+            st0=s3.clone_state(rt.state_suffix);E=VA.excluded_positions(S_win);Fp=list(F)                # S_i lies in the window (window coordinates < WIN) and the chunk positions are WIN.. in that frame, so E_i does not intersect the chunk: F' = F and every chunk position is compared
             vocab=int(cfg['vocab']);spec=cfg['special'];sub,redraws=VA.substitute([int(x) for x in ids_all[(k-NW)*CH:k*CH]],S_win,cfg['seed'],k,vocab,spec)
             ids_s=ids_all.copy();ids_s[(k-NW)*CH:k*CH]=np.asarray(sub)
             KBs,VBs=RC.window_kv(L,LD,m,Kh,Vh,ids_s,k,hiddenB);Kns,Vns=RC.window_kv(L,LD,m,Kh,Vh,ids_s,k,())
             lpBo,_=lp_of(KB,VB,keepB,st0);lpBs,_=lp_of(KBs,VBs,keepB,st0);lpNo,_=lp_of(Kw,Vw,base,st0);lpNs,_=lp_of(Kns,Vns,base,st0)
-            leak=not VA.lp_equal(lpBo[Fp],lpBs[Fp],cfg['fallback']) or not VA.lp_equal(np.delete(lpBo,E),np.delete(lpBs,E),cfg['fallback'])
+            leak=not VA.lp_equal(lpBo,lpBs,cfg['fallback'])
             res['t3']=dict(leak=bool(leak),redraws=int(redraws),n_F_prime=len(Fp),nll_orig=(-lpNo[Fp]).tolist(),nll_sub=(-lpNs[Fp]).tolist(),lp_orig=lpNo[Fp].tolist(),lp_sub=lpNs[Fp].tolist(),natural_hash_differs=bool(not np.array_equal(lpNo[Fp],lpNs[Fp])))
             # update-path invariance (surrogate update, E_i positions are outside the chunk loss): the same oracle update from the zero state on original and substituted windows
             with rt.mesh:
@@ -115,6 +119,7 @@ def make_factory(cfg):
                 npo,_,_,_=L.write_step(m,st_all,st0,c,prefo,jnp.asarray(keepB));nps,_,_,_=L.write_step(m,st_all,st0,c,prefs,jnp.asarray(keepB))
             d_o=np.concatenate([np.asarray(x-y,np.float32).ravel() for x,y in zip(jax.tree.leaves(npo),jax.tree.leaves(m.inner_parameters()))]);d_s=np.concatenate([np.asarray(x-y,np.float32).ravel() for x,y in zip(jax.tree.leaves(nps),jax.tree.leaves(m.inner_parameters()))])
             res['t3']['update_invariance_ok']=bool(VA.dw_equal(d_s,d_o,cfg['fallback']))
+            log(f'    chunk {k} t+{time.monotonic()-t0:.0f}s: t3 pair and update invariance done')
             res['sec']=time.monotonic()-t0;log(f'  1280 branch chunk {k}: n_F {len(F)}, c-nc max {res["c_minus_nc_abs_max"]:.2e}, E_rec(mean B-C) {np.mean(nll["B"])-np.mean(nll["C"]):.4f}, E_cache(mean A-NC) {np.mean(nll["A"])-np.mean(nll["NC"]):.4f}, t3 leak {leak}, {res["sec"]:.0f}s');STORE['results'][k]=res;return {}
         cfg_br=set(STORE['branches']);fn.wants_ctx=True;return fn
     return factory
