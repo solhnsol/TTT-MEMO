@@ -11,6 +11,15 @@ D=scripts/exp07_write_ladder
 for T in e57_1280_margin e57_1280_validity e57_1280_gainnp e57_1280_recomp e57_1280_runner_records e57_1280_t3_sensitivity e57_1280_p16 e57_1280_driver; do $PY $D/$T.py --selftest | tail -1; done
 $PY $D/e57_oracle_run.py --selftest | tail -1
 O=$OUT/e57_1280_instr; mkdir -p $O
+# A1 2.2: the study-level determinism declaration, written before the first branch comparison and never changed afterwards
+$PY - $O <<'PYE'
+import sys,json,os,datetime,subprocess,platform
+o=sys.argv[1];v={'determinism_declaration':{'deterministic_operations_available':True,'reason':'XLA_FLAGS contains --xla_gpu_deterministic_ops=true; the fallback tolerances of A1 2.3 are not used','declared_utc':datetime.datetime.utcnow().isoformat()+'Z'},'XLA_FLAGS':os.environ.get('XLA_FLAGS'),'python':platform.python_version(),'git_head':subprocess.run(['git','rev-parse','HEAD'],capture_output=True,text=True).stdout.strip(),'manifest_tag':'instr-manifest-1280-v1'}
+for m in ('jax','jaxlib','numpy','scipy'):
+    try:v[m]=__import__(m).__version__
+    except Exception as e:v[m]=str(e)
+json.dump(v,open(f'{o}/versions.json','w'),indent=1);print('determinism declaration written')
+PYE
 for SEED in 91 92 93 94; do
   $PY $D/e57_1280_runner.py --seed $SEED --out $O --k 8 --tag r1280i
   $PY $D/e57_1280_p16.py --seed $SEED --out $O --tag p16i
