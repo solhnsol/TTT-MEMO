@@ -8,7 +8,7 @@ AL=S1.AL
 def main():
     md=['# L1 variants vs plain L1 (seed %d)\n'%S1.SEED,'| variant | D epoch 8 (R1) | D epoch 8 (R1-alt) | acc/flip | max canary rise | R vs plain [95% CI] | class |','|---|---|---|---|---|---|---|']
     base=S1.curve(*S1.load('L1','ck'))
-    for tag in ('ctx','fill'):
+    for tag in ('ctx','irr','fill'):
         X=S1.load('L1',tag)
         if not X:continue
         c=S1.curve(*X);ep,s,sa,_=c[8];mx=max(d for *_,d in c)

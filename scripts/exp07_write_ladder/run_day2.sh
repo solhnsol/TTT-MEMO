@@ -4,8 +4,8 @@
 cd /home/solhnsol/workspace/TTT-MEMO
 OUT=experiments/exp07_write_ladder;S=scripts/exp07_write_ladder;PY=.venv/bin/python
 lg(){ echo "$(date -u +%FT%TZ) $*" >> $OUT/queue.log; }
-while kill -0 3920491 2>/dev/null; do sleep 20; done
 export LD_LIBRARY_PATH="$PWD/.venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib" XLA_PYTHON_CLIENT_ALLOCATOR=platform XLA_FLAGS="--xla_gpu_deterministic_ops=true" EXP07_OUT="$PWD/$OUT"
+rm -f $OUT/grad_checks_s101.json; lg START grad_checks; GRAD_CHECK=1 .venv/bin/python scripts/exp07_write_ladder/grad_components.py > experiments/exp07_write_ladder/st2_grad_checks.log 2>&1
 if [ -f $OUT/grad_checks_s101.json ] && grep -q '"ALL_PASS": true' $OUT/grad_checks_s101.json; then
   lg "PASS grad_checks sha256 $(sha256sum $S/grad_components.py | cut -c1-64)"
   lg START grad_components; $PY $S/grad_components.py > $OUT/st2_grad_components.log 2>&1 && lg DONE grad_components || lg FAILED grad_components

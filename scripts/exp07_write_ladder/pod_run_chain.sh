@@ -11,6 +11,7 @@ stage(){ local name=$1; shift; echo "$(date -u +%T) STAGE_START $name" >> $L/sta
 stage gpu nvidia-smi
 stage selftest $PY $S/e57_mask_stage.py --selftest
 stage mask $PY $S/e57_mask_stage.py --bundle $B --out $O --coef $X/e55_sentgrid_ext_s61_coef.npz --oracle-all
+if [ -f $L/HOLD ]; then echo "$(date -u +%T) HOLD after the mask stage (remove $L/HOLD to continue)" >> $L/stages.log; while [ -f $L/HOLD ]; do sleep 15; done; echo "$(date -u +%T) HOLD released" >> $L/stages.log; fi
 ARGS="--bundle $B --out $O --cycles 1 --npos 1 --canary-npos 1 --arms C1,LRN,RC1,RLRN,ORCA,RORCA --pod-masks $O/e57_pod_masks.npz --ntg-from $X/E57_main_NAT.arms.json --guard 4"
 stage arms $PY $S/e57_pod_run.py $ARGS --stage arms
 stage reads $PY $S/e57_pod_run.py $ARGS --stage reads
