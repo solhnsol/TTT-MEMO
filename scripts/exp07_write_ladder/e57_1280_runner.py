@@ -93,12 +93,13 @@ def make_factory(cfg):
                 with rt.mesh:S=rd.score(P,L.set_inner(m,newp),len(fa),16)
                 g=[items[f]['gold_idx'] for f in fa];M[an]=MG.margin_primary(S,g).tolist();Ms[an]=MG.margin_secondary(S,g).tolist()
             log(f'    chunk {k} t+{time.monotonic()-t0:.0f}s: four one-step margin reads done')
+            upd=None;del KBP,VBP,KBd,VBd,pref['BAND'],pref['B_P']
             res['margin_primary']=M;res['margin_secondary']=Ms;res['facts']=fa
             # gain_noprior: variant window (S_i replaced by the nofact tokens), NATS and NATMASK updates
             idsv=ids_all.copy();idsv[np.asarray(S_abs)]=nofact[np.asarray(S_abs)];Kv,Vv=RC.window_kv(L,LD,m,Kh,Vh,idsv,k,())
             with rt.mesh:
                 pv=L.prefix_masked(m,jnp.asarray(ids_k,dtype=jnp.int32),Kv,Vv,q0,jnp.asarray(base));pvm=L.prefix_masked(m,jnp.asarray(ids_k,dtype=jnp.int32),Kv,Vv,q0,jnp.asarray(keepBand))
-            gv={}
+            gv={};del Kv,Vv
             for an,(pf,kx) in (('NATS',(pv,base)),('NATMASK',(pvm,keepBand))):
                 newp,_,_,_=step(pf,kx)
                 with rt.mesh:S=rd.score(P,L.set_inner(m,newp),len(fa),16)
@@ -117,8 +118,11 @@ def make_factory(cfg):
             with rt.mesh:
                 prefo=L.prefix_masked(m,jnp.asarray(ids_k,dtype=jnp.int32),KB,VB,q0,jnp.asarray(keepB));prefs=L.prefix_masked(m,jnp.asarray(ids_k,dtype=jnp.int32),KBs,VBs,q0,jnp.asarray(keepB))
                 npo,_,_,_=L.write_step(m,st_all,st0,c,prefo,jnp.asarray(keepB));nps,_,_,_=L.write_step(m,st_all,st0,c,prefs,jnp.asarray(keepB))
-            d_o=np.concatenate([np.asarray(x-y,np.float32).ravel() for x,y in zip(jax.tree.leaves(npo),jax.tree.leaves(m.inner_parameters()))]);d_s=np.concatenate([np.asarray(x-y,np.float32).ravel() for x,y in zip(jax.tree.leaves(nps),jax.tree.leaves(m.inner_parameters()))])
-            res['t3']['update_invariance_ok']=bool(VA.dw_equal(d_s,d_o,cfg['fallback']))
+            eq=True;num=0.0;den=0.0
+            for a_,b_,c_ in zip(jax.tree.leaves(npo),jax.tree.leaves(nps),jax.tree.leaves(m.inner_parameters())):
+                eq=eq and bool(jnp.array_equal(a_,b_));a32=a_.astype(jnp.float32);num+=float(jnp.sum((a32-b_.astype(jnp.float32))**2));den+=float(jnp.sum((a32-c_.astype(jnp.float32))**2))
+            del npo,nps;rel=(num**0.5/den**0.5) if den>0 else (0.0 if num==0 else float('inf'))
+            res['t3']['update_invariance_ok']=bool(eq if not cfg['fallback'] else (rel<=VA.REL_TOL if den>0 else num==0));res['t3']['dW_rel_diff']=float(rel)
             log(f'    chunk {k} t+{time.monotonic()-t0:.0f}s: t3 pair and update invariance done')
             res['sec']=time.monotonic()-t0;log(f'  1280 branch chunk {k}: n_F {len(F)}, c-nc max {res["c_minus_nc_abs_max"]:.2e}, E_rec(mean B-C) {np.mean(nll["B"])-np.mean(nll["C"]):.4f}, E_cache(mean A-NC) {np.mean(nll["A"])-np.mean(nll["NC"]):.4f}, t3 leak {leak}, {res["sec"]:.0f}s');STORE['results'][k]=res;return {}
         cfg_br=set(STORE['branches']);fn.wants_ctx=True;return fn
