@@ -26,7 +26,9 @@ def _signmat(m):
     return _SIGNS[m]
 QUANT=1e-9   # integer arithmetic rule (v12): every seed-level value is rounded to an integer multiple of 1e-9 BEFORE the exact test; sums are exact int64, so ties are decided exactly and p = count / 2^n is an exact rational
 def _quantize(x):
-    x=np.asarray(x,float);assert np.isfinite(x).all(),'non-finite value in the exact test';xi=np.rint(x/QUANT);assert np.abs(xi).sum()<2**62,'integer overflow guard';return xi.astype(np.int64)
+    x=np.asarray(x,float);assert np.isfinite(x).all(),'non-finite value in the exact test'
+    assert np.abs(x).max(initial=0.0)*len(x)/QUANT<2**63,'int64 overflow guard: max|d| * n * 1e9 must be < 2^63'   # v13: explicit guard, sums of up to n values never overflow int64
+    xi=np.rint(x/QUANT);assert np.abs(xi).sum()<2**63,'integer overflow guard (sum of absolute rounded values)';return xi.astype(np.int64)   # the OBSERVED statistic sum(xi) is computed on this same integer scale as the null distribution (see signflip_count_exact); 'exact' therefore holds for the ROUNDED contrasts (multiples of 1e-9 nat), not for the unrounded floating-point values
 def signflip_count_exact(x):
     """exact count of sign vectors s in {+-1}^n with sum(s_i x_i) >= sum(x_i) (ties count as extreme, >=); integer arithmetic on x rounded to multiples of 1e-9; returns (count, 2^n) as Python ints. ALGORITHM = meet in the middle: left half of m = n // 2 signs gives 2^m partial sums a, right half of n - m signs gives 2^(n-m) partial sums b, SORTED once; for every a the number of b with a + b >= S_obs is found by binary search (np.searchsorted), so the cost is about 2^(n/2) * n instead of 2^n * n; the only large arrays are the two sign matrices (2^m * m + 2^(n-m) * (n-m) int64 entries)"""
     xi=_quantize(x);n=len(xi);assert n<=32,'exact sign-flip is limited to n <= 32 seeds (2^n sign vectors, meet in the middle); use the Monte Carlo fallback'
@@ -284,6 +286,33 @@ def selftest():
         except AssertionError:pass
     pr=power_n30(*[SCENARIO_657[k] for k in ('means','sds','corr')],N=300,exact_N=60);a_=pr['t_only'];assert a_['joint']<=a_['frechet'][1]+1e-9 and a_['joint']>=a_['frechet'][0]-1e-9 and pr['inputs']['n']==30 and fmt_power(0.99995)=='>=.9999'
     gt=gpu_table();assert abs(gt['central']['hours_n30']-30.0)<1e-9 and abs(gt['central']['hours_n20']-20.0)<1e-9
+    # v13 closed forms and direct checks at n = 27 and n = 30 (tolerances fixed here, before use)
+    import math
+    for n_ in (1,2,7,16,27,30):
+        assert signflip_count_exact(np.zeros(n_))==(2**n_,2**n_)                                   # all zero: p = 1
+        assert signflip_count_exact(np.full(n_,0.37))==(1,2**n_)                                   # all equal positive: p = 2^-n
+        for k_ in sorted({0,1,n_//2,n_}):                                                           # equal magnitudes with k positive, n-k negative: p = P(Bin(n,1/2) >= k) = binomial tail
+            v_=np.array([0.25]*k_+[-0.25]*(n_-k_));assert signflip_count_exact(v_)==(sum(math.comb(n_,j) for j in range(k_,n_+1)),2**n_),(n_,k_)
+        r_=np.random.default_rng(100+n_).integers(-6,12,n_).astype(float)*0.001                    # ties and zeros mixed
+        assert 1<=signflip_count_exact(r_)[0]<=2**n_ and signflip_count_exact(r_)[0]>=1          # p >= 2^-n (the all-plus vector always counts)
+    def dp_count(k_ints):                                                                           # independent exact count for integer inputs: distribution of the signed sums by dynamic programming (a different algorithm, no sorting, no halves)
+        from collections import Counter
+        dist=Counter({0:1})
+        for a_ in k_ints:
+            nd=Counter()
+            for s_,c_ in dist.items():nd[s_+a_]+=c_;nd[s_-a_]+=c_
+            dist=nd
+        obs_=sum(k_ints);return sum(c_ for s_,c_ in dist.items() if s_>=obs_),2**len(k_ints)
+    for n_ in (27,30):
+        for sd_ in (11,12):
+            ki=np.random.default_rng(sd_*100+n_).integers(-40,81,n_);ki[::7]=0;ki[3]=ki[11]                    # integers with zeros and repeated values, in units of 1e-3 nat
+            assert signflip_count_exact(ki*1e-3)==dp_count([int(v) for v in ki]),('exact != DP',n_,sd_)
+    xr=np.random.default_rng(31).normal(0.25,1.0,30);pe=signflip_p_exact(xr);ms=np.random.default_rng(20261113);cnt=0;obs_=_quantize(xr).sum();xi_=_quantize(xr)   # independent Monte Carlo 1e6 sign vectors, tolerance fixed in advance: |p_MC - p_exact| <= 5 * sqrt(p(1-p)/1e6) + 1e-6
+    for _ in range(10):cnt+=int(((ms.choice([-1,1],size=(100_000,30))@xi_)>=obs_).sum())
+    pm_=cnt/1e6;assert abs(pm_-pe)<=5*math.sqrt(pe*(1-pe)/1e6)+1e-6,('MC disagrees',pm_,pe)
+    assert 0<=_quantize(np.array([1e-10,-4e-10,6e-10]))[0]<=1 and _quantize(np.array([0.5e-9]))[0] in (0,1)                  # rounding to the 1e-9 scale
+    try:_quantize(np.array([1e12]*30));raise SystemExit('int64 overflow guard did not fire')
+    except AssertionError:pass
     # v12: exact sign-flip = meet in the middle with integer arithmetic, checked against brute force (n <= 20), ties counted as >=
     bf=np.random.default_rng(7);cases=[bf.normal(0.3,1,n_) for n_ in range(1,17)]+[bf.integers(-3,6,n_).astype(float) for n_ in (5,8,12,13,16)]+[np.zeros(9),np.ones(11),np.array([0.5,0.5,-0.5,0.0,1.0,1.0,0.25]),bf.normal(0.2,1,20),bf.integers(-4,8,20).astype(float)]
     for x_ in cases:assert signflip_count_exact(x_)==signflip_count_bruteforce(x_),('exact != brute force',len(x_))
