@@ -16,9 +16,9 @@ def build_record(raw):
     ref=raw['tok']['NC'];same=all(len(raw['tok'][c][i])==len(ref[i]) and np.array_equal(np.asarray(raw['tok'][c][i]),np.asarray(ref[i])) for c in COND for i in range(len(chunks)));v={c:_cat(raw,c) for c in COND}
     n_tokens={c:int(len(v[c])) for c in COND}
     if not same:n_tokens['NC']=-1                                                   # unequal token sets are made visible to the analyzer, which then labels the result '1 PROTOCOL / INSTRUMENT INVALID'
-    fin=bool(all(np.isfinite(v[c]).all() for c in COND) and all(np.isfinite(raw['margins'][k]) for k in ('NATS','NATMASK','RECOMP','RECOMP_PL')) and np.isfinite(raw['gain_noprior']))
+    fin=bool(all(np.isfinite(v[c]).all() for c in COND) and all(np.isfinite(raw['margins'][k]) for k in ('NATS','NATMASK','RECOMP','RECOMP_PL')))   # A1 v8: gain_noprior is NOT part of the finite gate; a missing or non-finite gain_noprior is written as NaN (key always present) and means 'H_GEN not evaluated', never a validity failure and never a crash in validate_input
     m=lambda c:float(v[c].mean()) if len(v[c]) else float('nan');d=float(np.abs(v['C']-v['NC']).max()) if (len(v['C'])==len(v['NC'])) else float('inf')
-    rec=dict(nc=m('NC'),a=m('A'),c=m('C'),b=m('B'),a_P=m('A_P'),b_P=m('B_P'),X_MASK=m('BAND')-m('C'),M_NATS=float(raw['margins']['NATS']),M_MASK=float(raw['margins']['NATMASK']),M_RECOMP=float(raw['margins']['RECOMP']),M_RECOMP_PL=float(raw['margins']['RECOMP_PL']),gain_noprior=float(raw['gain_noprior']),
+    rec=dict(nc=m('NC'),a=m('A'),c=m('C'),b=m('B'),a_P=m('A_P'),b_P=m('B_P'),X_MASK=m('BAND')-m('C'),M_NATS=float(raw['margins']['NATS']),M_MASK=float(raw['margins']['NATMASK']),M_RECOMP=float(raw['margins']['RECOMP']),M_RECOMP_PL=float(raw['margins']['RECOMP_PL']),gain_noprior=(float(raw['gain_noprior']) if raw.get('gain_noprior') is not None and np.isfinite(raw['gain_noprior']) else float('nan')),
         n_tokens=n_tokens,measured_chunk_min=int(min(chunks)),timing_pre_update=bool(all(raw['pre_update'])),c_minus_nc_abs_max=d,t2_ok=bool(raw['flags']['t2_ok']),t3_ok=bool(raw['flags']['t3_ok']),p16_ok=bool(raw['flags']['p16_ok']),finite=fin,half_pl_unmatched=int(raw['flags']['half_pl_unmatched']))
     if 'determinism_abs' in raw['flags']:rec['determinism_abs']=float(raw['flags']['determinism_abs'])
     return rec
@@ -40,6 +40,12 @@ def selftest():
     bad=synthetic_raw(7);bad['chunks'][0]=3;assert build_record(bad)['measured_chunk_min']==3
     bad=synthetic_raw(8);bad['nll']['C']=[x+1e-3 for x in bad['nll']['C']];assert build_record(bad)['c_minus_nc_abs_max']>1e-4
     bad=synthetic_raw(9);bad['nll']['A'][0][0]=float('nan');assert build_record(bad)['finite'] is False
+    for gv in (None,float('nan'),float('inf')):                                                                      # A1 v8: gain_noprior missing / non-finite -> key present as NaN, finite gate untouched, the analyzer accepts the record
+        g_=synthetic_raw(10);
+        if gv is None:del g_['gain_noprior']
+        else:g_['gain_noprior']=gv
+        r_=build_record(g_);assert 'gain_noprior' in r_ and np.isnan(r_['gain_noprior']) and r_['finite'] is True and A.validate_input(r_)
+    rr=[build_record(synthetic_raw(s)) for s in range(101,131)];rr[3]['gain_noprior']=float('nan');o2=A.evaluate(rr,exact=False);assert 'tests' in o2 and not o2['flags']['H_GEN'] and o2['instrument_gates']['finite']
     print('e57_1280_runner_records selftest ok')
 if __name__=='__main__':
     import sys
