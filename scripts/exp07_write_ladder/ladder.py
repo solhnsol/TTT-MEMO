@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts/exp05_write_dynamics'))
 import readouts as RD
+import margins_split as MS
 RD.FAMILIARITY=True
 from readouts import *
 import packing,optax
@@ -146,11 +147,8 @@ class Ladder:
         if not self.readout:return self.save_state(m)
         m32=self.to_fp32(m)
         with jax.default_matmul_precision('highest'):mg=self.P.r1(m32);ma=self.P_alt.r1(m32)
-        gn_=self.gen_nll(m);ma=ma[0::2]-ma[1::2];alt={};j=0
-        for f,its in self.fam.items():alt[f]=ma[j:j+len(its)].tolist();j+=len(its)
-        mg=mg[0::2]-mg[1::2];out={};i=0
-        for f,its in self.fam.items():out[f]=mg[i:i+len(its)].tolist();i+=len(its)
-        out['_gen_nll']=gn_;out['_tail_nll']=self.tail_nll(m);out['_alt']=alt
+        gn_=self.gen_nll(m);out=MS.split_rows(mg,ma,{f:len(its) for f,its in self.fam.items()})   # E47: margins unchanged, plus the gold / foil span log-probs (_gold, _foil, _alt_gold, _alt_foil)
+        out['_gen_nll']=gn_;out['_tail_nll']=self.tail_nll(m)
         return out
     def sentences(self,swap):
         """the exposure sentences of world A/B exactly as realized in the stream, tokenized alone ('\\n\\n' + sentence)."""
@@ -332,7 +330,7 @@ class Ladder:
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--level',choices=['L0','L1','L0mp','L0x','L0or','L0fs','L0k','L0mw','L0mwfs'],required=True);ap.add_argument('--passes',type=int,default=8);ap.add_argument('--scale',type=float,default=8.0);ap.add_argument('--worlds',default='AB');ap.add_argument('--log-clip',action='store_true',help='native passes: also log the per-chunk gradient norm and clip coefficient (extra forward/backward, no effect on the update)');ap.add_argument('--fs-scale',type=float,default=None,help='L0fs only: native step multiplier (default None = the original rt.update path)')
-    ap.add_argument('--epochs',type=int,default=32);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='main');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--mode',choices=['full','save','eval'],default='full');ap.add_argument('--save-epochs',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--k',type=int,default=1);ap.add_argument('--l1-variant',default='plain',choices=['plain','ctx','fill','irr']);ap.add_argument('--block',type=int,default=1024)
+    ap.add_argument('--epochs',type=int,default=32);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--tag',default='main');ap.add_argument('--world-seed',type=int,default=101);ap.add_argument('--mode',choices=['full','save','eval'],default='full');ap.add_argument('--save-epochs',default='');ap.add_argument('--keep',action='store_true');ap.add_argument('--regold',action='store_true',help='E47: --mode eval only: re-score the saved states with the current ladder.evaluate (gold / foil span log-probs stored), keep the states, write <result>.regold.json next to the untouched original and compare the margins with it');ap.add_argument('--k',type=int,default=1);ap.add_argument('--l1-variant',default='plain',choices=['plain','ctx','fill','irr']);ap.add_argument('--block',type=int,default=1024)
     a=ap.parse_args();OUT.mkdir(parents=True,exist_ok=True)
     assert 'deterministic_ops=true' in os.environ.get('XLA_FLAGS','')
     vp=ROOT/'experiments/exp05_write_dynamics/run3_readouts/verify_packing_fp32.log'
@@ -345,6 +343,8 @@ def main():
     json.dump(meta,open(OUT/f'meta_{a.level}_{a.tag}_s{a.world_seed}.json','w'),indent=1)
     for w in a.worlds:
         f=OUT/f'{a.level}_{a.tag}_s{a.world_seed}_{w}.json';fs=OUT/f'{a.level}_{a.tag}_s{a.world_seed}_{w}.saved.json'
+        if a.regold:
+            assert a.mode=='eval','--regold needs --mode eval';f_orig=f;f=f.with_name(f.stem+'.regold.json')   # E47: re-score saved states (never removed)
         if f.exists():print('exists',f);continue
         if a.mode=='eval':
             d=json.load(open(fs));t0=time.monotonic()
@@ -353,7 +353,9 @@ def main():
                     fn=e['margins']['_file'];h=e['margins']['_hash'];mm=L.load_state(fn)
                     assert reuse._hash_pytree(mm.inner_parameters())[0]==h,'loaded weights differ from the streamed weights'
                     e['margins']=L.evaluate(mm);e['hash']=h
-                    if not a.keep:os.remove(fn)
+                    if not (a.keep or a.regold):os.remove(fn)
+            if a.regold:
+                d['regold_check']=MS.regold_check(json.load(open(f_orig))['log'],d['log']) if f_orig.exists() else None;print('regold check vs the original result (max |diff| of the margins per epoch):',d['regold_check'],flush=True)
             d['sec_eval']=time.monotonic()-t0;json.dump(d,open(f,'w'));print('scored',f,round(d['sec_eval']),'s',flush=True);continue
         if a.mode=='save':
             L.save_dir=SD/w;L._nsave=0;(SD/w).mkdir(parents=True,exist_ok=True)
