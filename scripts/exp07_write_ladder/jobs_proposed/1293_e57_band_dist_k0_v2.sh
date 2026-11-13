@@ -1,5 +1,5 @@
 #!/bin/bash
-# JOB 1293 = E57 BAND-DISTANCE EXPERIMENT (RECONFIGURED), CORE (exploratory secondary evidence; pre-specification reports/E57-distB-prespec.md; HELD until the principal investigator's own sentence): NATMASK with the band mask of W tokens (--mask-arm ALLQ<W>) at K0 = 0 on the 16-fact worlds (cell v3_16_1, same options as job 1283: --masks none --save-apps 16,32,64,128 --nat-loss-every 8), seeds 71..78, widths W = 64, 512, 768, 1024, 2048 (NEW; 128 dropped, the CPU check showed bands 64/128/256 hide the same-fact prior exposures 99.7% identically; supersedes job 1292, stopped); W = 256 (NATMASK of job 1283) and the natural window (NATS of job 1283) are REUSED only if (1) the full SHA-256 of the six runner files equals the pinned values (abort 12) and (2) reruns of NATS and NATMASK (band 256) on seed 71 with this job's code path are exactly equal to the 1283 records (logs, final hash, configuration hash, read meta, every read value; abort 13); per-seed assertions after every run (world, stream, meta, W0 reads, configuration identical to the 1283 record except the mask arm, the band and K0 = 0 check). ESTIMATE about 5.7 h: 40 runs x about 8 min + gate about 20 min + setup about 5 min. Output $OUT/e57_band_dist2/w<W>/ (tag bd<W>).
+# JOB 1293 = E57 BAND-DISTANCE EXPERIMENT (RECONFIGURED), CORE (exploratory secondary evidence; pre-specification reports/E57-distB-prespec.md; HELD until the principal investigator's own sentence): NATMASK with the band mask of W tokens (--mask-arm ALLQ<W>) at K0 = 0 on the 16-fact worlds (cell v3_16_1, same options as job 1283: --masks none --save-apps 16,32,64,128 --nat-loss-every 8), seeds 71..78, widths W = 64, 512, 768, 1024, 2048, 4096 (NEW; 128 dropped, the CPU check showed bands 64/128/256 hide the same-fact prior exposures 99.7% identically; supersedes job 1292, stopped); W = 256 (NATMASK of job 1283) and the natural window (NATS of job 1283) are REUSED only if (1) the full SHA-256 of the six runner files equals the pinned values (abort 12) and (2) reruns of NATS and NATMASK (band 256) on seed 71 with this job's code path are exactly equal to the 1283 records (logs, final hash, configuration hash, read meta, every read value; abort 13); per-seed assertions after every run (world, stream, meta, W0 reads, configuration identical to the 1283 record except the mask arm, the band and K0 = 0 check). ESTIMATE about 6.8 h: 48 runs x about 8 min + gate about 20 min + setup about 5 min. Output $OUT/e57_band_dist2/w<W>/ (tag bd<W>).
 set -eo pipefail
 export PYTHONUNBUFFERED=1
 PY=$(realpath -s "$PY")
@@ -34,7 +34,7 @@ for arm in ('NATS','NATMASK'):
     print(f'gate {arm} s71 vs 1283: logs+hash {logs}, configuration {cfgh(a)==cfgh(b)}, meta {meta}, reads {reads}');ok=ok and logs and cfgh(a)==cfgh(b) and meta and reads
 sys.exit(0 if ok else 13)
 PYE
-for W in 64 512 768 1024 2048; do
+for W in 64 512 768 1024 2048 4096; do
   mkdir -p $O/w$W
   for SEED in 71 72 73 74 75 76 77 78; do
     $PY $D/e57_oracle_run.py --seed $SEED --out $O/w$W --masks none --mask-arm ALLQ$W --arms NATMASK --save-apps 16,32,64,128 --nat-loss-every 8 --tag bd$W
@@ -51,4 +51,4 @@ print('seed',s,'band',W,'assertions ok')
 PYE
   done
 done
-echo "outputs: $O/w{64,512,768,1024,2048}/E55_bd<W>_NATMASK_s<seed>.{saved,read}.json (analysis: e57_band_dist_analyze.py --k0-dir $R --band-dir $O --widths 64,256,512,768,1024,2048)"
+echo "outputs: $O/w{64,512,768,1024,2048,4096}/E55_bd<W>_NATMASK_s<seed>.{saved,read}.json (analysis: e57_band_dist_analyze.py --k0-dir $R --band-dir $O --widths 64,256,512,768,1024,2048,4096)"
