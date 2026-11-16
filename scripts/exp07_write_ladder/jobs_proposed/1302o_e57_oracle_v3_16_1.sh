@@ -1,5 +1,5 @@
 #!/bin/bash
-# JOB 1302o = E57 ORACLE (CACHE PATH) ON THE 1283 SEEDS (EXPLORATORY; K0 = 0; not queued until Hans' sentence; GPU one job at a time; Hans 11/16 option A, Oracle cache-based): cell v3_16_1, seeds 71..78 (the seeds of job 1283 / 1293), arms NATORACLE (OracleUV: a sentence row of fact f does not see the earlier sentences of fact f in the window, update-path mask over the CACHED window K,V, i.e. the mask of the NLL condition A of job 1280c; e57_oracle_run.py lines 109-110) and NATPLACEBO (PlaceboOracleUV: the cache placebo, condition A_P), same options as job 1283 (--masks none --save-apps 16,32,64,128 --nat-loss-every 8), tag orc16. GATE (abort 12 / 13, as job 1297): pinned runner files and library versions equal to the 1283 versions.json; NATS and NATMASK (band 256) on seed 71 rerun with this job's code path must be bit identical to the 1283 records. Output $OUT/e57_orc16/ ; analysis e57_align71_analyze.py (table of the exposure curve on seeds 71..78: NATS, NATMASK256, NATMASK1024, NATORACLE, NATPLACEBO and, when job 1302i has run, ISO-STD; summed span margin, descriptive, no pass / fail rule) -> $OUT/e57_align71_result.json. ESTIMATE ~3.0 h: gate ~22 min + 16 runs (8 seeds x 2 arms) x ~10 min (job 1283: 72 runs in 11.85 h) ; the two arms of a seed share one model load and the W0 read.
+# JOB 1302o = E57 ORACLE (CACHE PATH) ON THE 1283 SEEDS (GATED: runs only if both lower ends of the two-sided 95% intervals of primary.C1_A_minus_NATS and primary.C3_A_minus_AP in e57_1280_cache_result.json are > 0, else HELD; EXPLORATORY; K0 = 0; not queued until Hans' sentence; GPU one job at a time; Hans 11/16 option A, Oracle cache-based): cell v3_16_1, seeds 71..78 (the seeds of job 1283 / 1293), arms NATORACLE (OracleUV: a sentence row of fact f does not see the earlier sentences of fact f in the window, update-path mask over the CACHED window K,V, i.e. the mask of the NLL condition A of job 1280c; e57_oracle_run.py lines 109-110) and NATPLACEBO (PlaceboOracleUV: the cache placebo, condition A_P), same options as job 1283 (--masks none --save-apps 16,32,64,128 --nat-loss-every 8), tag orc16. GATE (abort 12 / 13, as job 1297): pinned runner files and library versions equal to the 1283 versions.json; NATS and NATMASK (band 256) on seed 71 rerun with this job's code path must be bit identical to the 1283 records. Output $OUT/e57_orc16/ ; analysis e57_align71_analyze.py (table of the exposure curve on seeds 71..78: NATS, NATMASK256, NATMASK1024, NATORACLE, NATPLACEBO and, when job 1302i has run, ISO-STD; summed span margin, descriptive, no pass / fail rule) -> $OUT/e57_align71_result.json. ESTIMATE ~3.0 h: gate ~22 min + 16 runs (8 seeds x 2 arms) x ~10 min (job 1283: 72 runs in 11.85 h) ; the two arms of a seed share one model load and the W0 read.
 set -eo pipefail
 export PYTHONUNBUFFERED=1
 PY=$(realpath -s "$PY")
@@ -8,6 +8,14 @@ cd "$(dirname "$0")/../../.." 2>/dev/null || true
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_deterministic_ops=true}"
 nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader | grep -q . && { echo "another process is on the GPU: exit 11"; exit 11; }
 D=scripts/exp07_write_ladder
+# QUEUE GATE (rule fixed by Hans 11/16 before the 1302 result): this job runs only if both lower ends of the two-sided 95% intervals primary.C1_A_minus_NATS and primary.C3_A_minus_AP of $OUT/e57_1280_cache_result.json (job 1302) are > 0; otherwise it is HELD (exit 0, nothing is run, verdict in $OUT/e57_orc16_gate_verdict.json). TOST is not part of the gate.
+sha256sum -c <<GATEPIN
+ca87a479d37ab03a8799c0dfc6dbae33e2d8964ec452b20d225c3be186c3954e  $D/e57_orc16_gate.py
+GATEPIN
+$PY $D/e57_orc16_gate.py --selftest | tail -1
+set +e; $PY $D/e57_orc16_gate.py --result $OUT/e57_1280_cache_result.json --json $OUT/e57_orc16_gate_verdict.json; GRC=$?; set -e
+if [ $GRC -ne 0 ]; then echo "1302o HELD by the gate (exit $GRC); verdict in $OUT/e57_orc16_gate_verdict.json; nothing is run"; exit 0; fi
+echo "1302o gate: RUN"
 $PY $D/e57_oracle_run.py --selftest | tail -1
 O=$OUT/e57_orc16
 mkdir -p $O

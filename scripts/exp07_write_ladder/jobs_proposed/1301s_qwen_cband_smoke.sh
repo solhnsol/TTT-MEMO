@@ -15,8 +15,9 @@ o=sys.argv[1];a=json.load(open(o+'/cband_NATS_s161.json'));b=json.load(open(o+'/
 assert len(a['log'])==len(b['log'])==128
 fin=lambda x:all(math.isfinite(v) for st in x['log'] for v in st.values())
 assert fin(a) and fin(b),'non-finite log'
-assert a['log'][0]['update_norm']==b['log'][0]['update_norm'] and a['log'][0]['ce']==b['log'][0]['ce'],'chunk 0 differs'
-assert a['log'][1]['update_norm']!=b['log'][1]['update_norm'] or a['log'][1]['ce']!=b['log'][1]['ce'],'NATMASK1024 inactive at chunk 1'
+rel=lambda x,y:abs(x-y)/max(abs(y),1e-12)
+assert rel(a['log'][0]['update_norm'],b['log'][0]['update_norm'])<1e-3 and rel(a['log'][0]['ce'],b['log'][0]['ce'])<1e-3,'chunk 0 differs beyond the bf16 kernel tolerance (1e-3)'     # bf16: the explicit-mask SDPA path differs from the natural path by ~4e-4 in ce at chunk 0 (job 1301s, first run)
+assert rel(a['log'][1]['ce'],b['log'][1]['ce'])>1e-2,'NATMASK1024 inactive at chunk 1'
 for x in (a,b):assert set(x['reads'])=={'16','32','64','128'} and all(set(r)=={'out','in'} for r in x['reads'].values())
 import numpy as np
 def m(sc,meta):
