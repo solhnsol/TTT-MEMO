@@ -93,7 +93,7 @@ def parser():
     ap.add_argument('--rerun',action='store_true');ap.add_argument('--seeds',default='161');ap.add_argument('--json',default='');ap.add_argument('--selftest',action='store_true');return ap
 def selftest():
     sys.argv=[sys.argv[0]]
-    a=parser().parse_args(['--tiny','--device','cpu','--max-chunks','2','--chunk','1024','--reads','1,2','--tail-len','256','--readout-batch','16','--threads','8','--lora-layers','2','--out',str(ROOT/'experiments/exp09_qwen_ttt/cband_smoke'),'--world-seed','161','--arms','NATS,NATMASK256','--lr','1e-2','--rerun'])
+    a=parser().parse_args(['--tiny','--device','cpu','--max-chunks','2','--chunk','1024','--reads','1,2','--tail-len','256','--readout-batch','16','--threads','4','--lora-layers','2','--out',str(ROOT/'experiments/exp09_qwen_ttt/cband_smoke'),'--world-seed','161','--arms','NATS,NATMASK256','--lr','1e-2','--rerun'])
     import shutil;shutil.rmtree(a.out,ignore_errors=True);run(a)
     d={x:json.load(open(Path(a.out)/f'cband_{x}_s161.json')) for x in ('NATS','NATMASK256')};w0=json.load(open(Path(a.out)/'cband_W0_s161.json'))
     assert set(d['NATS']['reads'])=={'1','2'} and len(d['NATS']['reads']['2']['out'])==20 and len(d['NATS']['reads']['2']['out'][0])==16
