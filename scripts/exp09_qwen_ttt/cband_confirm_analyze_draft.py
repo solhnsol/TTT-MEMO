@@ -1,10 +1,12 @@
-"""DRAFT (not frozen, not registered; for Hans' approval before any freeze): confirmation analysis of the band mask on Qwen3-4B-Base (SWA structure + NTP-TTT with LoRA fast weights), modelled on e57_band1024_confirm_analyze_c.py (job 1297c) and fed by cell_band_ladder.py output (cband_<arm>_s<seed>.json, cband_W0_s<seed>.json).
+"""DRAFT v2 (not frozen, not registered; for Hans' approval before the freeze of 11/26): confirmation analysis of the band mask on Qwen3-4B-Base (SWA structure + NTP-TTT with LoRA fast weights), modelled on e57_band1024_confirm_analyze_c.py (job 1297c) and fed by cell_band_ladder.py output (cband_<arm>_s<seed>.json, cband_W0_s<seed>.json).
 PROPOSED DESIGN: seeds 161..168 (8; world seeds of the E57 cell v3_16_1 built with the Qwen tokenizer), arms NATS and NATMASK1024 (NATMASK256 as a secondary arm), K0 = 0, reads at exposures 16/32/64/128, primary read exposure 128. Status: exploratory until frozen; the 1297c thresholds are carried over and have to be re-checked on the margin scale of this model after the smoke job 1301s.
 MARGIN: per fact item, summed log-prob of the gold candidate minus the best wrong candidate (16 candidates of equal token length), mean over the 16 facts of a seed; unit = seed.
-PRIMARY HYPOTHESES (intersection-union, as 1297c):
+CONFIRMATORY CONDITION (Hans 11/16, revision of the first draft): ONLY P1 is confirmatory.
  P1 (binding effect): G = margin_out(NATMASK1024) - margin_out(NATS) at exposure 128: one-sided 95% t lower bound > 0 AND mean G >= SESOI (proposal 0.5 nat, the 1283 value; to be revisited after the smoke) AND the exact sign-flip tests of H0: mu <= SESOI and mu <= 0 reject (one-sided p < .05; n = 8: min p = 1/256).
- P2 (in-window harm): H = margin_in(NATS) - margin_in(NATMASK1024) at exposure 128 (positive = harm): one-sided 95% t UPPER bound <= 0.25 nat. (In the QA runs of job 1299 / 1300 this contrast was clearly harmful; whether it can pass on this model is open, the draft keeps the 1297c threshold and reports the result either way.)
- P3 (general text): D_N = canary NLL(NATMASK1024) - canary NLL(NATS) per seed (pg11, first 8192 tokens, nat / token): one-sided 95% t UPPER bound <= 0.01 (the DCLM threshold of 1297; pg11 replaces DCLM because no unused DCLM documents remain on the server and the exp09 canary is the preservation read of this pipeline).
+REPORTED, NOT A CONDITION (no pass / fail, the interval is reported in the same cell as P1):
+ P2 (in-window cost): H = margin_in(NATS) - margin_in(NATMASK1024) at exposure 128 (positive = harm), mean and one-sided 95% t upper bound (and the two-sided 95% t interval). A failure is reported as it is. In the QA runs of jobs 1299 / 1300 this contrast was clearly harmful (job 1297 synthetic: the mask was not harmful); the in-window cost of the mask is to be shown in the later bundle-stream experiment on this model (placeholder below).
+ Canary (exploratory number only): D_N = canary NLL(NATMASK1024) - canary NLL(NATS) per seed (pg11, first 8192 tokens, nat / token), mean and interval. NO general-text damage claim is made for Qwen: the 1297 DCLM threshold is not applied and the canary is not a condition.
+PLACEHOLDER (to be drafted later, not part of this analysis): the Qwen BUNDLE-STREAM experiment (the job-1296 / 1299 design on this model: bundles written one after the other, reads of every bundle after every bundle) is the place where P2 is shown as the change of the in-window read across bundles (lag 0 in-window read vs. the out-of-window lags). Its design, seeds and read definitions are open and need Hans' approval before any draft is frozen.
 EXCLUSION (as 1283 / 1297c, corrected gate): a seed is excluded and rerun once (all arms) when a log value is non-finite, a read is missing, or NATMASK1024 does not differ from NATS at CHUNK 1 (it equals NATS at chunk 0 by construction); a seed that fails again is EXCLUDED (n = 7); two or more excluded seeds: the status is exploratory. Never excluded because of its outcome.
 SECONDARY (descriptive): arm NATMASK256 vs NATS at exposures 16..128 (out and in), H_256 - H_1024, canary of NATMASK256.
   python3 cband_confirm_analyze_draft.py --dir D --seeds 161,...,168 --json J | --selftest"""
@@ -41,9 +43,10 @@ def analyze(D,seeds):
         G.append(margin(b['reads']['128']['out'],mt)-margin(a['reads']['128']['out'],mt));H.append(margin(a['reads']['128']['in'],mt)-margin(b['reads']['128']['in'],mt));Dn.append(b['canary']-a['canary'])
     SESOI=0.5;g=t1(G);P1=bool(g['lower_onesided']>0 and g['mean']>=SESOI and signflip_p(G,SESOI,'gt')<0.05 and signflip_p(G,0.0,'gt')<0.05)
     out['P1']=dict(contrast='G_1024',stats=g,p_signflip_H0_mu_le_SESOI=signflip_p(G,SESOI,'gt'),p_signflip_H0_mu_le_0=signflip_p(G,0.0,'gt'),passed=P1,per_seed=G)
-    h=t1(H);P2=bool(h['upper_onesided']<=0.25);out['P2']=dict(contrast='H_1024 (positive = harm)',stats=h,passed=P2,per_seed=H)
-    d=t1(Dn);P3=bool(d['upper_onesided']<=0.01);out['P3']=dict(contrast='canary D_N',stats=d,passed=P3,per_seed=Dn)
-    out['confirmed']=bool(P1 and P2 and P3);out['wording']='confirmed (P1, P2 and P3)' if out['confirmed'] else 'not confirmed: '+', '.join(n for n,p in (('P1',P1),('P2',P2),('P3',P3)) if not p)+' failed'
+    h=t1(H);hn=len(H);tq2={1:12.706,2:4.303,3:3.182,4:2.776,5:2.571,6:2.447,7:2.365,8:2.306,9:2.262,10:2.228,11:2.201,12:2.179,13:2.160,14:2.145,15:2.131}[hn-1]
+    out['P2_reported']=dict(contrast='H_1024 (positive = harm)',stats=h,ci95_two_sided=[h['mean']-tq2*h['se'],h['mean']+tq2*h['se']],per_seed=H,note='reported with its interval, not a pass / fail condition')
+    d=t1(Dn);out['canary_exploratory']=dict(contrast='canary D_N (nat / token)',stats=d,per_seed=Dn,note='exploratory number; no general-text damage claim for Qwen; not a condition')
+    out['confirmed']=bool(P1);out['wording']='confirmed (P1)' if P1 else 'not confirmed: P1 failed'
     return out
 def selftest():
     import tempfile
@@ -59,7 +62,7 @@ def selftest():
                     for i in range(16):out_[i,g[i]]+=2+eff;inw[i,g[i]]+=3-hh
                     rd[e]=dict(out=out_.tolist(),**{'in':inw.tolist()})
                 json.dump(dict(arm=arm,seed=s,meta=dict(kind=['fact']*16+['ctrl']*4,gold_idx=g.tolist()),log=[dict(update_norm=1.0,ce=2.0),dict(update_norm=1.0+eff,ce=2.0+eff)]+[dict(update_norm=1.0,ce=2.0)]*126,reads=rd,canary=2.0+0.003*eff+0.001*rng.normal()),open(f'{td}/cband_{arm}_s{s}.json','w'))
-        o=analyze(td,seeds);assert o['gates']['n_effective']==8 and o['P1']['passed'] and o['P2']['passed'] and o['P3']['passed'] and o['confirmed'],o
+        o=analyze(td,seeds);assert o['gates']['n_effective']==8 and o['P1']['passed'] and o['confirmed'] and 'P2_reported' in o and 'P3' not in o and len(o['P2_reported']['ci95_two_sided'])==2 and o['canary_exploratory']['stats']['n']==8,o
         assert abs(o['P1']['stats']['mean']-1.0)<0.6
         # an arm that is inactive at chunk 1 excludes the seed
         d=json.load(open(f'{td}/cband_NATMASK1024_s161.json'));d['log'][1]=dict(update_norm=1.0,ce=2.0);json.dump(d,open(f'{td}/cband_NATMASK1024_s161.json','w'));o=analyze(td,seeds);assert 161 in o['gates']['excluded_seeds'] and o['gates']['n_effective']==7
