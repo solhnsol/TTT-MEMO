@@ -37,10 +37,20 @@ def read_all(model,ctxs,rows,dev,batch,pad,rd_dtype):
         if orig is not None:QR.cast_base_(model,orig)
         model.train(was)
     return out
+@torch.no_grad()
+def canary(model,ids,dev,rd_dtype):
+    """mean NTP NLL of the pg11 text (first canary-len tokens) with the current weights (general-text preservation, as the exp09 canary _gen_nll)"""
+    was=model.training;model.eval();orig=None
+    if rd_dtype is not None:orig=next(p.dtype for n,p in model.named_parameters() if not QR.is_lora(n));QR.cast_base_(model,rd_dtype)
+    try:return float(RO.nll(model,ids,dev))
+    finally:
+        if orig is not None:QR.cast_base_(model,orig)
+        model.train(was)
 def run(a):
+    if a.threads:torch.set_num_threads(a.threads)
     out=Path(a.out);out.mkdir(parents=True,exist_ok=True);dev,mdir,tok,bos,model,lcfg=QL.build(a);CH=a.chunk;reads=[int(x) for x in a.reads.split(',')]
     tf=QR.tokenizer_file(mdir);enc,w,stream,sha,items=build_world(tf,a.world_seed,a.cell,reads);rows,nt=item_rows(tok,items)
-    assert all(len(set(n))==1 for n in nt),'candidates of an item differ in length';pad=tok.token_to_id('<|endoftext|>')
+    assert all(len(set(n))==1 for n in nt),'candidates of an item differ in length';pad=tok.token_to_id('<|endoftext|>');canids=WT.gen_ids(tok,bos,a.canary_len)
     out_ids=WT.neutral_tail(tok,bos,a.tail_len)[0];nch=len(stream)//CH if not a.max_chunks else a.max_chunks;stream=stream[:nch*CH]
     rd={'bf16':None,'fp32':torch.float32}[a.readout_dtype] if not a.tiny else None;init=QR.lora_state(model)
     meta=dict(kind=[it['kind'] for it in items],fact=[it['fact'] for it in items],gold_idx=[it['gold_idx'] for it in items],n_tok=nt,stream_sha=sha,n_chunks=nch,reads=reads,cell=a.cell,seed=a.world_seed)
@@ -55,17 +65,17 @@ def run(a):
                 R[str(k+1)]=read_all(model,ctxs(k+1),rows,dev,a.readout_batch,pad,rd)
                 if arm=='NATS':pass
                 print(f'{arm} s{a.world_seed}: exposure {k+1} read ({time.monotonic()-t0:.0f}s)',flush=True)
-        W.close();QR.load_lora_state_(model,init)
+        can=canary(model,canids,dev,rd);W.close();QR.load_lora_state_(model,init)
         if not (out/f'cband_W0_s{a.world_seed}.json').exists():
             for e in reads:
                 if e<=nch:W0[str(e)]=read_all(model,ctxs(e),rows,dev,a.readout_batch,pad,rd)
-            json.dump(dict(meta=meta,reads=W0),open(out/f'cband_W0_s{a.world_seed}.json','w'))
-        json.dump(dict(arm=arm,band=band,seed=a.world_seed,meta=meta,log=log,reads=R,args=vars(a),sec=time.monotonic()-t0),open(fn,'w'),default=float);print('wrote',fn,f'{time.monotonic()-t0:.0f}s',flush=True)
+            json.dump(dict(meta=meta,reads=W0,canary=canary(model,canids,dev,rd)),open(out/f'cband_W0_s{a.world_seed}.json','w'))
+        json.dump(dict(arm=arm,band=band,seed=a.world_seed,meta=meta,log=log,reads=R,canary=can,args=vars(a),sec=time.monotonic()-t0),open(fn,'w'),default=float);print('wrote',fn,f'{time.monotonic()-t0:.0f}s',flush=True)
 def margins(sc,meta):
     """[n_items x 16] sums -> per FACT item margin gold - best wrong"""
     x=np.asarray(sc,float);g=np.asarray(meta['gold_idx']);fact=np.asarray([k=='fact' for k in meta['kind']]);x=x[fact];g=g[fact];gold=x[np.arange(len(g)),g];w=x.copy();w[np.arange(len(g)),g]=-np.inf;return gold-w.max(1)
 def analyze(a):
-    from scipy import stats
+    TQ={1:12.706,2:4.303,3:3.182,4:2.776,5:2.571,6:2.447,7:2.365,8:2.306,9:2.262,10:2.228,11:2.201,12:2.179,13:2.160,14:2.145,15:2.131}      # two-sided 95% t quantiles by df (no scipy in the torch env)
     out=Path(a.out);seeds=[int(s) for s in a.seeds.split(',')];arms=[x for x in a.arms.split(',') if x!='NATS'];res={'definition':'margin = summed log-prob of the gold candidate minus the best wrong candidate (16 candidates of equal length), mean over the 16 fact items of a seed; G = margin_out(arm) - margin_out(NATS) (positive = better storage out of the window); Hh = margin_in(arm) - margin_in(NATS) (in-window; negative = the mask is worse in the window); t 95% interval over seeds','arms':{}}
     D={}
     for s in seeds:
@@ -79,7 +89,7 @@ def analyze(a):
         for e in exps:
             row={}
             for c in ('out','in'):
-                v=np.asarray([D[(arm,e,c,s)]-D[('NATS',e,c,s)] for s in seeds]);n=len(v);se=float(v.std(ddof=1)/np.sqrt(n)) if n>1 else float('nan');tq=float(stats.t.ppf(0.975,n-1)) if n>1 else float('nan')
+                v=np.asarray([D[(arm,e,c,s)]-D[('NATS',e,c,s)] for s in seeds]);n=len(v);se=float(v.std(ddof=1)/np.sqrt(n)) if n>1 else float('nan');tq=TQ.get(n-1,1.96) if n>1 else float('nan')
                 row[c]=dict(diff=float(v.mean()),ci95=[float(v.mean()-tq*se),float(v.mean()+tq*se)],NATS=float(np.mean([D[('NATS',e,c,s)] for s in seeds])),arm=float(np.mean([D[(arm,e,c,s)] for s in seeds])),W0=float(np.mean([D[('W0',e,c,s)] for s in seeds])),per_seed=[float(x) for x in v],n_seeds=n)
             res['arms'][arm][e]=row
     Path(a.json).write_text(json.dumps(res,indent=1))
