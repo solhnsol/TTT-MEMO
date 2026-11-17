@@ -23,7 +23,7 @@ def analyze(D,seeds,band_stored=True):
     for a,p in SRC.items():
         fs=[D/saved_path(p.format(s=s)) for s in seeds]
         if all(f.exists() for f in fs):
-            sm=[json.load(open(f))['summary'] for f in fs];out['update_stats'][a]={k:float(np.mean([x[k] for x in sm])) for k in ('mean_update_norm','cum_update_norm','clip_frac_coef_lt1','mean_gnorm','mean_ce')}
+            sm=[json.load(open(f))['summary'] for f in fs];out['update_stats'][a]={k:float(np.mean([x.get(k,float('nan')) for x in sm])) for k in ('mean_update_norm','cum_update_norm','clip_frac_coef_lt1','mean_gnorm','mean_ce')}
     return out
 def selftest():
     import tempfile;rng=np.random.default_rng(0);seeds=list(range(71,79))
