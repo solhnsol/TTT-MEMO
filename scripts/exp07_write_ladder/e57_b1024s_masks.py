@@ -10,12 +10,12 @@ for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/ex
 import e57_closure_masks as CM
 import e57_syn_mmasks as MM
 CH=MM.CH;K0=MM.K0;P=MM.P
-CODES=('B1024G','B1024R','B1024GN','B1024RN','B1024W1T')
-def rand_rows(elig,n,seed,k):
-    rng=np.random.default_rng((seed,k,30));idx=np.nonzero(elig)[0];pick=rng.choice(idx,n,replace=False);m=np.zeros(len(elig),bool);m[pick]=True;return m
+CODES=('B1024G','B1024R','B1024GN','B1024RN','B1024W1T','B1024G15','B1024R15')
+def rand_rows(elig,n,seed,k,tag=30):
+    rng=np.random.default_rng((seed,k,tag));idx=np.nonzero(elig)[0];pick=rng.choice(idx,n,replace=False);m=np.zeros(len(elig),bool);m[pick]=True;return m
 def rows_for_chunk(gain,elig,seed,k,p=P):
     """-> (top-p rows by gain, random rows of the same count) among the eligible rows"""
-    t=MM.deciding(gain,elig,p);n=int(t.sum());r=rand_rows(elig,n,seed,k);return t,r
+    t=MM.deciding(gain,elig,p);n=int(t.sum());r=rand_rows(elig,n,seed,k,int(round(100*p)));return t,r
 def selftest():
     rng=np.random.default_rng(0);elig=rng.random(CH)<.8;g=rng.standard_normal(CH);t,r=rows_for_chunk(g,elig,71,9);n=int(round(.30*elig.sum()))
     assert int(t.sum())==n==int(r.sum()) and not (t&~elig).any() and not (r&~elig).any() and not np.array_equal(t,r)
@@ -23,6 +23,7 @@ def selftest():
     t2,r2=rows_for_chunk(g,elig,71,9);assert np.array_equal(r,r2) and np.array_equal(t,t2)               # deterministic
     assert not np.array_equal(r,rows_for_chunk(g,elig,72,9)[1]) and not np.array_equal(r,rows_for_chunk(g,elig,71,10)[1])
     z=np.random.default_rng(1).standard_normal((200,CH));hits=[(rows_for_chunk(g,elig,71,k)[1]&(g>np.percentile(g[elig],70))).sum() for k in range(200)];assert abs(np.mean(hits)/(.3*elig.sum()*.3)-1)<0.15   # random rows pick the high-gain rows at the base rate (30%)
+    t15,r15=rows_for_chunk(g,elig,71,9,0.15);n15=int(round(.15*elig.sum()));assert int(t15.sum())==n15==int(r15.sum()) and (t15&~t).sum()==0 and not np.array_equal(r15,rand_rows(elig,n15,71,9,30))      # top 15% is inside top 30%; the 15% random draw uses its own seed tag
     pk=CM.pk(t);assert np.array_equal(CM.up(pk,CH),t)
     print('e57_b1024s_masks selftest ok')
 def main():
@@ -35,7 +36,7 @@ def main():
     for k in range(K0,K1):
         q=UVm.chunk_sents(ends,k,CH);sid=np.full(CH,-1)
         for i,(s_,e_) in enumerate(q):sid[s_:e_]=i
-        lm=Z['lm'][k];el=CM.rows_eligible(lm,sid)&lm;g=(Z['nll_band'][b][k]-Z['nll_win'][k]).astype(np.float64);t,r=rows_for_chunk(g,el,a.seed,k);out[f'qb_TOP30G1024_{k}']=CM.pk(t);out[f'qb_RAND30_{k}']=CM.pk(r)
+        lm=Z['lm'][k];el=CM.rows_eligible(lm,sid)&lm;g=(Z['nll_band'][b][k]-Z['nll_win'][k]).astype(np.float64);t,r=rows_for_chunk(g,el,a.seed,k);out[f'qb_TOP30G1024_{k}']=CM.pk(t);out[f'qb_RAND30_{k}']=CM.pk(r);t15,r15=rows_for_chunk(g,el,a.seed,k,0.15);out[f'qb_TOP15G1024_{k}']=CM.pk(t15);out[f'qb_RAND15_{k}']=CM.pk(r15)
         st.append(dict(chunk=k,n_eligible=int(el.sum()),n_deciding=int(t.sum()),n_random=int(r.sum()),n_g_in_first_1023=int(t[:1023].sum()),mean_gain_top=float(g[t].mean()),mean_gain_random=float(g[r].mean()),share_of_positive_gain_top=float(g[t].clip(0).sum()/max(g[el].clip(0).sum(),1e-9))))
     for code in CODES:out[f'band_{code}']=np.asarray(1024);out[f'all_{code}']=np.asarray(1)
     out['chunks']=np.asarray([K0,K1]);out['p']=np.asarray(P);out['seed']=np.asarray(a.seed);out['stream_sha']=np.asarray(sha[:16]);np.savez_compressed(a.out,**out)

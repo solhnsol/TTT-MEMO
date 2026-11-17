@@ -1,5 +1,7 @@
 """E57 band-1024 + loss-weight arms on the CLIPPED-SGD engine (GPU; new file; job 1308 proposal v2, Hans 11/17 'sgd랑 k0=0'; wrapper of the unchanged e57_oracle_run.py, which is imported and NOT edited). Same write run as the band-1024 arm of jobs 1283 / 1293 (engine SGDSEL = clipped SGD: coef = min(1, 1/||g||), lr 1, update-path mask only; mask ALLQ1024 on EVERY row from chunk K0 = 0; reads at exposures 16 / 32 / 64 / 128 out-of-window and in-window at 128; --nat-loss-every 8), with ONE change: the loss gradient of the write step is the gradient of the WEIGHTED loss  sum_i valid_i (1 + (w - 1) dec_i) nll_i / n_valid  (exactly lm_loss for w = 1 up to float rounding), dec = the deciding rows of the chunk (published by the mask object of this file in the module state ST right before the write). The clip rule, the learning rate, the ilr multiplier and the mask are those of the original step; because the weights enlarge the gradient, the clip is active more often and the update is larger than the band-1024 update: gnorm, coef (clip coefficient) and update_norm of every chunk are logged by run_stream as for every arm (summary.clip_frac_coef_lt1, summary.mean_update_norm) and the rows carry n_weighted_rows.
 ARMS (names parsed by this wrapper into mask codes; the saved json has mask_arm = the code, band = 1024):
+  NATB1024G15W8   code B1024G15 weight 8 on the top-15% rows by g1024 (masks qb_TOP15G1024_<k>)
+  NATB1024R15W8   code B1024R15 weight 8 on the same number of RANDOM eligible rows (qb_RAND15_<k>)
   NATB1024G30W8   code B1024G   weight 8 on the top-30% rows by g1024 = nll_band1024 - nll_win (masks qb_TOP30G1024_<k>, chunks k >= 8; chunks < 8 have no deciding rows: weight 1)
   NATB1024R30W8   code B1024R   weight 8 on the same number of RANDOM eligible rows (masks qb_RAND30_<k>)
   NATB1024G30W8NM code B1024GN  as G, then the update of the chunk is rescaled to the update norm of the band-1024 clipped-SGD run of the same seed and chunk (--ref-dir/E55_bd1024_NATMASK_s<seed>.saved.json, log[k].update_norm): AUXILIARY (norm-matched) arm
@@ -14,9 +16,9 @@ import e57_oracle_run as OR
 import e57_qband_run as QR
 import e57_closure_masks as CM
 CH=1024
-ARM2CODE={'NATB1024G30W8':'B1024G','NATB1024R30W8':'B1024R','NATB1024G30W8NM':'B1024GN','NATB1024R30W8NM':'B1024RN','NATB1024W1T':'B1024W1T'}
-WEIGHT={'B1024G':8.0,'B1024R':8.0,'B1024GN':8.0,'B1024RN':8.0,'B1024W1T':1.0}
-ROWKEY={'B1024G':'qb_TOP30G1024','B1024R':'qb_RAND30','B1024GN':'qb_TOP30G1024','B1024RN':'qb_RAND30','B1024W1T':None}
+ARM2CODE={'NATB1024G15W8':'B1024G15','NATB1024R15W8':'B1024R15','NATB1024G30W8':'B1024G','NATB1024R30W8':'B1024R','NATB1024G30W8NM':'B1024GN','NATB1024R30W8NM':'B1024RN','NATB1024W1T':'B1024W1T'}
+WEIGHT={'B1024G15':8.0,'B1024R15':8.0,'B1024G':8.0,'B1024R':8.0,'B1024GN':8.0,'B1024RN':8.0,'B1024W1T':1.0}
+ROWKEY={'B1024G15':'qb_TOP15G1024','B1024R15':'qb_RAND15','B1024G':'qb_TOP30G1024','B1024R':'qb_RAND30','B1024GN':'qb_TOP30G1024','B1024RN':'qb_RAND30','B1024W1T':None}
 ST={}
 REF={'dir':None,'seed':None}
 _orig_parse=OR.parse_arm2;_orig_sel=QR.SelMaskQ;_orig_swap=OR.swap_step;_orig_wb=OR.with_base
@@ -80,16 +82,16 @@ def selftest():
     os.environ.setdefault('JAX_PLATFORMS','cpu')
     import jax.numpy as jnp
     OR.selftest() if False else None
-    assert parse_arm3('NATB1024G30W8','ALLQ1024')==('B1024G',1.0) and parse_arm3('NATB1024W1T','ALLQ1024')==('B1024W1T',1.0) and parse_arm3('NATMASK','ALLQ1024')==_orig_parse('NATMASK','ALLQ1024') and parse_arm3('NATS','ALLQ1024')==_orig_parse('NATS','ALLQ1024')
+    assert parse_arm3('NATB1024G15W8','ALLQ1024')==('B1024G15',1.0) and parse_arm3('NATB1024R15W8','ALLQ1024')==('B1024R15',1.0) and parse_arm3('NATB1024G30W8','ALLQ1024')==('B1024G',1.0) and parse_arm3('NATB1024W1T','ALLQ1024')==('B1024W1T',1.0) and parse_arm3('NATMASK','ALLQ1024')==_orig_parse('NATMASK','ALLQ1024') and parse_arm3('NATS','ALLQ1024')==_orig_parse('NATS','ALLQ1024')
     # weights: weight 1 gives valid / n_valid (the plain mean), weight 8 on the deciding rows
     rng=np.random.default_rng(0);valid=(rng.random(CH)<.8).astype(np.float32);dec=((rng.random(CH)<.3)&(valid>0)).astype(np.float32)
     w1=row_weights(valid,dec,1.0);assert np.allclose(w1,valid/valid.sum()) and abs(w1.sum()-1)<1e-5
     w8=row_weights(valid,dec,8.0);assert np.allclose(w8[dec>0],8*w1[dec>0]) and np.allclose(w8[(dec==0)&(valid>0)],w1[(dec==0)&(valid>0)]) and (w8[valid==0]==0).all()
     # mask object: banded rows = ALLQ1024 (every row), dec rows published, K0 from the module of e57_qband_run
-    masks={'band_B1024G':np.asarray(1024),'all_B1024G':np.asarray(1),'band_B1024R':np.asarray(1024),'all_B1024R':np.asarray(1),'band_B1024W1T':np.asarray(1024),'all_B1024W1T':np.asarray(1),'band_ALLQ1024':np.asarray(1024),'all_ALLQ1024':np.asarray(1),'qb_TOP30G1024_9':CM.pk(dec>0),'qb_RAND30_9':CM.pk(np.roll(dec>0,7))}
+    masks={'band_B1024G':np.asarray(1024),'all_B1024G':np.asarray(1),'band_B1024R':np.asarray(1024),'all_B1024R':np.asarray(1),'band_B1024W1T':np.asarray(1024),'all_B1024W1T':np.asarray(1),'band_ALLQ1024':np.asarray(1024),'all_ALLQ1024':np.asarray(1),'qb_TOP30G1024_9':CM.pk(dec>0),'qb_RAND30_9':CM.pk(np.roll(dec>0,7)),'band_B1024G15':np.asarray(1024),'all_B1024G15':np.asarray(1),'band_B1024R15':np.asarray(1024),'all_B1024R15':np.asarray(1),'qb_TOP15G1024_9':CM.pk(dec>0),'qb_RAND15_9':CM.pk(np.roll(dec>0,3))}
     nat=np.ones(QR.WIN+CH,bool);QR.K0=0;lg=lambda *x:None
     ref,_=_orig_sel('ALLQ1024',masks,lg).keep(9,None,None,None,None,nat)
-    for code,exp in (('B1024G',dec>0),('B1024R',np.roll(dec>0,7)),('B1024W1T',np.zeros(CH,bool))):
+    for code,exp in (('B1024G',dec>0),('B1024R',np.roll(dec>0,7)),('B1024G15',dec>0),('B1024R15',np.roll(dec>0,3)),('B1024W1T',np.zeros(CH,bool))):
         kp,info=UVB1024S(code,masks,lg).keep(9,None,None,None,None,nat);assert np.array_equal(kp,ref) and np.array_equal(ST['dec'],exp.astype(np.float32)) and info['n_weighted_rows']==int(exp.sum()) and info['loss_weight']==WEIGHT[code] and ST['fresh'] and ST['k']==9
     assert CM.band_keep(nat,1024).sum()==ref.sum()
     QR.K0=8;kn,_=UVB1024S('B1024G',masks,lg).keep(3,None,None,None,None,nat);assert kn.ndim==1;QR.K0=0                                     # chunks < K0: natural keep

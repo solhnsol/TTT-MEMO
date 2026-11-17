@@ -1,13 +1,13 @@
-"""E57 band-1024 + loss-weight arms on the clipped-SGD engine, analysis (CPU; new file; EXPLORATORY, descriptive, NO pass / fail rule; job 1308 proposal v2). Cell v3_16_1, seeds 71..78, K0 = 0, SAME engine / reads / mask as the band-1024 arm NATMASK1024 of jobs 1283 / 1293 (reused from e57_band_dist2/w1024 when the bit-identity gate of job 1308 passed, else the band-1024 arm rerun by the job in e57_b1024s/, tag b1024s). Arms: NATB1024G30W8 (loss weight 8 on the top-30% rows by g1024), NATB1024R30W8 (weight 8 on random rows), and the AUXILIARY norm-matched NATB1024G30W8NM / NATB1024R30W8NM (update rescaled to the update norm of the band-1024 run of the seed in every chunk). Definitions as e57_allprev_analyze.py (margin = summed span log-prob gold minus best wrong, 16 candidates, mean over the 16 facts; top-1 share; out-of-window at 16 / 32 / 64 / 128, in-window at 128; t 95% intervals over seeds). Paired by seed: G - M, R - M, G - R (M = NATMASK1024) and the same with the NM arms, with the top-1 share at 128. Update statistics per arm (mean over seeds of summary.mean_update_norm, cum_update_norm, clip_frac_coef_lt1 from the saved json): the weights enlarge the gradient, the clip is active more often.
+"""E57 band-1024 + loss-weight arms on the clipped-SGD engine, analysis (CPU; new file; EXPLORATORY, descriptive, NO pass / fail rule; job 1308 proposal v2). Cell v3_16_1, seeds 71..78, K0 = 0, SAME engine / reads / mask as the band-1024 arm NATMASK1024 of jobs 1283 / 1293 (reused from e57_band_dist2/w1024 when the bit-identity gate of job 1308 passed, else the band-1024 arm rerun by the job in e57_b1024s/, tag b1024s). Arms: NATB1024G15W8 / NATB1024G30W8 (loss weight 8 on the top-15% / top-30% rows by g1024), NATB1024R15W8 / NATB1024R30W8 (weight 8 on the same number of random rows), and the AUXILIARY norm-matched NATB1024G30W8NM / NATB1024R30W8NM (update rescaled to the update norm of the band-1024 run of the seed in every chunk). Definitions as e57_allprev_analyze.py (margin = summed span log-prob gold minus best wrong, 16 candidates, mean over the 16 facts; top-1 share; out-of-window at 16 / 32 / 64 / 128, in-window at 128; t 95% intervals over seeds). Paired by seed: G - M, R - M, G - R (M = NATMASK1024) and the same with the NM arms, with the top-1 share at 128. Update statistics per arm (mean over seeds of summary.mean_update_norm, cum_update_norm, clip_frac_coef_lt1 from the saved json): the weights enlarge the gradient, the clip is active more often.
   python3 e57_b1024s_analyze.py --dir experiments/exp07_write_ladder --json J [--band-src gate|stored] | --selftest"""
 import sys,json,pathlib,argparse
 import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
 import e57_allprev_analyze as A
 def sources(band_stored=True):
-    s={'NATS':A.SRC['NATS'],'NATMASK1024':(A.SRC['NATMASK1024'] if band_stored else 'e57_b1024s/E55_b1024s_NATMASK_s{s}.read.json'),'NATB1024G30W8':'e57_b1024s/E55_b1024s_NATB1024G30W8_s{s}.read.json','NATB1024R30W8':'e57_b1024s/E55_b1024s_NATB1024R30W8_s{s}.read.json','NATB1024G30W8NM':'e57_b1024s/E55_b1024s_NATB1024G30W8NM_s{s}.read.json','NATB1024R30W8NM':'e57_b1024s/E55_b1024s_NATB1024R30W8NM_s{s}.read.json','ISO-STD':A.SRC['ISO-STD']}
+    s={'NATS':A.SRC['NATS'],'NATMASK1024':(A.SRC['NATMASK1024'] if band_stored else 'e57_b1024s/E55_b1024s_NATMASK_s{s}.read.json'),'NATB1024G15W8':'e57_b1024s/E55_b1024s_NATB1024G15W8_s{s}.read.json','NATB1024R15W8':'e57_b1024s/E55_b1024s_NATB1024R15W8_s{s}.read.json','NATB1024G30W8':'e57_b1024s/E55_b1024s_NATB1024G30W8_s{s}.read.json','NATB1024R30W8':'e57_b1024s/E55_b1024s_NATB1024R30W8_s{s}.read.json','NATB1024G30W8NM':'e57_b1024s/E55_b1024s_NATB1024G30W8NM_s{s}.read.json','NATB1024R30W8NM':'e57_b1024s/E55_b1024s_NATB1024R30W8NM_s{s}.read.json','ISO-STD':A.SRC['ISO-STD']}
     return s
-PAIRS=(('NATB1024G30W8','NATMASK1024'),('NATB1024R30W8','NATMASK1024'),('NATB1024G30W8','NATB1024R30W8'),('NATB1024G30W8NM','NATMASK1024'),('NATB1024R30W8NM','NATMASK1024'),('NATB1024G30W8NM','NATB1024R30W8NM'))
+PAIRS=(('NATB1024G15W8','NATMASK1024'),('NATB1024R15W8','NATMASK1024'),('NATB1024G15W8','NATB1024R15W8'),('NATB1024G30W8','NATMASK1024'),('NATB1024R30W8','NATMASK1024'),('NATB1024G30W8','NATB1024R30W8'),('NATB1024G30W8NM','NATMASK1024'),('NATB1024R30W8NM','NATMASK1024'),('NATB1024G30W8NM','NATB1024R30W8NM'))
 def saved_path(read_path):return read_path.replace('.read.json','.saved.json')
 def analyze(D,seeds,band_stored=True):
     SRC=sources(band_stored);A.SRC=SRC;out=A.analyze(D,seeds);D=pathlib.Path(D)
@@ -30,7 +30,7 @@ def selftest():
     with tempfile.TemporaryDirectory() as td:
         td=pathlib.Path(td);SRC=sources(True)
         for a,p in SRC.items():
-            eff={'NATS':0,'NATMASK1024':2,'NATB1024G30W8':3,'NATB1024R30W8':2.1,'NATB1024G30W8NM':2.8,'NATB1024R30W8NM':2.0,'ISO-STD':4}[a]
+            eff={'NATS':0,'NATMASK1024':2,'NATB1024G15W8':3.1,'NATB1024R15W8':2.05,'NATB1024G30W8':3,'NATB1024R30W8':2.1,'NATB1024G30W8NM':2.8,'NATB1024R30W8NM':2.0,'ISO-STD':4}[a]
             for s in seeds:
                 g=rng.integers(0,16,20);rd={}
                 for e in A.EXPO:
