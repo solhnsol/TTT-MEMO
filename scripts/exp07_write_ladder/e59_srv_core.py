@@ -9,12 +9,13 @@ import hashlib,json
 import numpy as np
 CH=1024
 def fact_spans(sents):
-    s=sorted(((int(x['start']),int(x['end'])) for x in sents));assert s and all(a>=1 and b>a for a,b in s) and all(s[i][1]<=s[i+1][0] for i in range(len(s)-1)),s;return s
+    s=sorted(((int(x['start']),int(x['end'])) for x in sents));assert s and all(a>=0 and b>a for a,b in s) and all(s[i][1]<=s[i+1][0] for i in range(len(s)-1)),s;return s
 def target_mask(spans,T=CH,all_targets=False):
     """bool[T] loss positions (label-shifted): all_targets -> positions 0..T-2 (the last position has no target in the stream); else the target tokens start..end-1 of every span -> positions start-1..end-2"""
     m=np.zeros(T,bool)
     if all_targets:m[:T-1]=True;return m
-    for a,b in spans:m[a-1:b-1]=True
+    for a,b in spans:
+        a=max(a,1);m[a-1:b-1]=True            # a sentence starting at token 0 of the chunk (FictionalQA worlds): its first token has no predecessor inside the chunk and is not a target here
     return m
 def fact_ids(chunk):
     sp=fact_spans(chunk['sents']);return [list(map(int,chunk['ids'][a:b])) for a,b in sp]
