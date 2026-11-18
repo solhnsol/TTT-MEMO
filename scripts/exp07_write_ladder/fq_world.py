@@ -53,7 +53,7 @@ def to_gen_world(world,tok,read_apps=READ_APPS):
     facts=[dict(id=f['id'],group=0,X=f['question'],P=f['gold'],o='fq',frames=[a['text'] for a in f['anchors']],event=f['event'],qid=f['qid']) for f in world['facts']]
     bgtxt=' '.join(world['bg_sentences']).lower();clean=lambda f:not re.search(r'(?<![\w])'+re.escape(f['gold'].lower())+r'(?![\w])',bgtxt);res=(list(world['reserve'])+[f for f in world.get('ctrl_extra',[]) if clean(f)])[:NCTRL];ctrl=[dict(id=NFACT+i,group=0,X=f['question'],P=f['gold'],o='fq',frames=[],event=f['event'],qid=f['qid']) for i,f in enumerate(res)]
     sep=tok.encode('\n\n',add_special_tokens=False).ids
-    gw=dict(seed=seed,k=NFACT,n=1,p=1,n_app=world['n_expo'],n_chunks=world['n_expo'],bank_kind='fq',name_len=3,place_len=3,facts=facts,ctrl=ctrl,unexposed=ctrl,read_apps=list(read_apps),read_chunks=[a-1 for a in read_apps],sep=sep,chunks=chunks)
+    gw=dict(seed=seed,k=NFACT,n=1,p=1,n_app=world['n_expo'],n_chunks=world['n_expo'],bank_kind='fq',name_len=3,place_len=3,facts=facts,ctrl=ctrl,unexposed=[c['P'] for c in ctrl],decoys=[],read_apps=list(read_apps),read_chunks=[a-1 for a in read_apps],sep=sep,chunks=chunks)
     gw['fq']=dict(builder_seed=world['seed'],label_seed=seed,sha=world['sha'],tokenizer=world['tokenizer'],hf_revision=world['hf_revision'],group=world['group'],n0_hist=dict(collections.Counter(i['n0'] for i in infos)),n_fitted={a:sum(1 for i in infos if i['action'].split()[0]==a) for a in ('none','trim','pad')},events_used=world['events_used'])
     return gw
 def build_items(gw):
