@@ -51,7 +51,7 @@ def to_gen_world(world,tok,read_apps=READ_APPS):
     for t in range(world['n_expo']):
         ids,sents,info=fit_chunk(world,t,tok);chunks.append(dict(k=t,group=0,app=t,ids=ids,sents=sents));infos.append(info)
     facts=[dict(id=f['id'],group=0,X=f['question'],P=f['gold'],o='fq',frames=[a['text'] for a in f['anchors']],event=f['event'],qid=f['qid']) for f in world['facts']]
-    res=world['reserve'][:NCTRL];ctrl=[dict(id=NFACT+i,group=0,X=f['question'],P=f['gold'],o='fq',frames=[],event=f['event'],qid=f['qid']) for i,f in enumerate(res)]
+    bgtxt=' '.join(world['bg_sentences']).lower();clean=lambda f:not re.search(r'(?<![\w])'+re.escape(f['gold'].lower())+r'(?![\w])',bgtxt);res=(list(world['reserve'])+[f for f in world.get('ctrl_extra',[]) if clean(f)])[:NCTRL];ctrl=[dict(id=NFACT+i,group=0,X=f['question'],P=f['gold'],o='fq',frames=[],event=f['event'],qid=f['qid']) for i,f in enumerate(res)]
     sep=tok.encode('\n\n',add_special_tokens=False).ids
     gw=dict(seed=seed,k=NFACT,n=1,p=1,n_app=world['n_expo'],n_chunks=world['n_expo'],bank_kind='fq',name_len=3,place_len=3,facts=facts,ctrl=ctrl,unexposed=ctrl,read_apps=list(read_apps),read_chunks=[a-1 for a in read_apps],sep=sep,chunks=chunks)
     gw['fq']=dict(builder_seed=world['seed'],label_seed=seed,sha=world['sha'],tokenizer=world['tokenizer'],hf_revision=world['hf_revision'],group=world['group'],n0_hist=dict(collections.Counter(i['n0'] for i in infos)),n_fitted={a:sum(1 for i in infos if i['action'].split()[0]==a) for a in ('none','trim','pad')},events_used=world['events_used'])
@@ -89,7 +89,7 @@ def checks(world,gw,tok):
     r['items_kinds']=dict(collections.Counter(i['kind'] for i in items))
     gl=[f['P'].lower() for f in gw['facts']];bgtxt=' '.join(world['bg_sentences']).lower();r['no_gold_in_background']=not any(re.search(r'(?<![\w])'+re.escape(g)+r'(?![\w])',bgtxt) for g in gl+[c['P'].lower() for c in gw['ctrl']])
     import gen_facts as G;import e55_read as R
-    r['gen_facts_rows_item_meta']=len(G.rows(items))==(NFACT+NCTRL)*NCAND and len(G.item_meta(items)['kind'])==len(items)
+    r['gen_facts_rows_item_meta']=len(G.rows(items))==(NFACT+len(gw['ctrl']))*NCAND and len(G.item_meta(items)['kind'])==len(items)
     orig=G.build_items;G.build_items=lambda w:build_items(w) if w.get('bank_kind')=='fq' else orig(w)          # the run wrapper patches gen_facts.build_items the same way
     try:
         pl=R.plan(gw);r['e55_read_plan']=set(pl['read'])==set(READ_APPS) and len(pl['rows'])==(NFACT+NCTRL)*NCAND

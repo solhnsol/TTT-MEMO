@@ -29,7 +29,7 @@ def run(a):
         raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),NC)
         forbid=[f['question'] for f in w['facts']+w['reserve']]+[f['gold'] for f in w['facts']+w['reserve']]
         tail=R55.out_tail_8192(LD,tok,rt.bos,forbid);P=rd.packed(raw,tail);S=np.asarray(rd.score(P,rt.base,len(items),NC),np.float64)
-        m,t1,rk=margins(S);rec=dict(label=lab,builder_seed=inv[lab],world_sha=w['sha'],tail_sha=hashlib.sha256(np.asarray(tail,np.int64).tobytes()).hexdigest()[:16],model_fast_hash=str(mh),facts=[dict(idx=i,role=items[i]['role'],fact_id=(w['facts']+w['reserve'])[i]['id'],margin=float(m[i]),top1=bool(t1[i]),rank=int(rk[i]),screened_out=bool(m[i]>0)) for i in range(NALL)],scores=S.tolist(),sec=time.monotonic()-t0,candidates='own gold + golds of facts i+1..i+15 mod 24',margin_def='summed span log-prob gold minus best wrong, out-of-window neutral 8192-token tail, W0')
+        m,t1,rk=margins(S);rec=dict(label=lab,builder_seed=inv[lab],world_sha=w['sha'],tail_sha=hashlib.sha256(np.asarray(tail,np.int64).tobytes()).hexdigest()[:16],model_fast_hash=str(mh),facts=[dict(idx=i,role=items[i]['role'],fact_id=(w['facts']+w['reserve'])[i].get('id',i-NF),margin=float(m[i]),top1=bool(t1[i]),rank=int(rk[i]),screened_out=bool(m[i]>0)) for i in range(NALL)],scores=S.tolist(),sec=time.monotonic()-t0,candidates='own gold + golds of facts i+1..i+15 mod 24',margin_def='summed span log-prob gold minus best wrong, out-of-window neutral 8192-token tail, W0')
         json.dump(rec,open(fn,'w'));print(f'world {lab} (builder {inv[lab]}): world facts margin>0: {int((m[:NF]>0).sum())}/16, reserve margin>0: {int((m[NF:]>0).sum())}/8, mean margin {m.mean():+.2f}, {time.monotonic()-t0:.0f}s',flush=True)
 def selftest():
     import tempfile,collections
