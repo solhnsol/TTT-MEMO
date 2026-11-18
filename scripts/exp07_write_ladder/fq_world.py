@@ -97,7 +97,7 @@ def checks(world,gw,tok):
     finally:G.build_items=orig
     return r
 def selftest(wdir=None):
-    wdir=pathlib.Path(wdir) if wdir else pathlib.Path('/tmp/claude-1147/regclone/TTT-reg/data/fictionalqa/worlds');tok=load_tokenizer()
+    wdir=pathlib.Path(wdir) if wdir else pathlib.Path(__file__).resolve().parents[2]/'experiments/exp07_write_ladder/fq/worlds';tok=load_tokenizer()
     # fit logic on a toy chunk: too long -> trimmed, too short -> padded, exactly 1024 untouched
     w=load_world(sorted(wdir.glob('fq_201_*.json'))[0]);gw=to_gen_world(w,tok);c=checks(w,gw,tok)
     for k in ('all_chunks_1024','16_fact_sentences_per_chunk','sentence_token_spans_decode_to_text','sentences_inside_chunk','gold_3_tokens','candidates_equal_length_3_and_prefix_stable','no_gold_in_background','gen_facts_rows_item_meta'):assert c[k] is True,(k,c)
