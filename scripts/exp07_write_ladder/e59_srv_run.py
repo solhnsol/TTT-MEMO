@@ -45,10 +45,10 @@ def finalize(L,T,m,newp,ref,st,k):
         newp=L.rescale(newp,m,ref/raw)
         if raw<1e-3*ref:flag='noise_direction'
     un=L.norm_between(newp,m)
-    if ref is not None:assert abs(un-ref)<=1e-6*ref+1e-9,('rescaled norm differs from the reference',un,ref)
+    if ref is not None:assert abs(un-ref)<=1e-4*ref+1e-9,('rescaled norm differs from the reference (fp32 tolerance 1e-4)',un,ref)
     sq,sk=T['stats'](newp,old);sq=np.asarray(sq,np.float64);dis=float(T['disp'](newp,st['W0']))
     st['sketch'].append(np.asarray(sk,np.float32));st['path']+=un
-    st['steps'].append(dict(k=k,raw_norm=float(raw),ref_norm=None if ref is None else float(ref),ratio=None if ref is None else float(raw/ref),flag=flag,applied_norm=float(un),net_displacement=dis,path_length=float(st['path']),occupancy={p:float(v) for p,v in zip(T['paths'],sq/max(sq.sum(),1e-300))}))
+    st['steps'].append(dict(k=k,raw_norm=float(raw),ref_norm=None if ref is None else float(ref),ratio=None if ref is None else float(raw/ref),flag=flag,applied_norm=float(un),norm_rel_err=None if ref is None else float(abs(un-ref)/ref),net_displacement=dis,path_length=float(st['path']),occupancy={p:float(v) for p,v in zip(T['paths'],sq/max(sq.sum(),1e-300))}))
     return newp
 def run(a):
     import jax,jax.numpy as jnp,equinox as eqx

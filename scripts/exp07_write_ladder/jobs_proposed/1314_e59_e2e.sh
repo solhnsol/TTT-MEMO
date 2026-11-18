@@ -19,7 +19,7 @@ for a in A:
     s=R[a]['steps'];assert len(s)==16 and all(math.isfinite(x['applied_norm']) and x['applied_norm']>0 for x in s),a;print('smoke',a,'ok: applied norm step0',round(s[0]['applied_norm'],4),'ratio',s[0]['ratio'],'fact_ce',round(s[0]['fact_ce'],3))
 ref=[x['applied_norm'] for x in R['NAT']['steps']]
 for a in ('NATREF','NATF','CHK','CHKF','FACT','ISO'):
-    for x,r in zip(R[a]['steps'],ref):assert abs(x['applied_norm']-r)<=1e-6*r+1e-9,(a,x['applied_norm'],r)
+    for x,r in zip(R[a]['steps'],ref):assert abs(x['applied_norm']-r)<=1e-4*r+1e-9,(a,x['applied_norm'],r)
 assert all(abs(x['ratio']-1)<1e-4 for x in R['NATREF']['steps']),'NATREF ratio must be 1 (reproduces NAT)'
 assert all(x['fact_hash']==y['fact_hash'] for a in A[1:] for x,y in zip(R[a]['steps'],R['NAT']['steps'])),'fact token hash differs between arms'
 assert R['NAT']['steps'][0]['raw_norm']==R['CHK']['steps'][0]['raw_norm'],'r=1: NAT and CHK gradients must be identical (no window yet)'
