@@ -61,17 +61,21 @@ def run(a):
     enc,w,tf=R55.build(SP.synth_args(seed,cell),seed,read_apps=set(ro),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w))
     P=R.plan(w,enc);items=P['items'];tok=rt.tok;raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=R55.out_tail_8192(LD,tok,rt.bos,R55.forbid_list(w))
     R_s=RG.Reads(rd,raw,len(items),G.NCAND,P['read'],out_tail,rt.base,ro,ri,log=lg);R_i=RG.Reads(rd,raw,len(items),G.NCAND,P['read'],out_tail,rt.base,ro,(),log=lg);lg(f'seed {seed}: W0 read done')
+    RR_s=RR_i=items_r=None
+    if a.reverse:        # reverse-question readout (e59_rev.py): same 16-candidate span margin, place -> person; weights only read
+        import e59_rev as RV;items_r=RV.rev_items(w);raw_r=R55.rows_for(LD,rt,items_r);RG.check_rows(raw_r,len(items_r),G.NCAND);P_r=RV.rev_plan(P)['read']
+        RR_s=RG.Reads(rd,raw_r,len(items_r),G.NCAND,P_r,out_tail,rt.base,ro,ri,log=lg);RR_i=RG.Reads(rd,raw_r,len(items_r),G.NCAND,P_r,out_tail,rt.base,ro,(),log=lg);lg(f'seed {seed}: reverse W0 read done')
     sep=list(w['sep']);W=int(rt.cfg.model.sliding_window_size);ref_dir=pathlib.Path(a.ref_dir or a.out)
     fmasks=[K.target_mask(K.fact_spans(w['chunks'][k]['sents'])) for k in range(nch)];fhash=[K.ids_hash(K.fact_ids(w['chunks'][k])) for k in range(nch)]
     for ar in a.arms.split(','):
         assert ar in ARMS,ar;fn=out/f'E59_{a.tag}_{ar}_s{seed}.json'
         if fn.exists() and not a.rerun:lg('exists, reused:',fn);continue
         ref=None
-        if ar not in ('NAT','ISOORIG'):
+        if ar not in ('NAT','ISOORIG','BAND1024','MASK1024'):
             if a.ref_nats:rf=pathlib.Path(a.ref_nats.replace('{seed}',str(seed)));assert rf.exists(),('reference norms (the NATS run of this seed, E55 saved.json) missing',rf);ref=[e['update_norm'] for e in json.load(open(rf))['log']][:nch]       # FictionalQA: the applied per-chunk norms of the existing NATS run (job 1313)
             else:rf=ref_dir/f'E59_{a.tag}_NAT_s{seed}.json';assert rf.exists(),('reference norms (NAT of this seed) missing',rf);ref=[e['applied_norm'] for e in json.load(open(rf))['steps']][:nch]
             assert len(ref)>=nch
-        L=ISO.Iso55(rt,save_dir=out/'states'/f'E59_{a.tag}_{ar}_s{seed}',canary=can);T=tools(L,rt);st=dict(steps=[],sketch=[],path=0.0,W0=rt.base.inner_parameters());got={};t0=time.monotonic();lg(f'== seed {seed} {ar}: {nch} rounds, reference norms {"original rule" if ref is None else "NAT applied norms"}')
+        L=ISO.Iso55(rt,save_dir=out/'states'/f'E59_{a.tag}_{ar}_s{seed}',canary=can);T=tools(L,rt);st=dict(steps=[],sketch=[],path=0.0,W0=rt.base.inner_parameters());got={};gotr={};t0=time.monotonic();lg(f'== seed {seed} {ar}: {nch} rounds, reference norms {"original rule" if ref is None else "NAT applied norms"}')
         if ar in STREAM:
             fonly,chunk_alone,resc=STREAM[ar];uv=ChunkOnlyUV(W,lg) if chunk_alone else (QR.SelMaskQ('ALLQ1024',{'band_ALLQ1024':np.asarray(1024),'all_ALLQ1024':np.asarray(1)},lg) if ar in ('BAND1024','MASK1024') else QR.SelMaskQ('NATQ',{},lg));cnt=[0];nllrec=[]     # MASK1024 (= BAND1024; name used from job 1321 on): band-1024 mask on every row, in ALL 32 layers (e55_core passes the same keep to prefix_masked and write_step), ORIGINAL write rule (no rescaling, as jobs 1297c / 1308 / 1313), K0 = 0
             @eqx.filter_jit
@@ -90,9 +94,9 @@ def run(a):
                 newp=finalize(L,T,m,newp,ref[k] if (resc and ref is not None) else None,st,k);s_=st['steps'][-1];s_.update(fact_ce=float((nll*fm).sum()/fm.sum()),all_ce=float((nll*valid).sum()/valid.sum()),n_loss_tokens=int(wt.astype(bool).sum()),fact_hash=fhash[k],chunk_hash=hashlib.sha256(np.asarray(ids[k*CH:(k+1)*CH],np.int64).tobytes()).hexdigest()[:16]);ce=s_['all_ce']
                 return newp,gn,coef,jnp.asarray(ce,jnp.float32)
             L.write_step=ws
-            def partial(k,m,got=got):
-                h0=LD.reuse._hash_pytree(m.inner_parameters())[0];x=R_s.at(k+1,m);assert h0==LD.reuse._hash_pytree(m.inner_parameters())[0],'weights changed during the read';got[k+1]=x;return {c_:'ok' for c_ in x}
-            r=L.run_stream(NM.ENGINE,1,ids,read_chunks=[a_-1 for a_ in ro],canary_chunks=[a_-1 for a_ in ro],nch=nch,tag=f'{ar}_s{seed}',log=lg,read_hook=partial,hook_chunks=[a_-1 for a_ in ro],chunks_meta=w['chunks'],uv=uv);r.pop('model',None);R_=R_s
+            def partial(k,m,got=got,gotr=gotr):
+                h0=LD.reuse._hash_pytree(m.inner_parameters())[0];x=R_s.at(k+1,m);assert h0==LD.reuse._hash_pytree(m.inner_parameters())[0],'weights changed during the read';got[k+1]=x;gotr[k+1]=RR_s.at(k+1,m) if RR_s is not None else None;return {c_:'ok' for c_ in x}
+            r=L.run_stream(NM.ENGINE,1,ids,read_chunks=[a_-1 for a_ in ro],canary_chunks=[a_-1 for a_ in ro],nch=nch,tag=f'{ar}_s{seed}',log=lg,read_hook=partial,hook_chunks=[a_-1 for a_ in ro],chunks_meta=w['chunks'],uv=uv);r.pop('model',None);R_=R_s;RRx=RR_s
         else:
             m=rt.base;st_all=s3.clone_state(rt.state_all);r={'log':[],'reads':{}};eos=rt.eos;cw0=can(m) if can else None;packing=LD.packing
             for k in range(nch):
@@ -106,14 +110,18 @@ def run(a):
                 tgt=[int(tg[p]) for p in np.flatnonzero(mk)];exp_=[t for s in K.fact_ids(ch) for t in s];assert tgt==exp_,'target token ids differ from the fact token ids'
                 s_=st['steps'][-1];s_.update(fact_ce=float(ce),all_ce=float(ce),n_loss_tokens=int(mk.sum()),fact_hash=fhash[k],input_hash=K.ids_hash([ids_[:int((seg>=0).sum())].tolist()]),clip_coef=float(coef),grad_norm=float(gn))
                 un=L.norm_between(newp,m);m=L.set_inner(m,newp);r['log'].append(dict(k=k,ce=float(ce),gnorm=float(gn),coef=float(coef),update_norm=un))
-                if k+1 in ro:got[k+1]=R_i.at(k+1,m)
-            r['canary_w0']=cw0;r['canary_end']=can(m) if can else None;R_=R_i
+                if k+1 in ro:
+                    got[k+1]=R_i.at(k+1,m)
+                    if RR_i is not None:gotr[k+1]=RR_i.at(k+1,m)
+            r['canary_w0']=cw0;r['canary_end']=can(m) if can else None;R_=R_i;RRx=RR_i
         lgs=r['log'];nf=all(math.isfinite(v) for e in lgs for kk,v in e.items() if kk in ('ce','gnorm','update_norm') and isinstance(v,(int,float)));last8=float(np.mean([e['ce'] for e in lgs[-8:]]));cw0=r.get('canary_w0');cend=r.get('canary_end')
         if cend is None and r.get('reads'):
             lk=max(r['reads']);e=r['reads'][lk];cend=e.get('canary')
         can_ch=None if (cw0 is None or cend is None) else (cend['_gen_nll']-cw0['_gen_nll'] if isinstance(cend,dict) else cend-cw0)
         div=bool((not nf) or last8>4.0 or (can_ch is not None and can_ch>1.0))
         rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':cell,'seed':seed,'k':w['k'],'n':w['n'],'p':1,'bank':w['bank_kind'],'tag':a.tag,'complete':True,'place_len':w['place_len']})[ar];json.dump(rec,open(out/f'E59_{a.tag}_{ar}_s{seed}.read.json','w'))
+        if a.reverse:
+            recr=RG.make_records({ar:gotr},RRx.W0,G.item_meta(items_r),P_r,RRx.idx,{'cell':cell,'seed':seed,'k':w['k'],'n':w['n'],'p':1,'bank':w['bank_kind'],'tag':a.tag,'complete':True,'direction':'reverse (place -> person)','place_len':w['place_len']})[ar];json.dump(recr,open(out/f'E59_{a.tag}_{ar}_s{seed}.rev.read.json','w'))
         np.save(out/f'E59_{a.tag}_{ar}_s{seed}.sketch.npy',np.stack(st['sketch']).astype(np.float32))
         r.update(arm=ar,seed=seed,steps=st['steps'],stream_sha=sha,sec=time.monotonic()-t0,reference='original rule' if ref is None else 'NAT applied norms',diverged=div,last8_ce=last8,finite=nf,canary_change_gen=can_ch,sketch_dim=T['nsk'],args=vars(a),code=os.popen('git rev-parse HEAD 2>/dev/null').read().strip())
         json.dump(r,open(fn,'w'),default=float);lg('wrote',fn,f'{time.monotonic()-t0:.0f}s','DIVERGED' if div else '');gc.collect();LD.jax.clear_caches()
@@ -123,7 +131,7 @@ def selftest():
     import ast;ast.parse(open(__file__).read());assert set(STREAM)<=set(ARMS)
     print('e59_srv_run selftest ok (syntax; arms',ARMS,')')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     run(a)
 if __name__=='__main__':main()

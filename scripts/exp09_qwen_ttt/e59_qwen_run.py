@@ -13,7 +13,7 @@ from qwen_runtime import parts,lora_params
 import e59_srv_core as K
 ARMS=('NAT','NATF','CHK','CHKF','FACT','ISO');NS=262144
 def parser():
-    ap=CB.parser();ap.add_argument('--step-norm',type=float,default=0.30426);ap.add_argument('--ref-dir',default='');return ap
+    ap=CB.parser();ap.add_argument('--step-norm',type=float,default=0.30426);ap.add_argument('--ref-dir',default='');ap.add_argument('--reverse',action='store_true');return ap
 class Fixed:
     """fixed-norm step with the per-step records; one instance per arm run"""
     def __init__(s,model,T,dev):
@@ -80,28 +80,37 @@ def run(a):
         else:
             QR.load_lora_state_(model,init);W0={str(e):CB.read_all(model,ctxs(e),rows,dev,a.readout_batch,pad,rd) for e in reads if e<=nch};json.dump(dict(meta=meta,reads=W0,canary=CB.canary(model,canids,dev,rd)),open(w0o,'w'))
     w0c=json.load(open(w0o))['canary']
+    rows_r=None;RRW0=None;meta_r=None
+    if a.reverse:      # reverse-question readout (scripts/exp07_write_ladder/e59_rev.py): place -> person, same 16-candidate span margin, same contexts, weights only read
+        import e59_rev as RV;items_r=RV.rev_items(w);rows_r,nt_r=CB.item_rows(tok,items_r);assert all(len(set(n))==1 for n in nt_r),'reverse candidates of an item differ in token length'
+        meta_r=dict(kind=[it['kind'] for it in items_r],fact=[it['fact'] for it in items_r],gold_idx=[it['gold_idx'] for it in items_r],n_tok=nt_r,direction='reverse (place -> person)',frames=RV.RQFRAMES)
+        w0r=out/f'e59q_W0rev_s{seed}.json'
+        if w0r.exists():RRW0=json.load(open(w0r))['reads']
+        else:
+            QR.load_lora_state_(model,init);RRW0={str(e):CB.read_all(model,ctxs(e),rows_r,dev,a.readout_batch,pad,rd) for e in reads if e<=nch};json.dump(dict(meta=meta_r,reads=RRW0),open(w0r,'w'))
     for arm in a.arms.split(','):
         assert arm in ARMS,arm;fn=out/f'e59q_{arm}_s{seed}.json'
         if fn.exists() and not a.rerun:print('exists',fn);continue
-        QR.load_lora_state_(model,init);fix=Fixed(model,a.step_norm,dev);R={};t0=time.monotonic();log=[];err=None
+        QR.load_lora_state_(model,init);fix=Fixed(model,a.step_norm,dev);R={};RV_={};t0=time.monotonic();log=[];err=None
         try:
             for k,rec in run_arm(a,arm,w,stream,range(nch),model,dev,a.step_norm,fix,CH,sep):
                 log.append(rec)
                 if (k+1) in reads:
-                    R[str(k+1)]=CB.read_all(model,ctxs(k+1),rows,dev,a.readout_batch,pad,rd);R[str(k+1)]['canary']=float(CB.canary(model,canids,dev,rd));print(f'{arm} s{seed}: exposure {k+1} read ({time.monotonic()-t0:.0f}s)',flush=True)
+                    R[str(k+1)]=CB.read_all(model,ctxs(k+1),rows,dev,a.readout_batch,pad,rd);R[str(k+1)]['canary']=float(CB.canary(model,canids,dev,rd));RV_[str(k+1)]=CB.read_all(model,ctxs(k+1),rows_r,dev,a.readout_batch,pad,rd) if rows_r is not None else None;print(f'{arm} s{seed}: exposure {k+1} read ({time.monotonic()-t0:.0f}s)',flush=True)
         except FloatingPointError as ex:err=repr(ex)
         can=float(CB.canary(model,canids,dev,rd));steps=fix.steps;last8=float(np.mean([e['ce'] for e in steps[-8:]])) if steps else float('nan');nf=err is None and all(math.isfinite(e[kk]) for e in steps for kk in ('ce','grad_norm','applied_norm'))
         div=bool((not nf) or last8>4.0 or can-w0c>1.0)
         if fix.sketch:np.save(out/f'e59q_{arm}_s{seed}.sketch.npy',np.stack(fix.sketch))
-        json.dump(dict(arm=arm,seed=seed,meta=meta,steps=steps,log=steps,reads=R,canary=can,canary_w0=w0c,step_norm=a.step_norm,diverged=div,error=err,last8_ce=last8,sec=time.monotonic()-t0,args=vars(a)),open(fn,'w'),default=float);print('wrote',fn,f'{time.monotonic()-t0:.0f}s','DIVERGED' if div else '',flush=True)
+        json.dump(dict(arm=arm,seed=seed,meta=meta,meta_rev=meta_r,reads_rev=(RV_ if a.reverse else None),reads_rev_W0=(RRW0 if a.reverse else None),steps=steps,log=steps,reads=R,canary=can,canary_w0=w0c,step_norm=a.step_norm,diverged=div,error=err,last8_ce=last8,sec=time.monotonic()-t0,args=vars(a)),open(fn,'w'),default=float);print('wrote',fn,f'{time.monotonic()-t0:.0f}s','DIVERGED' if div else '',flush=True)
     for h in []:pass
 def selftest():
     sys.argv=[sys.argv[0]];import shutil,tempfile
-    td=Path(tempfile.mkdtemp());base=['--tiny','--device','cpu','--max-chunks','3','--chunk','1024','--reads','1,3','--tail-len','256','--readout-batch','16','--threads','4','--lora-layers','2','--world-seed','161','--lr','1e-2','--rerun','--step-norm','0.25']
+    td=Path(tempfile.mkdtemp());base=['--tiny','--device','cpu','--max-chunks','3','--chunk','1024','--reads','1,3','--tail-len','256','--readout-batch','16','--threads','4','--lora-layers','2','--world-seed','161','--lr','1e-2','--rerun','--step-norm','0.25','--reverse']
     a=parser().parse_args(base+['--out',str(td/'o'),'--arms',','.join(ARMS)]);torch.manual_seed(0);run(a);R={x:json.load(open(td/'o'/f'e59q_{x}_s161.json')) for x in ARMS}
     for x,r in R.items():
         s=r['steps'];assert len(s)==3,x;assert all(abs(e['applied_norm']-0.25)<=1e-4*0.25+1e-7 for e in s),(x,[e['applied_norm'] for e in s]);assert all(math.isfinite(e['ratio']) and e['n_loss_tokens']>0 and e['fact_ce']>0 for e in s)
         assert abs(sum(s[0]['occupancy'].values())-1)<1e-5 and set(r['reads'])=={'1','3'} and 'canary' in r['reads']['3'] and s[2]['net_displacement']<=s[2]['path_length']+1e-6 and (np.load(td/'o'/f'e59q_{x}_s161.sketch.npy').shape[0]==3)
+    for x,r in R.items():assert set(r['reads_rev'])=={'1','3'} and len(r['reads_rev']['3']['out'])==16 and len(r['reads_rev']['3']['out'][0])==16 and len(r['reads_rev']['3']['in'])==16 and r['meta_rev']['gold_idx']==[0]*16 and set(r['reads_rev_W0'])=={'1','3'},x
     for x in ARMS[1:]:assert [e['fact_hash'] for e in R[x]['steps']]==[e['fact_hash'] for e in R['NAT']['steps']],'fact hash differs'
     assert abs(R['NAT']['steps'][0]['raw_norm']-R['CHK']['steps'][0]['raw_norm'])<=1e-12+1e-7*abs(R['NAT']['steps'][0]['raw_norm']) and abs(R['NAT']['steps'][0]['ce']-R['CHK']['steps'][0]['ce'])<1e-6,'chunk 0: NAT and CHK must be the same computation'
     assert R['NAT']['steps'][1]['ce']!=R['CHK']['steps'][1]['ce'],'CHK must differ from NAT once a window exists'
