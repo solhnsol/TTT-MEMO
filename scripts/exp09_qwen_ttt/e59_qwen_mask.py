@@ -11,7 +11,7 @@ import e59_qwen_run as E
 import bandmask as BM,inner as IN
 from qwen_runtime import parts
 import e59_srv_core as K
-MASKARMS=('BAND1024','BANDALL1024','CHKMASK9')
+MASKARMS=('BAND1024','BANDALL1024','CHKMASK9','MASK1024')      # MASK1024 = BANDALL1024 (band-1024 mask in all 36 layers, the E2E mask; the name used from job 1322 on)
 def chunk_allowed(L,off,device):
     """bool [1,1,L,off+L]: query i (position off+i) sees key j iff j >= off (its own chunk) and j <= off+i"""
     q=(off+torch.arange(L,device=device))[:,None];k=torch.arange(off+L,device=device)[None,:];return ((k>=off)&(k<=q))[None,None]
@@ -27,7 +27,7 @@ class MaskWriter(BM.BandWriter):
         hs=kwargs['hidden_states'] if 'hidden_states' in kwargs else args[0];L=hs.shape[1];kwargs=dict(kwargs)
         kwargs['attention_mask']=BM.band_allowed(L,self._off,self.band,hs.device) if self.mode=='band' else chunk_allowed(L,self._off,hs.device);return args,kwargs
 def run_arm_mask(a,arm,w,stream,k_range,model,dev,T,fix,CH,sep,log=print,ST=None):
-    W=MaskWriter(model,CH,a.window_chunks,dev,'band' if arm in ('BAND1024','BANDALL1024') else 'chunk',all_layers=(arm=='BANDALL1024'))
+    W=MaskWriter(model,CH,a.window_chunks,dev,'band' if arm in ('BAND1024','BANDALL1024','MASK1024') else 'chunk',all_layers=(arm in ('BANDALL1024','MASK1024')))
     try:
         for k in k_range:
             ch,sp,fpos=E.chunk_data(w,stream,k,CH);c0=k*CH;n=len(stream);e=min((k+1)*CH,n);last=min(e,n-1);ids_c=torch.tensor(stream[c0:e],dtype=torch.long,device=dev);fh=K.ids_hash(K.fact_ids(ch));fp=torch.tensor(fpos,dtype=torch.long,device=dev)
