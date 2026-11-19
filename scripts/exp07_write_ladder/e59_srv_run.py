@@ -108,10 +108,12 @@ def run(a):
                 if ar in ('ISO','ISOORIG'):ids_,seg,loc,mk=K.isolated_mask(K.iso_rows(ch,sep),CH)
                 else:
                     rid,rm=K.fact_row(ch,sep);n=len(rid);assert n<=CH,n;ids_=np.asarray(rid+[rid[-1]]*(CH-n),np.int32);seg=np.asarray([0]*n+[-1]*(CH-n),np.int32);loc=np.asarray(list(range(n))+list(range(CH-n)),np.int32);mk=np.zeros(CH,bool);mk[:n]=rm
+                sp0=K.fact_spans(ch['sents'])[0][0]==0                    # FictionalQA worlds: a sentence at token 0 of the chunk has no in-chunk predecessor, NAT/target_mask does not train on its first token; drop it here too (token parity with NAT)
+                if sp0:mk[len(sep)-1]=False
                 tg=np.concatenate([ids_[1:],[eos]]).astype(np.int32);assert set(np.flatnonzero(mk))>=set() and int(mk.sum())==int(fmasks[k].sum()),'target token count differs from the fact tokens'
                 pref=L.prefix_iso(rt.base,jnp.asarray(ids_),jnp.asarray(loc),jnp.asarray(packing.prefix_mask(seg,W)));g,ce=L.iso_grad(m,jnp.asarray(ids_),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc))
                 newp,gn,coef=L.sgd_apply(m,st_all,g);del g;newp=finalize(L,T,m,newp,None if ar=='ISOORIG' else ref[k],st,k)
-                tgt=[int(tg[p]) for p in np.flatnonzero(mk)];exp_=[t for s in K.fact_ids(ch) for t in s];assert tgt==exp_,'target token ids differ from the fact token ids'
+                tgt=[int(tg[p]) for p in np.flatnonzero(mk)];exp_=[t for s in K.fact_ids(ch) for t in s][(1 if sp0 else 0):];assert tgt==exp_,'target token ids differ from the fact token ids'
                 s_=st['steps'][-1];s_.update(fact_ce=float(ce),all_ce=float(ce),n_loss_tokens=int(mk.sum()),fact_hash=fhash[k],input_hash=K.ids_hash([ids_[:int((seg>=0).sum())].tolist()]),clip_coef=float(coef),grad_norm=float(gn))
                 un=L.norm_between(newp,m);m=L.set_inner(m,newp);r['log'].append(dict(k=k,ce=float(ce),gnorm=float(gn),coef=float(coef),update_norm=un))
                 if k+1 in ro:
