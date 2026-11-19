@@ -15,8 +15,8 @@ HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
 import e59_srv_core as K
 CH=1024;NS=262144
-ARMS=('NAT','NATF','CHK','CHKF','FACT','ISO','NATREF','ISOORIG','BAND1024','MASK1024')
-STREAM={'NAT':(False,False,False),'BAND1024':(False,False,False),'MASK1024':(False,False,False),'NATREF':(False,False,True),'NATF':(True,False,True),'CHK':(False,True,True),'CHKF':(True,True,True)}   # (fact-only loss, chunk alone, rescale to reference)
+ARMS=('NAT','NATF','CHK','CHKF','FACT','ISO','NATREF','ISOORIG','BAND1024','MASK1024','SAME','SAME_U1','SAME_U2','SAME_U1U2')
+STREAM={'NAT':(False,False,False),'BAND1024':(False,False,False),'MASK1024':(False,False,False),'SAME':(False,False,False),'SAME_U1':(False,False,False),'SAME_U2':(False,False,False),'SAME_U1U2':(False,False,False),'NATREF':(False,False,True),'NATF':(True,False,True),'CHK':(False,True,True),'CHKF':(True,True,True)}   # (fact-only loss, chunk alone, rescale to reference)
 class ChunkOnlyUV:
     """uv object of e55_core (E.UVARMS path): every window key hidden (1-D keep, index j = absolute position k*CH-WIN+j), the current chunk causal as always"""
     def __init__(self,WIN,log):self.WIN=WIN;self.log=log
@@ -55,6 +55,10 @@ def run(a):
     out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True)
     import e55_run as R55,e55_read as R,e55_gpu as RG,e55_iso as ISO,gen_facts as G,e57_natmask_run as NM,e57_qband_run as QR,e57_syn_pass as SP,e57_oracle_run as OR
     NM.register_engine();QR.K0=0;NM.K0=0;lg=lambda *x:print(*x,flush=True);seed=a.seed;cell='v3_16_1'
+    if a.u12:import e59_u12 as U12;U12.install();cell=U12.CELL          # 32-fact world, 16 facts outside the read candidates (U1 / U2 hiding experiment)
+    else:
+        try:import e59_u12 as U12
+        except Exception:U12=None
     if a.fq_worlds:import fq_run as FQR;FQR.install(a.fq_worlds);cell=f'fq{seed}'          # FictionalQA worlds (labels 211..218): same patches as fq_run.py (register_cell / build / build_items)
     ci=OR.register_cell(cell);ro=list(ci['read_apps']);ri=[ro[-1]];assert ro==[16,32,64,128],ro
     LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
@@ -77,7 +81,7 @@ def run(a):
             assert len(ref)>=nch
         L=ISO.Iso55(rt,save_dir=out/'states'/f'E59_{a.tag}_{ar}_s{seed}',canary=can);T=tools(L,rt);st=dict(steps=[],sketch=[],path=0.0,W0=rt.base.inner_parameters());got={};gotr={};t0=time.monotonic();lg(f'== seed {seed} {ar}: {nch} rounds, reference norms {"original rule" if ref is None else "NAT applied norms"}')
         if ar in STREAM:
-            fonly,chunk_alone,resc=STREAM[ar];uv=ChunkOnlyUV(W,lg) if chunk_alone else (QR.SelMaskQ('ALLQ1024',{'band_ALLQ1024':np.asarray(1024),'all_ALLQ1024':np.asarray(1)},lg) if ar in ('BAND1024','MASK1024') else QR.SelMaskQ('NATQ',{},lg));cnt=[0];nllrec=[]     # MASK1024 (= BAND1024; name used from job 1321 on): band-1024 mask on every row, in ALL 32 layers (e55_core passes the same keep to prefix_masked and write_step), ORIGINAL write rule (no rescaling, as jobs 1297c / 1308 / 1313), K0 = 0
+            fonly,chunk_alone,resc=STREAM[ar];uv=ChunkOnlyUV(W,lg) if chunk_alone else (QR.SelMaskQ('ALLQ1024',{'band_ALLQ1024':np.asarray(1024),'all_ALLQ1024':np.asarray(1)},lg) if ar in ('BAND1024','MASK1024') else (U12.uv_for(ar,w['chunks'],lg) if ar in U12.ARMS else QR.SelMaskQ('NATQ',{},lg)));cnt=[0];nllrec=[]     # MASK1024 (= BAND1024; name used from job 1321 on): band-1024 mask on every row, in ALL 32 layers (e55_core passes the same keep to prefix_masked and write_step), ORIGINAL write rule (no rescaling, as jobs 1297c / 1308 / 1313), K0 = 0
             @eqx.filter_jit
             def grad_fn(m,st_suf,c,pref_,kmask,wt):
                 def total(mm):
@@ -131,7 +135,7 @@ def selftest():
     import ast;ast.parse(open(__file__).read());assert set(STREAM)<=set(ARMS)
     print('e59_srv_run selftest ok (syntax; arms',ARMS,')')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--u12',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     run(a)
 if __name__=='__main__':main()
