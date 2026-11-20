@@ -15,6 +15,7 @@ E7=X/'exp07_write_ladder'
 G={'fq':(range(211,219),{'NAT':lambda s,E:rd_file(E7/f'fq/run/E55_fq_NATS_s{s}.read.json',E),'BAND1024':lambda s,E:rd_file(E7/f'fq/run/E55_fq_NATMASK_s{s}.read.json',E),'CHK':lambda s,E:rd_file(E7/f'e59_fq/E59_fq_CHK_s{s}.read.json',E),'ISO':lambda s,E:rd_file(E7/f'e59_fq/E59_fq_ISO_s{s}.read.json',E)}),
    'rev21':(range(231,239),{a:(lambda a:lambda s,E:rd_file(E7/f'e59_4way/E59_a4_{a}_s{s}.rev.read.json',E))(a) for a in ('NAT','CHK','ISO','MASK1024')}),
    'rev25':(range(71,75),dict({a:(lambda a:lambda s,E:rd_file(E7/f'e59_rev/E59_e59_{a}_s{s}.rev.read.json',E))(a) for a in ('NAT','NATF','CHK','CHKF')},ISO=lambda s,E:rd_file(E7/f'e59_rev/iso/E59_e59_ISO_s{s}.rev.read.json',E))),
+   'u12':(range(231,239),{a:(lambda a:lambda s,E:rd_file(E7/f'u12/E59_u12_{a}_s{s}.read.json',E))(a) for a in ('NAT','SAME','SAME_U1','SAME_U2','SAME_U1U2')}),
    'qrev':(range(221,229),{a:(lambda a:lambda s,E:rd_q(a,s,E))(a) for a in ('NAT','CHK','ISO','MASK1024')})}
 def main():
     k=sys.argv[1];E=int(sys.argv[sys.argv.index('--exp')+1]) if '--exp' in sys.argv else 128;seeds,arms=G[k];seeds=list(seeds);V={a:[arms[a](s,E) for s in seeds] for a in arms};n=len(seeds);t=stats.t.ppf(.975,n-1)

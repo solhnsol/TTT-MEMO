@@ -13,7 +13,7 @@ mkdir -p $O/smoke
 sha256sum $E/olmo_port.py $E/olmo_run.py scripts/exp09_qwen_ttt/e59_qwen_run.py scripts/exp09_qwen_ttt/e59_qwen_mask.py scripts/exp07_write_ladder/e59_srv_core.py scripts/exp07_write_ladder/e59_rev.py $SNAP/model.safetensors.index.json $SNAP/config.json
 CUDA_VISIBLE_DEVICES= $PYQ $E/olmo_port.py --selftest | tail -1
 CUDA_VISIBLE_DEVICES= $PYQ $E/olmo_run.py --selftest | tail -1
-$PYQ $E/olmo_run.py --world-seed 251 --model $SNAP --fast fullmlp --olmo-fast-n 8 --lr 1.0 --clip 1.0 --step-norm $T --arms NAT,MASK1024,CHK,ISO --max-chunks 16 --reads 16 --reverse --readout-batch 4 --out $O/smoke --rerun
+$PYQ $E/olmo_run.py --world-seed 251 --model $SNAP --fast fullmlp --olmo-fast-n 8 --lr 1.0 --clip 1.0 --step-norm $T --arms NAT,MASK1024,CHK,ISO --max-chunks 16 --reads 16 --reverse --readout-batch 4 --readout-dtype bf16 --out $O/smoke --rerun
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader
 $PYQ - $O/smoke $T <<'PYE'
 import json,math,sys
@@ -26,7 +26,7 @@ print('OLMO SMOKE PASSED')
 PYE
 for s in 251 252 253 254 255 256 257 258; do
   set +e
-  $PYQ $E/olmo_run.py --world-seed $s --model $SNAP --fast fullmlp --olmo-fast-n 8 --lr 1.0 --clip 1.0 --step-norm $T --arms NAT,MASK1024,CHK,ISO --reads 16,32,64,128 --reverse --readout-batch 4 --out $O
+  $PYQ $E/olmo_run.py --world-seed $s --model $SNAP --fast fullmlp --olmo-fast-n 8 --lr 1.0 --clip 1.0 --step-norm $T --arms NAT,MASK1024,CHK,ISO --reads 16,32,64,128 --reverse --readout-batch 4 --readout-dtype bf16 --out $O
   echo "RUN olmo seed $s rc=$?"
   set -e
 done
