@@ -60,7 +60,9 @@ def run(a):
         try:import e59_u12 as U12
         except Exception:U12=None
     if a.fq_worlds:import fq_run as FQR;FQR.install(a.fq_worlds);cell=f'fq{seed}'          # FictionalQA worlds (labels 211..218): same patches as fq_run.py (register_cell / build / build_items)
-    ci=OR.register_cell(cell);ro=list(ci['read_apps']);ri=[ro[-1]];assert ro==[16,32,64,128],ro
+    ci=OR.register_cell(cell);ro=list(ci['read_apps']);assert ro==[16,32,64,128],ro
+    if a.reads:ro=[int(x) for x in a.reads.split(',')];assert ro in ([2,4,8],[16,32,64,128]),ro              # few-repetition reads (job 1335): the SAME 128-chunk world, train --smoke 8 chunks, read after 2 / 4 / 8 exposures
+    ri=[ro[-1]]
     LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     enc,w,tf=R55.build(SP.synth_args(seed,cell),seed,read_apps=set(ro),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w))
     P=R.plan(w,enc);items=P['items'];tok=rt.tok;raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=R55.out_tail_8192(LD,tok,rt.bos,R55.forbid_list(w))
@@ -137,7 +139,7 @@ def selftest():
     import ast;ast.parse(open(__file__).read());assert set(STREAM)<=set(ARMS)
     print('e59_srv_run selftest ok (syntax; arms',ARMS,')')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--u12',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--reads',default='');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--u12',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     run(a)
 if __name__=='__main__':main()

@@ -26,6 +26,8 @@ DS={'e2e_syn':(range(231,239),('NAT','CHK','ISO','MASK1024'),e2e(str(E7/'e59_4wa
     'e2e_syn_rev':(range(231,239),('NAT','CHK','ISO','MASK1024'),e2e(str(E7/'e59_4way/E59_a4_{arm}_s{s}.rev.read.json'))),
     'qwen_syn':(range(221,229),('NAT','CHK','ISO','MASK1024'),qwen('q4way')),'qwen_syn_rev':(range(221,229),('NAT','CHK','ISO','MASK1024'),qwen('q4way',True)),
     'qwen_fq':(range(211,219),('NAT','CHK','ISO','BANDALL1024'),qwen('fq_qwen')),'e2e_fq':(range(211,219),('NAT','CHK','ISO','BAND1024'),fq),
+    'olmo_syn':(range(251,259),('NAT','CHK','ISO','MASK1024'),qwen('../exp11_olmo3/q4way')),'olmo_syn_rev':(range(251,259),('NAT','CHK','ISO','MASK1024'),qwen('../exp11_olmo3/q4way',True)),
+    'match':(range(231,239),('NAT','SAME','SAME_U1','RANDTOK','BGSENT'),lambda s,arm,e:e2e(str(E7/('e59_4way/E59_a4_NAT_s{s}.read.json' if arm=='NAT' else 'match/E59_match_{arm}_s{s}.read.json')))(s,arm,e)),
     'u12':(range(231,239),('NAT','SAME','SAME_U1','SAME_U2','SAME_U1U2'),e2e(str(E7/'u12/E59_u12_{arm}_s{s}.read.json')))}
 def ci(d):
     d=np.asarray(d,float);n=len(d);h=stats.t.ppf(.975,n-1)*d.std(ddof=1)/np.sqrt(n);m=d.mean();return m,m-h,m+h,int(max((d>0).sum(),(d<0).sum()))
@@ -43,13 +45,14 @@ def run(name):
     return res,len(seeds)
 def fmt(c):return f'{c[0]:7.3f} [{c[1]:7.3f},{c[2]:7.3f}] {c[3]}/8' if len(c)==4 else f'{c[0]:7.3f} [{c[1]:7.3f},{c[2]:7.3f}]'
 def main():
+    only=sys.argv[sys.argv.index('--only')+1].split(',') if '--only' in sys.argv else list(DS)
     out=Path(sys.argv[sys.argv.index('--out')+1]) if '--out' in sys.argv else E7/'binding_fit';allr={}
-    for n in DS:
+    for n in only:
         res,ns=run(n);allr[n]=res;L=[f'# {n}: n={ns} seeds; out-of-window; mean [95% t-CI] same-direction seeds. chance top-1 0.0625, rank 8.5; rank: lower = better']
         for e in EXPS:
             for mn in MET:
                 t=res[e][mn];L.append(f'## exposure {e}  {mn}   W0 {fmt(t["W0"])}')
                 for a,r in t['arms'].items():L.append(f'  {a:11s} abs {fmt(r["abs"])} | vs W0 {fmt(r["vsW0"])}'+(f' | vs NAT {fmt(r["vsNAT"])}' if 'vsNAT' in r else ''))
         (out/f'reagg_{n}.txt').write_text('\n'.join(L)+'\n');print(n,'ok',flush=True)
-    json.dump(allr,open(out/'reagg_all.json','w'),indent=1)
+    json.dump(allr,open(out/('reagg_all.json' if len(only)==len(DS) else 'reagg_partial_'+'_'.join(only)+'.json'),'w'),indent=1)
 if __name__=='__main__':main()
