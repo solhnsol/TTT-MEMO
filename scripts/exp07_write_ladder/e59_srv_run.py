@@ -15,8 +15,8 @@ HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
 import e59_srv_core as K
 CH=1024;NS=262144
-ARMS=('NAT','NATF','CHK','CHKF','FACT','ISO','NATREF','ISOORIG','BAND1024','MASK1024','SAME','SAME_U1','SAME_U2','SAME_U1U2','RANDTOK','BGSENT')
-STREAM={'NAT':(False,False,False),'BAND1024':(False,False,False),'MASK1024':(False,False,False),'SAME':(False,False,False),'SAME_U1':(False,False,False),'SAME_U2':(False,False,False),'SAME_U1U2':(False,False,False),'RANDTOK':(False,False,False),'BGSENT':(False,False,False),'NATREF':(False,False,True),'NATF':(True,False,True),'CHK':(False,True,True),'CHKF':(True,True,True)}   # (fact-only loss, chunk alone, rescale to reference)
+ARMS=('NAT','NATF','CHK','CHKF','FACT','ISO','NATREF','ISOORIG','BAND1024','MASK1024','SAME','SAME_U1','SAME_U2','SAME_U1U2','RANDTOK','BGSENT','BOTH','OTHERONLY','RANDF','RANDC','SHOWSAME','SHOWOTHER','ALLHID')
+STREAM={'NAT':(False,False,False),'BAND1024':(False,False,False),'MASK1024':(False,False,False),'SAME':(False,False,False),'SAME_U1':(False,False,False),'SAME_U2':(False,False,False),'SAME_U1U2':(False,False,False),'RANDTOK':(False,False,False),'BGSENT':(False,False,False),'BOTH':(False,False,False),'OTHERONLY':(False,False,False),'RANDF':(False,False,False),'RANDC':(False,False,False),'SHOWSAME':(False,False,False),'SHOWOTHER':(False,False,False),'ALLHID':(False,False,False),'NATREF':(False,False,True),'NATF':(True,False,True),'CHK':(False,True,True),'CHKF':(True,True,True)}   # (fact-only loss, chunk alone, rescale to reference)
 class ChunkOnlyUV:
     """uv object of e55_core (E.UVARMS path): every window key hidden (1-D keep, index j = absolute position k*CH-WIN+j), the current chunk causal as always"""
     def __init__(self,WIN,log):self.WIN=WIN;self.log=log
@@ -75,13 +75,13 @@ def run(a):
         assert ar in ARMS,ar;fn=out/f'E59_{a.tag}_{ar}_s{seed}.json'
         if fn.exists() and not a.rerun:lg('exists, reused:',fn);continue
         ref=None
-        if ar not in ('NAT','ISOORIG','BAND1024','MASK1024','SAME','SAME_U1','SAME_U2','SAME_U1U2','RANDTOK','BGSENT'):   # stream arms with the original rule (no rescaling) need no reference norms
+        if ar not in ('NAT','ISOORIG','BAND1024','MASK1024','SAME','SAME_U1','SAME_U2','SAME_U1U2','RANDTOK','BGSENT','BOTH','OTHERONLY','RANDF','RANDC','SHOWSAME','SHOWOTHER','ALLHID'):   # stream arms with the original rule (no rescaling) need no reference norms
             if a.ref_nats:rf=pathlib.Path(a.ref_nats.replace('{seed}',str(seed)));assert rf.exists(),('reference norms (the NATS run of this seed, E55 saved.json) missing',rf);ref=[e['update_norm'] for e in json.load(open(rf))['log']][:nch]       # FictionalQA: the applied per-chunk norms of the existing NATS run (job 1313)
             else:rf=ref_dir/f'E59_{a.tag}_NAT_s{seed}.json';assert rf.exists(),('reference norms (NAT of this seed) missing',rf);ref=[e['applied_norm'] for e in json.load(open(rf))['steps']][:nch]
             assert len(ref)>=nch
         L=ISO.Iso55(rt,save_dir=out/'states'/f'E59_{a.tag}_{ar}_s{seed}',canary=can);T=tools(L,rt);st=dict(steps=[],sketch=[],path=0.0,W0=rt.base.inner_parameters());got={};gotr={};t0=time.monotonic();lg(f'== seed {seed} {ar}: {nch} rounds, reference norms {"original rule" if ref is None else "NAT applied norms"}')
         if ar in STREAM:
-            fonly,chunk_alone,resc=STREAM[ar];uv=ChunkOnlyUV(W,lg) if chunk_alone else (QR.SelMaskQ('ALLQ1024',{'band_ALLQ1024':np.asarray(1024),'all_ALLQ1024':np.asarray(1)},lg) if ar in ('BAND1024','MASK1024') else (U12.uv_for(ar,w['chunks'],lg) if ar in U12.ARMS else (__import__('e59_match').uv_for(ar,w['chunks'],seed,lg) if ar in ('RANDTOK','BGSENT') else QR.SelMaskQ('NATQ',{},lg))));cnt=[0];nllrec=[]     # MASK1024 (= BAND1024; name used from job 1321 on): band-1024 mask on every row, in ALL 32 layers (e55_core passes the same keep to prefix_masked and write_step), ORIGINAL write rule (no rescaling, as jobs 1297c / 1308 / 1313), K0 = 0
+            fonly,chunk_alone,resc=STREAM[ar];uv=ChunkOnlyUV(W,lg) if chunk_alone else (QR.SelMaskQ('ALLQ1024',{'band_ALLQ1024':np.asarray(1024),'all_ALLQ1024':np.asarray(1)},lg) if ar in ('BAND1024','MASK1024') else (U12.uv_for(ar,w['chunks'],lg) if ar in U12.ARMS else (__import__('e59_match').uv_for(ar,w['chunks'],seed,lg) if ar in ('RANDTOK','BGSENT') else (__import__('e59_hidearms').uv_for(ar,w['chunks'],seed,lg) if ar in ('BOTH','OTHERONLY','RANDF','RANDC','SHOWSAME','SHOWOTHER','ALLHID') else QR.SelMaskQ('NATQ',{},lg)))));cnt=[0];nllrec=[]     # MASK1024 (= BAND1024; name used from job 1321 on): band-1024 mask on every row, in ALL 32 layers (e55_core passes the same keep to prefix_masked and write_step), ORIGINAL write rule (no rescaling, as jobs 1297c / 1308 / 1313), K0 = 0
             @eqx.filter_jit
             def grad_fn(m,st_suf,c,pref_,kmask,wt):
                 def total(mm):
