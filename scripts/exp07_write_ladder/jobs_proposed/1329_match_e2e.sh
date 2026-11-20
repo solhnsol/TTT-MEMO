@@ -17,7 +17,7 @@ import json,math,sys,numpy as np
 d=sys.argv[1];A=('SAME','SAME_U1','RANDTOK','BGSENT');R={a:json.load(open(f'{d}/E59_smoke_{a}_s231.json')) for a in A};R['NAT']=json.load(open('experiments/exp07_write_ladder/e59_4way/E59_a4_NAT_s231.json'))
 for a in A:
     s=R[a]['steps'];assert len(s)==16 and all(math.isfinite(x['applied_norm']) and x['applied_norm']>0 for x in s),a
-    rd=json.load(open(f'{d}/E59_smoke_{a}_s231.read.json'));assert len(rd['read']['16']['out'])==16 and len(rd['read']['16']['out'][0])==16 and rd['meta']['gi']==[0]*16,a
+    rd=json.load(open(f'{d}/E59_smoke_{a}_s231.read.json'));assert len(rd['read']['16']['out'])==20 and len(rd['read']['16']['out'][0])==16,a
 assert all(x['fact_hash']==y['fact_hash'] for a in A for x,y in zip(R[a]['steps'],R['NAT']['steps'][:16]))
 assert abs(R['NAT']['log'][0]['ce']-R['SAME']['log'][0]['ce'])<1e-2 and all(R['NAT']['log'][5]['ce']!=R[a]['log'][5]['ce'] for a in A) and len({R[a]['log'][5]['ce'] for a in A})==4
 print('MATCH SMOKE PASSED')

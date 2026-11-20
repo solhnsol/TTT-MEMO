@@ -75,7 +75,7 @@ def run(a):
         assert ar in ARMS,ar;fn=out/f'E59_{a.tag}_{ar}_s{seed}.json'
         if fn.exists() and not a.rerun:lg('exists, reused:',fn);continue
         ref=None
-        if ar not in ('NAT','ISOORIG','BAND1024','MASK1024'):
+        if ar not in ('NAT','ISOORIG','BAND1024','MASK1024','SAME','SAME_U1','SAME_U2','SAME_U1U2','RANDTOK','BGSENT'):   # stream arms with the original rule (no rescaling) need no reference norms
             if a.ref_nats:rf=pathlib.Path(a.ref_nats.replace('{seed}',str(seed)));assert rf.exists(),('reference norms (the NATS run of this seed, E55 saved.json) missing',rf);ref=[e['update_norm'] for e in json.load(open(rf))['log']][:nch]       # FictionalQA: the applied per-chunk norms of the existing NATS run (job 1313)
             else:rf=ref_dir/f'E59_{a.tag}_NAT_s{seed}.json';assert rf.exists(),('reference norms (NAT of this seed) missing',rf);ref=[e['applied_norm'] for e in json.load(open(rf))['steps']][:nch]
             assert len(ref)>=nch
