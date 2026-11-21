@@ -4,7 +4,7 @@ import sys,json,numpy as np
 from pathlib import Path
 from scipy import stats
 X=Path(__file__).resolve().parents[2]/'experiments';E7=X/'exp07_write_ladder';Q=X/'exp09_qwen_ttt'
-EXPS=(16,32,64,128);MET=('margin','top1','rank')
+EXPS=tuple(int(x) for x in sys.argv[sys.argv.index('--exps')+1].split(',')) if '--exps' in sys.argv else (16,32,64,128);MET=('margin','top1','rank')
 def vec(S,m):
     x=np.asarray(S,float);g=np.asarray(m['gi'] if 'gi' in m else m['gold_idx']);f=np.asarray(m['kind'])=='fact';x=x[f];g=g[f];gold=x[np.arange(len(g)),g];w=x.copy();w[np.arange(len(g)),g]=-np.inf;gt=(x>gold[:,None]).sum(1)
     return np.array([(gold-w.max(1)).mean(),(gt==0).mean(),(1+gt).mean()])
@@ -30,6 +30,7 @@ DS={'e2e_syn':(range(231,239),('NAT','CHK','ISO','MASK1024'),e2e(str(E7/'e59_4wa
     'match':(range(231,239),('NAT','SAME','SAME_U1','RANDTOK','BGSENT'),lambda s,arm,e:e2e(str(E7/('e59_4way/E59_a4_NAT_s{s}.read.json' if arm=='NAT' else 'match/E59_match_{arm}_s{s}.read.json')))(s,arm,e)),
     'show_e2e':(range(231,239),('NAT','CHK','ISO','MASK1024','ALLHID','SHOWSAME','SHOWOTHER'),lambda s,arm,e:e2e(str(E7/('show/E59_show_{arm}_s{s}.read.json' if arm in ('ALLHID','SHOWSAME','SHOWOTHER') else 'e59_4way/E59_a4_{arm}_s{s}.read.json')))(s,arm,e)),
     'show_qwen':(range(221,229),('NAT','CHK','ISO','MASK1024','ALLHID','SHOWSAME','SHOWOTHER'),lambda s,arm,e:qwen('show' if arm in ('ALLHID','SHOWSAME','SHOWOTHER') else 'q4way')(s,arm,e)),
+    'fewrep_e2e':(range(231,239),('NAT','CHK','ISO','MASK1024'),e2e(str(E7/'fewrep/E59_fr_{arm}_s{s}.read.json'))),'fewrep_qwen':(range(221,229),('NAT','CHK','ISO','MASK1024'),qwen('fewrep')),
     'u12':(range(231,239),('NAT','SAME','SAME_U1','SAME_U2','SAME_U1U2'),e2e(str(E7/'u12/E59_u12_{arm}_s{s}.read.json')))}
 def ci(d):
     d=np.asarray(d,float);n=len(d);h=stats.t.ppf(.975,n-1)*d.std(ddof=1)/np.sqrt(n);m=d.mean();return m,m-h,m+h,int(max((d>0).sum(),(d<0).sum()))
@@ -56,5 +57,5 @@ def main():
                 t=res[e][mn];L.append(f'## exposure {e}  {mn}   W0 {fmt(t["W0"])}')
                 for a,r in t['arms'].items():L.append(f'  {a:11s} abs {fmt(r["abs"])} | vs W0 {fmt(r["vsW0"])}'+(f' | vs NAT {fmt(r["vsNAT"])}' if 'vsNAT' in r else ''))
         (out/f'reagg_{n}.txt').write_text('\n'.join(L)+'\n');print(n,'ok',flush=True)
-    json.dump(allr,open(out/('reagg_all.json' if len(only)==len(DS) else 'reagg_partial_'+'_'.join(only)+'.json'),'w'),indent=1)
+    json.dump(allr,open(out/('reagg_all.json' if len(only)==len(DS) and EXPS==(16,32,64,128) else 'reagg_partial_'+'_'.join(only)+'.json'),'w'),indent=1)
 if __name__=='__main__':main()
