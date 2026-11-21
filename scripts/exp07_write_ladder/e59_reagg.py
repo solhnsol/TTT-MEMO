@@ -28,6 +28,8 @@ DS={'e2e_syn':(range(231,239),('NAT','CHK','ISO','MASK1024'),e2e(str(E7/'e59_4wa
     'qwen_fq':(range(211,219),('NAT','CHK','ISO','BANDALL1024'),qwen('fq_qwen')),'e2e_fq':(range(211,219),('NAT','CHK','ISO','BAND1024'),fq),
     'olmo_syn':(range(251,259),('NAT','CHK','ISO','MASK1024'),qwen('../exp11_olmo3/q4way')),'olmo_syn_rev':(range(251,259),('NAT','CHK','ISO','MASK1024'),qwen('../exp11_olmo3/q4way',True)),
     'match':(range(231,239),('NAT','SAME','SAME_U1','RANDTOK','BGSENT'),lambda s,arm,e:e2e(str(E7/('e59_4way/E59_a4_NAT_s{s}.read.json' if arm=='NAT' else 'match/E59_match_{arm}_s{s}.read.json')))(s,arm,e)),
+    'show_e2e':(range(231,239),('NAT','CHK','ISO','MASK1024','ALLHID','SHOWSAME','SHOWOTHER'),lambda s,arm,e:e2e(str(E7/('show/E59_show_{arm}_s{s}.read.json' if arm in ('ALLHID','SHOWSAME','SHOWOTHER') else 'e59_4way/E59_a4_{arm}_s{s}.read.json')))(s,arm,e)),
+    'show_qwen':(range(221,229),('NAT','CHK','ISO','MASK1024','ALLHID','SHOWSAME','SHOWOTHER'),lambda s,arm,e:qwen('show' if arm in ('ALLHID','SHOWSAME','SHOWOTHER') else 'q4way')(s,arm,e)),
     'u12':(range(231,239),('NAT','SAME','SAME_U1','SAME_U2','SAME_U1U2'),e2e(str(E7/'u12/E59_u12_{arm}_s{s}.read.json')))}
 def ci(d):
     d=np.asarray(d,float);n=len(d);h=stats.t.ppf(.975,n-1)*d.std(ddof=1)/np.sqrt(n);m=d.mean();return m,m-h,m+h,int(max((d>0).sum(),(d<0).sum()))
