@@ -15,8 +15,8 @@ HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
 import e59_srv_core as K
 CH=1024;NS=262144
-ARMS=('NAT','NATF','CHK','CHKF','FACT','ISO','NATREF','ISOORIG','BAND1024','MASK1024','SAME','SAME_U1','SAME_U2','SAME_U1U2','RANDTOK','BGSENT','BOTH','OTHERONLY','RANDF','RANDC','SHOWSAME','SHOWOTHER','ALLHID')
-STREAM={'NAT':(False,False,False),'BAND1024':(False,False,False),'MASK1024':(False,False,False),'SAME':(False,False,False),'SAME_U1':(False,False,False),'SAME_U2':(False,False,False),'SAME_U1U2':(False,False,False),'RANDTOK':(False,False,False),'BGSENT':(False,False,False),'BOTH':(False,False,False),'OTHERONLY':(False,False,False),'RANDF':(False,False,False),'RANDC':(False,False,False),'SHOWSAME':(False,False,False),'SHOWOTHER':(False,False,False),'ALLHID':(False,False,False),'NATREF':(False,False,True),'NATF':(True,False,True),'CHK':(False,True,True),'CHKF':(True,True,True)}   # (fact-only loss, chunk alone, rescale to reference)
+ARMS=('NAT','NATF','CHK','CHKF','FACT','ISO','NATREF','ISOORIG','BAND1024','MASK1024','SAME','SAME_U1','SAME_U2','SAME_U1U2','RANDTOK','BGSENT','BOTH','OTHERONLY','RANDF','RANDC','SHOWSAME','SHOWOTHER','ALLHID','PARTNER')
+STREAM={'NAT':(False,False,False),'BAND1024':(False,False,False),'MASK1024':(False,False,False),'SAME':(False,False,False),'SAME_U1':(False,False,False),'SAME_U2':(False,False,False),'SAME_U1U2':(False,False,False),'RANDTOK':(False,False,False),'BGSENT':(False,False,False),'BOTH':(False,False,False),'OTHERONLY':(False,False,False),'RANDF':(False,False,False),'RANDC':(False,False,False),'SHOWSAME':(False,False,False),'SHOWOTHER':(False,False,False),'ALLHID':(False,False,False),'PARTNER':(False,False,False),'NATREF':(False,False,True),'NATF':(True,False,True),'CHK':(False,True,True),'CHKF':(True,True,True)}   # (fact-only loss, chunk alone, rescale to reference)
 class ChunkOnlyUV:
     """uv object of e55_core (E.UVARMS path): every window key hidden (1-D keep, index j = absolute position k*CH-WIN+j), the current chunk causal as always"""
     def __init__(self,WIN,log):self.WIN=WIN;self.log=log
@@ -61,7 +61,7 @@ def run(a):
         except Exception:U12=None
     if a.fq_worlds:import fq_run as FQR;FQR.install(a.fq_worlds);cell=f'fq{seed}'          # FictionalQA worlds (labels 211..218): same patches as fq_run.py (register_cell / build / build_items)
     ci=OR.register_cell(cell);ro=list(ci['read_apps']);assert ro==[16,32,64,128],ro
-    if a.reads:ro=[int(x) for x in a.reads.split(',')];assert ro in ([2,4,8],[16,32,64,128]),ro              # few-repetition reads (job 1335): the SAME 128-chunk world, train --smoke 8 chunks, read after 2 / 4 / 8 exposures
+    if a.reads:ro=[int(x) for x in a.reads.split(',')];assert ro in ([2,4,8],[16,32,64,128],[128],[16]),ro              # few-repetition reads (job 1335): the SAME 128-chunk world, train --smoke 8 chunks, read after 2 / 4 / 8 exposures
     ri=[ro[-1]]
     LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     enc,w,tf=R55.build(SP.synth_args(seed,cell),seed,read_apps=set(ro),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w))
@@ -71,19 +71,25 @@ def run(a):
     if a.reverse:        # reverse-question readout (e59_rev.py): same 16-candidate span margin, place -> person; weights only read
         import e59_rev as RV;items_r=RV.rev_items(w);raw_r=R55.rows_for(LD,rt,items_r);RG.check_rows(raw_r,len(items_r),G.NCAND);P_r=RV.rev_plan(P)['read']
         RR_s=RG.Reads(rd,raw_r,len(items_r),G.NCAND,P_r,out_tail,rt.base,ro,ri,log=lg);RR_i=RG.Reads(rd,raw_r,len(items_r),G.NCAND,P_r,out_tail,rt.base,ro,(),log=lg);lg(f'seed {seed}: reverse W0 read done')
+    RX={};itemsX={};PX=None
+    if a.cue:         # partner-cue reads (e59_partner.py): the question of fact A with the sentence of its partner B / non-partner C1 / C2 (last stream chunk) in front; same out-of-window read, weights only read
+        import e59_partner as PT,e59_rev as RV;from tokenizers import Tokenizer
+        tkz=Tokenizer.from_file(str(ROOT/'data/tokenizer/llama3/tokenizer.json'));pm=PT.perms(seed);PX=RV.rev_plan(P)['read'];ids_np=np.asarray(ids);lastc=nch-1
+        for nm_ in ('B','C1','C2'):
+            itx=PT.cue_items(items,w,ids_np,tkz,pm[nm_],lastc);rawx=R55.rows_for(LD,rt,itx);RG.check_rows(rawx,len(itx),G.NCAND);RX[nm_]=RG.Reads(rd,rawx,len(itx),G.NCAND,PX,out_tail,rt.base,ro,(),log=lg);itemsX[nm_]=itx;lg(f'seed {seed}: cue {nm_} W0 read done')
     sep=list(w['sep']);W=int(rt.cfg.model.sliding_window_size);ref_dir=pathlib.Path(a.ref_dir or a.out)
     fmasks=[K.target_mask(K.fact_spans(w['chunks'][k]['sents'])) for k in range(nch)];fhash=[K.ids_hash(K.fact_ids(w['chunks'][k])) for k in range(nch)]
     for ar in a.arms.split(','):
         assert ar in ARMS,ar;fn=out/f'E59_{a.tag}_{ar}_s{seed}.json'
         if fn.exists() and not a.rerun:lg('exists, reused:',fn);continue
         ref=None
-        if ar not in ('NAT','ISOORIG','BAND1024','MASK1024','SAME','SAME_U1','SAME_U2','SAME_U1U2','RANDTOK','BGSENT','BOTH','OTHERONLY','RANDF','RANDC','SHOWSAME','SHOWOTHER','ALLHID'):   # stream arms with the original rule (no rescaling) need no reference norms
+        if ar not in ('NAT','ISOORIG','BAND1024','MASK1024','SAME','SAME_U1','SAME_U2','SAME_U1U2','RANDTOK','BGSENT','BOTH','OTHERONLY','RANDF','RANDC','SHOWSAME','SHOWOTHER','ALLHID','PARTNER'):   # stream arms with the original rule (no rescaling) need no reference norms
             if a.ref_nats:rf=pathlib.Path(a.ref_nats.replace('{seed}',str(seed)));assert rf.exists(),('reference norms (the NATS run of this seed, E55 saved.json) missing',rf);ref=[e['update_norm'] for e in json.load(open(rf))['log']][:nch]       # FictionalQA: the applied per-chunk norms of the existing NATS run (job 1313)
             else:rf=ref_dir/f'E59_{a.tag}_NAT_s{seed}.json';assert rf.exists(),('reference norms (NAT of this seed) missing',rf);ref=[e['applied_norm'] for e in json.load(open(rf))['steps']][:nch]
             assert len(ref)>=nch
-        L=ISO.Iso55(rt,save_dir=out/'states'/f'E59_{a.tag}_{ar}_s{seed}',canary=can);T=tools(L,rt);st=dict(steps=[],sketch=[],path=0.0,W0=rt.base.inner_parameters());got={};gotr={};t0=time.monotonic();lg(f'== seed {seed} {ar}: {nch} rounds, reference norms {"original rule" if ref is None else "NAT applied norms"}')
+        L=ISO.Iso55(rt,save_dir=out/'states'/f'E59_{a.tag}_{ar}_s{seed}',canary=can);T=tools(L,rt);st=dict(steps=[],sketch=[],path=0.0,W0=rt.base.inner_parameters());got={};gotr={};gotx={n_:{} for n_ in RX};t0=time.monotonic();lg(f'== seed {seed} {ar}: {nch} rounds, reference norms {"original rule" if ref is None else "NAT applied norms"}')
         if ar in STREAM:
-            fonly,chunk_alone,resc=STREAM[ar];uv=ChunkOnlyUV(W,lg) if chunk_alone else (QR.SelMaskQ('ALLQ1024',{'band_ALLQ1024':np.asarray(1024),'all_ALLQ1024':np.asarray(1)},lg) if ar in ('BAND1024','MASK1024') else (U12.uv_for(ar,w['chunks'],lg) if ar in U12.ARMS else (__import__('e59_match').uv_for(ar,w['chunks'],seed,lg) if ar in ('RANDTOK','BGSENT') else (__import__('e59_hidearms').uv_for(ar,w['chunks'],seed,lg) if ar in ('BOTH','OTHERONLY','RANDF','RANDC','SHOWSAME','SHOWOTHER','ALLHID') else QR.SelMaskQ('NATQ',{},lg)))));cnt=[0];nllrec=[]     # MASK1024 (= BAND1024; name used from job 1321 on): band-1024 mask on every row, in ALL 32 layers (e55_core passes the same keep to prefix_masked and write_step), ORIGINAL write rule (no rescaling, as jobs 1297c / 1308 / 1313), K0 = 0
+            fonly,chunk_alone,resc=STREAM[ar];uv=ChunkOnlyUV(W,lg) if chunk_alone else (QR.SelMaskQ('ALLQ1024',{'band_ALLQ1024':np.asarray(1024),'all_ALLQ1024':np.asarray(1)},lg) if ar in ('BAND1024','MASK1024') else (U12.uv_for(ar,w['chunks'],lg) if ar in U12.ARMS else (__import__('e59_match').uv_for(ar,w['chunks'],seed,lg) if ar in ('RANDTOK','BGSENT') else (__import__('e59_hidearms').uv_for(ar,w['chunks'],seed,lg) if ar in ('BOTH','OTHERONLY','RANDF','RANDC','SHOWSAME','SHOWOTHER','ALLHID') else (__import__('e59_partner').uv_for(ar,w['chunks'],seed,lg) if ar=='PARTNER' else QR.SelMaskQ('NATQ',{},lg))))));cnt=[0];nllrec=[]     # MASK1024 (= BAND1024; name used from job 1321 on): band-1024 mask on every row, in ALL 32 layers (e55_core passes the same keep to prefix_masked and write_step), ORIGINAL write rule (no rescaling, as jobs 1297c / 1308 / 1313), K0 = 0
             @eqx.filter_jit
             def grad_fn(m,st_suf,c,pref_,kmask,wt):
                 def total(mm):
@@ -101,7 +107,9 @@ def run(a):
                 return newp,gn,coef,jnp.asarray(ce,jnp.float32)
             L.write_step=ws
             def partial(k,m,got=got,gotr=gotr):
-                h0=LD.reuse._hash_pytree(m.inner_parameters())[0];x=R_s.at(k+1,m);assert h0==LD.reuse._hash_pytree(m.inner_parameters())[0],'weights changed during the read';got[k+1]=x;gotr[k+1]=RR_s.at(k+1,m) if RR_s is not None else None;return {c_:'ok' for c_ in x}
+                h0=LD.reuse._hash_pytree(m.inner_parameters())[0];x=R_s.at(k+1,m);assert h0==LD.reuse._hash_pytree(m.inner_parameters())[0],'weights changed during the read';got[k+1]=x;gotr[k+1]=RR_s.at(k+1,m) if RR_s is not None else None
+                for nm_,Rx_ in RX.items():gotx[nm_][k+1]=Rx_.at(k+1,m)
+                return {c_:'ok' for c_ in x}
             r=L.run_stream(NM.ENGINE,1,ids,read_chunks=[a_-1 for a_ in ro],canary_chunks=[a_-1 for a_ in ro],nch=nch,tag=f'{ar}_s{seed}',log=lg,read_hook=partial,hook_chunks=[a_-1 for a_ in ro],chunks_meta=w['chunks'],uv=uv);r.pop('model',None);R_=R_s;RRx=RR_s
         else:
             m=rt.base;st_all=s3.clone_state(rt.state_all);r={'log':[],'reads':{}};eos=rt.eos;cw0=can(m) if can else None;packing=LD.packing
@@ -130,6 +138,8 @@ def run(a):
         rec=RG.make_records({ar:got},R_.W0,G.item_meta(items),P['read'],R_.idx,{'cell':cell,'seed':seed,'k':w['k'],'n':w['n'],'p':1,'bank':w['bank_kind'],'tag':a.tag,'complete':True,'place_len':w['place_len']})[ar];json.dump(rec,open(out/f'E59_{a.tag}_{ar}_s{seed}.read.json','w'))
         if a.reverse:
             recr=RG.make_records({ar:gotr},RRx.W0,G.item_meta(items_r),P_r,RRx.idx,{'cell':cell,'seed':seed,'k':w['k'],'n':w['n'],'p':1,'bank':w['bank_kind'],'tag':a.tag,'complete':True,'direction':'reverse (place -> person)','place_len':w['place_len']})[ar];json.dump(recr,open(out/f'E59_{a.tag}_{ar}_s{seed}.rev.read.json','w'))
+        for nm_,Rx_ in RX.items():
+            recx=RG.make_records({ar:gotx[nm_]},Rx_.W0,G.item_meta(itemsX[nm_]),PX,Rx_.idx,{'cell':cell,'seed':seed,'k':w['k'],'n':w['n'],'p':1,'bank':w['bank_kind'],'tag':a.tag,'complete':True,'direction':f'cue read, context sentence of {nm_}','place_len':w['place_len']})[ar];json.dump(recx,open(out/f'E59_{a.tag}_{ar}_s{seed}.cue_{nm_}.read.json','w'))
         np.save(out/f'E59_{a.tag}_{ar}_s{seed}.sketch.npy',np.stack(st['sketch']).astype(np.float32))
         r.update(arm=ar,seed=seed,steps=st['steps'],stream_sha=sha,sec=time.monotonic()-t0,reference='original rule' if ref is None else 'NAT applied norms',diverged=div,last8_ce=last8,finite=nf,canary_change_gen=can_ch,sketch_dim=T['nsk'],args=vars(a),code=os.popen('git rev-parse HEAD 2>/dev/null').read().strip())
         json.dump(r,open(fn,'w'),default=float);lg('wrote',fn,f'{time.monotonic()-t0:.0f}s','DIVERGED' if div else '');gc.collect();LD.jax.clear_caches()
@@ -139,7 +149,7 @@ def selftest():
     import ast;ast.parse(open(__file__).read());assert set(STREAM)<=set(ARMS)
     print('e59_srv_run selftest ok (syntax; arms',ARMS,')')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--reads',default='');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--u12',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--reads',default='');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--cue',action='store_true');ap.add_argument('--u12',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     run(a)
 if __name__=='__main__':main()
