@@ -65,6 +65,7 @@ def run(a):
     ri=[ro[-1]]
     LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     enc,w,tf=R55.build(SP.synth_args(seed,cell),seed,read_apps=set(ro),arms=['NAT']);S=R55.streams(w,enc);nch=a.smoke or w['n_chunks'];ids,sha=S['A'];assert sha==G.stream_sha(G.realize(w))
+    if a.scramble_u2:import e59_scr as SC;assert a.u12;ids=SC.scramble_u2(np.asarray(ids),w['chunks'],seed)          # job 1339: the tokens of every U2 sentence are permuted inside the sentence (structure destroyed, bag of words kept); the stream hash assertion above was checked on the original stream
     P=R.plan(w,enc);items=P['items'];tok=rt.tok;raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);out_tail=R55.out_tail_8192(LD,tok,rt.bos,R55.forbid_list(w))
     R_s=RG.Reads(rd,raw,len(items),G.NCAND,P['read'],out_tail,rt.base,ro,ri,log=lg);R_i=RG.Reads(rd,raw,len(items),G.NCAND,P['read'],out_tail,rt.base,ro,(),log=lg);lg(f'seed {seed}: W0 read done')
     RR_s=RR_i=items_r=None
@@ -149,7 +150,7 @@ def selftest():
     import ast;ast.parse(open(__file__).read());assert set(STREAM)<=set(ARMS)
     print('e59_srv_run selftest ok (syntax; arms',ARMS,')')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--reads',default='');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--cue',action='store_true');ap.add_argument('--u12',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--reads',default='');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--cue',action='store_true');ap.add_argument('--scramble-u2',action='store_true');ap.add_argument('--u12',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     run(a)
 if __name__=='__main__':main()
