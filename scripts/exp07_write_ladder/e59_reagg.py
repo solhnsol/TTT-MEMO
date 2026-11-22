@@ -31,6 +31,9 @@ DS={'e2e_syn':(range(231,239),('NAT','CHK','ISO','MASK1024'),e2e(str(E7/'e59_4wa
     'show_e2e':(range(231,239),('NAT','CHK','ISO','MASK1024','ALLHID','SHOWSAME','SHOWOTHER'),lambda s,arm,e:e2e(str(E7/('show/E59_show_{arm}_s{s}.read.json' if arm in ('ALLHID','SHOWSAME','SHOWOTHER') else 'e59_4way/E59_a4_{arm}_s{s}.read.json')))(s,arm,e)),
     'show_qwen':(range(221,229),('NAT','CHK','ISO','MASK1024','ALLHID','SHOWSAME','SHOWOTHER'),lambda s,arm,e:qwen('show' if arm in ('ALLHID','SHOWSAME','SHOWOTHER') else 'q4way')(s,arm,e)),
     'fewrep_e2e':(range(231,239),('NAT','CHK','ISO','MASK1024'),e2e(str(E7/'fewrep/E59_fr_{arm}_s{s}.read.json'))),'fewrep_qwen':(range(221,229),('NAT','CHK','ISO','MASK1024'),qwen('fewrep')),
+    'ss_qwen_syn':(range(221,229),('NAT','SAME','OTHERONLY','BOTH','RANDF','CHK','ISO','MASK1024'),lambda s,arm,e:qwen('same_spec' if arm in ('SAME','OTHERONLY','BOTH','RANDF') else 'q4way')(s,arm,e)),
+    'ss_qwen_fq':(range(211,219),('NAT','SAME','OTHERONLY','BOTH','RANDC','CHK','ISO','BANDALL1024'),lambda s,arm,e:qwen('same_spec_fq' if arm in ('SAME','OTHERONLY','BOTH','RANDC') else 'fq_qwen')(s,arm,e)),
+    'ss_e2e_fq':(range(211,219),('NAT','SAME','OTHERONLY','BOTH','RANDC','CHK','ISO','BAND1024'),lambda s,arm,e:fq(s,arm,e) if arm in ('NAT','CHK','ISO','BAND1024') else e2e(str(E7/'same_spec_fq/E59_ss_{arm}_s{s}.read.json'))(s,arm,e)),
     'u12':(range(231,239),('NAT','SAME','SAME_U1','SAME_U2','SAME_U1U2'),e2e(str(E7/'u12/E59_u12_{arm}_s{s}.read.json')))}
 def ci(d):
     d=np.asarray(d,float);n=len(d);h=stats.t.ppf(.975,n-1)*d.std(ddof=1)/np.sqrt(n);m=d.mean();return m,m-h,m+h,int(max((d>0).sum(),(d<0).sum()))
