@@ -66,6 +66,20 @@ for s in SEEDS:
         for (A_,B_),v in Gv.items():put('G',f'{A_}key_{B_}err',float(v))
         c0,x=pair;put('G',f'{x}-{c0}_total',float(Gv[(x,x)]-Gv[(c0,c0)]));put('G',f'{x}-{c0}_key_effect(err=C0)',float(Gv[(x,c0)]-Gv[(c0,c0)]));put('G',f'{x}-{c0}_err_effect(key={x})',float(Gv[(x,x)]-Gv[(x,c0)]))
         put('G',f'{x}-{c0}_err_effect(key=C0)',float(Gv[(c0,x)]-Gv[(c0,c0)]));put('G',f'{x}-{c0}_key_effect(err={x})',float(Gv[(x,x)]-Gv[(c0,x)]))
+    for pair in (('C0','SAMEVIS'),('C0','NATVIS')):    # (G-i) with the ERROR SIZE restored to the reference (C0) value per position: direction from B, size |delta| of C0 (size-corrected values)
+        if not all(c in conds for c in pair):continue
+        Gs={};cum={}
+        for A_ in pair:
+            for B_ in pair:
+                tot=[]
+                for k in chunks:
+                    X2K=z[f'{A_}|{k}|X2K'][:,L7,:];DUb=du(z[f'{B_}|{k}|D16']);sc=z[f'C0|{k}|DN'][:,L7]/(z[f'{B_}|{k}|DN'][:,L7]+1e-30);tot.append((X2K*DUb*sc[:,None]).sum(0))
+                Gs[(A_,B_)]=np.mean(tot,0).mean()
+                if A_==pair[1] and B_==pair[1] or (A_==pair[0] and B_==pair[0]):cum[(A_,B_)]=np.cumsum(np.mean(tot,1))
+        c0,x=pair
+        for (A_,B_),v in Gs.items():put('G',f'SIZE-RESTORED {A_}key_{B_}err',float(v))
+        put('G',f'SIZE-RESTORED {x}-{c0}_total',float(Gs[(x,x)]-Gs[(c0,c0)]));put('G',f'SIZE-RESTORED {x}-{c0}_key_effect(error direction=C0)',float(Gs[(x,c0)]-Gs[(c0,c0)]));put('G',f'SIZE-RESTORED {x}-{c0}_direction_effect(key={x})',float(Gs[(x,x)]-Gs[(x,c0)]))
+        put('G',f'CUMULATIVE over the {len(chunks)} measured chunks, SIZE-RESTORED, {x}-{c0} (last chunk)',float(cum[(x,x)][-1]-cum[(c0,c0)][-1]))
 print(f'KEY-VALUE DECOMPOSITION job 1344k, seeds {SEEDS} (n={n}); layer 8 (index 7), w2, first answer token; per-seed means then mean [95% t] same-direction seeds')
 V=np.asarray(VAL);print(f'VALIDATION sum_p x(x)delta vs autodiff: max over layers of the relative Frobenius error, median over (cond, chunk, seed): w1 {np.median(V[:,0]):.2e} w2 {np.median(V[:,1]):.2e} w3 {np.median(V[:,2]):.2e} | max w1 {V[:,0].max():.2e} w2 {V[:,1].max():.2e} w3 {V[:,2].max():.2e} | global gradient norm {np.mean(GN):.3f} [{np.min(GN):.2f},{np.max(GN):.2f}], clip coefficient {np.mean(CF):.3f} (share of chunks with coef<1: {np.mean(np.asarray(CF)<1):.2f})')
 conds=sorted({c for c,_ in R if c!='G'},key=lambda c:['C0','SAMEVIS','NATVIS','U1vis','U2vis'].index(c))
@@ -74,10 +88,16 @@ for nm in names:
     print(f'-- {nm}');base=np.asarray(R[('C0',nm)])
     for c in conds:
         v=np.asarray(R[(c,nm)]);print(f'   {c:8s} level {ci(v)}'+('' if c=='C0' else f' | {c} - C0 {ci(v-base)}'))
+print('== (F) HEADLINE: size-corrected residual (keys and answer direction as measured, error size restored to the C0 value): actual attenuation ratio of |m| (geometric, per fact then per seed) | EXPECTED from the error size alone | RESIDUAL after the size correction = key match x error direction')
+for c in conds:
+    if c=='C0':continue
+    ex=np.asarray(R[(c,'F_dlogdn')]);ac=np.asarray(R[(c,'F_dlogm')]);kk=np.asarray(R[(c,'F_dlogxk')]);dd=np.asarray(R[(c,'F_dlogcosd')])
+    print(f'   {c:8s} actual x{np.exp(ac.mean()):6.3f} (dlog {ci(ac)}) | expected from size x{np.exp(ex.mean()):6.3f} (dlog {ci(ex)}) | residual x{np.exp((kk+dd).mean()):6.3f} (dlog {ci(kk+dd)}): key-match part dlog {ci(kk)} | error-direction part dlog {ci(dd)}')
+print('   reading: residual ~ 0 (dlog ~ 0): shadowing (the size of the error explains it); residual in the key-match part: two learning paths; residual in the error-direction part: candidate preference')
 print('-- (F) change vs C0 of log|m_p| and its parts (seed means over facts with the same sign of m; nflip = facts excluded per seed, mean)')
 for c in conds:
     if c=='C0':continue
     print(f'   {c:8s} nflip {np.mean(R[(c,"F_nflip")]):.2f} | dlog|m| {ci(R[(c,"F_dlogm")])} = dlog|delta| {ci(R[(c,"F_dlogdn")])} + dlog|cos(delta,u)| {ci(R[(c,"F_dlogcosd")])} + dlog|x2.k| {ci(R[(c,"F_dlogxk")])}  [dlog|x2.k| = dlog|x2| {ci(R[(c,"F_dlogxn")])} + dlog|cos(x2,k)| {ci(R[(c,"F_dlogcosx")])}] | ratio of mean |m| {ci(R[(c,"F_ratio_mean_absm")])}')
-print('-- (G-i) key (A) / error (B) swap, sum over all positions of (u_f . delta^B)(x2^A . k_f), mean over chunks and facts')
+print('-- (G-i) key (A) / error (B) swap, sum over all positions of (u_f . delta^B)(x2^A . k_f), mean over chunks and facts. CONTROL CELL: C0 error + SAMEVIS key = the error size is the reference value, only the key changed; SIZE-RESTORED rows: error direction from B, size from C0')
 for (c,nm),v in sorted(R.items()):
     if c=='G':print(f'   {nm:44s} {ci(v)}')
