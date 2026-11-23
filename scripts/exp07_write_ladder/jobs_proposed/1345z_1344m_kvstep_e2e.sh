@@ -1,5 +1,5 @@
 #!/bin/bash
-# JOB 1344m = ONE-STEP KEY / ERROR SWAP (G-ii) AND MATCHED READS (H) of the key-value decomposition (spec v2; code e59_kvstep.py + e59_kvstep_analyze.py (new); NOT QUEUED: Hans decides after the final 1344k result). U12 world seeds 231..238, chunks 16..127, conditions C0 / SAMEVIS / NATVIS streamed in turn; at every measured chunk 28 combinations (3 real autodiff steps, G[A,B] swaps incl. NATVIS, SIZE-RESTORED, COMMON-KEY-restored, POSITION SPLIT own / other / rest) are applied as ONE step to W0 with the original rule and read (out-of-window margin, neutral tail, 16 facts), and H: weights W0 / W_C0 / W_SAMEVIS / W_NATVIS x read contexts neutral / same-fact prefix (answer hidden by attention) / other-fact prefix. Needs the read keys of job 1344b (kv1344k/kv_s<seed>_keys.npy). GPU est. ~4 h (8 seeds x ~30 min: 3 streams, 8 chunks x (28 reads + 3 x 12 H reads); UNMEASURED); host RAM ~20 GB per seed. Smoke gate: seed 231, chunk 16 only. EXPLORATORY.
+# JOB 1344m = ONE-STEP KEY / ERROR SWAP (G-ii) AND MATCHED READS (H) of the key-value decomposition (spec v2; code e59_kvstep.py + e59_kvstep_analyze.py (new); NOT QUEUED: Hans decides after the final 1344k result). U12 world seeds 231..238, chunks 16..127, conditions C0 / SAMEVIS / NATVIS streamed in turn; at every measured chunk 28 combinations (3 real autodiff steps, G[A,B] swaps incl. NATVIS, SIZE-RESTORED, COMMON-KEY-restored, POSITION SPLIT own / other / rest) are applied as ONE step to W0 with the original rule and read (out-of-window margin, neutral tail, 16 facts), and H: weights W0 / W_C0 / W_SAMEVIS / W_NATVIS x read contexts neutral / same-fact prefix (answer hidden by attention) / other-fact prefix. Needs the read keys of job 1344b (kv1344k/kv_s<seed>_keys.npy). GPU est. ~6 h with the 4 measured chunks 16, 48, 80, 112 of the full-run command (8 seeds x ~45 min: 3 streams + 4 chunks x ~8 min of reads, 28 combinations + H; read time measured in the E62 smoke: ~10-12 s per 320 rows; the first estimate of ~4 h was wrong, 8 chunks would be ~11.6 h); host RAM ~20 GB per seed. Smoke gate: seed 231, chunk 16 only. EXPLORATORY.
 set -eo pipefail
 export PYTHONUNBUFFERED=1
 PY=$(realpath -s "$PY")
@@ -26,7 +26,7 @@ PYE
 rm -rf $O/smoke/states
 for s in 231 232 233 234 235 236 237 238; do
   set +e
-  $PY $D/e59_kvstep.py --seed $s --out $O --keys $K/kv_s${s}_keys.npy
+  $PY $D/e59_kvstep.py --seed $s --out $O --keys $K/kv_s${s}_keys.npy --chunks 16,48,80,112
   echo "RUN kvstep seed $s rc=$?"
   rm -rf $O/states/s${s}_*
   set -e
