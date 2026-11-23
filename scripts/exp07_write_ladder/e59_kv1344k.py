@@ -6,7 +6,7 @@
   meta json: clip-free gradient norms per layer and matrix, global norm, clip coefficient, validation errors, the answer positions of every fact, key norms, the candidate first tokens.
 Keys (neutral read prompt, W0): the same 8192-token neutral tail and the gold rows of the out-of-window read (Reader55 / packing.Packed with 1 chunk per call), forward only. Unchanged weights: ws returns the stream weights unchanged (as job 1340 / 1344).
   python3 e59_kv1344k.py --seed 231 --out O [--chunks 16,32,...] [--nch N] [--conds C0,SAMEVIS,...]"""
-import sys,json,time,pathlib,argparse
+import sys,os,json,time,pathlib,argparse
 import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
@@ -24,8 +24,12 @@ def run(a):
     assert all(items[i]['kind']=='fact' and items[i]['fact']==i for i in range(NREAD))
     gold_rows=[raw[i*G.NCAND+items[i]['gold_idx']] for i in range(NREAD)];tok1=np.array([r[0][r[1][0]+1] for r in gold_rows],np.int64);alen=[int(r[1][1]-r[1][0]) for r in gold_rows];NJ=min(3,max(alen))
     # ---- read keys: neutral read prompt, W0 fp32, forward only, probe forward (1 packed chunk per call)
-    t0=time.monotonic();keys=None
+    t0=time.monotonic();keys=None;kf=out/f'kv_s{seed}_keys.npy'
+    if os.environ.get('E59_CPU_TEST'):
+        _cur=jax.nn.dot_product_attention;jax.nn.dot_product_attention=lambda *a_,**k_:_cur(*a_,**dict(k_,implementation='xla'))       # CPU-only validation run: no cuDNN attention
+    if kf.exists():keys=np.load(kf);NJ=keys.shape[1]
     with rt32.mesh,jax.default_matmul_precision('highest'):
+      if keys is None:
         T_=LD._TailCtx(rt32,list(out_tail));Pk=LD.packing.Packed(T_,gold_rows,GP=1);m32=rd.to_fp32(rt.base);mp32=KP.install(m32,'fwd');st=LD.packing._clone(rt32.state_suffix)
         for j in range(len(out_tail)//1024):st,_=rt32.chunk_logp(m32,st,rt32.chunk(T_._tail_seq,j),T_._tail_pref[j*1024:(j+1)*1024])
         for c in range(Pk.nchunk):
