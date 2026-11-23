@@ -50,6 +50,13 @@ def finalize(L,T,m,newp,ref,st,k):
     st['sketch'].append(np.asarray(sk,np.float32));st['path']+=un
     st['steps'].append(dict(k=k,raw_norm=float(raw),ref_norm=None if ref is None else float(ref),ratio=None if ref is None else float(raw/ref),flag=flag,applied_norm=float(un),norm_rel_err=None if ref is None else float(abs(un-ref)/ref),net_displacement=dis,path_length=float(st['path']),occupancy={p:float(v) for p,v in zip(T['paths'],sq/max(sq.sum(),1e-300))}))
     return newp
+def make_sgd(L,s3,lr,clip):
+    """job 1341: the inner SGD rule with another step size / clip than the checkpoint config (same formula as e55_iso.sgd_apply): p <- p - lr * mult * min(1, clip / ||g||) * g"""
+    import jax,jax.numpy as jnp;optax=s3.optax
+    def sgd_apply(m,st_all,g):
+        gn=optax.global_norm(g);coef=jnp.where(gn<clip,1.0,clip/jnp.maximum(gn,1e-30));s=lr*m.get_ilr_multiplier(st_all.get(m.step_index))
+        return jax.tree.map(lambda p,x:(p+(-s*coef*x).astype(p.dtype)).astype(p.dtype),m.inner_parameters(),g),gn,coef
+    return sgd_apply
 def run(a):
     import jax,jax.numpy as jnp,equinox as eqx
     out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True)
@@ -88,7 +95,9 @@ def run(a):
             if a.ref_nats:rf=pathlib.Path(a.ref_nats.replace('{seed}',str(seed)));assert rf.exists(),('reference norms (the NATS run of this seed, E55 saved.json) missing',rf);ref=[e['update_norm'] for e in json.load(open(rf))['log']][:nch]       # FictionalQA: the applied per-chunk norms of the existing NATS run (job 1313)
             else:rf=ref_dir/f'E59_{a.tag}_NAT_s{seed}.json';assert rf.exists(),('reference norms (NAT of this seed) missing',rf);ref=[e['applied_norm'] for e in json.load(open(rf))['steps']][:nch]
             assert len(ref)>=nch
-        L=ISO.Iso55(rt,save_dir=out/'states'/f'E59_{a.tag}_{ar}_s{seed}',canary=can);T=tools(L,rt);st=dict(steps=[],sketch=[],path=0.0,W0=rt.base.inner_parameters());got={};gotr={};gotx={n_:{} for n_ in RX};t0=time.monotonic();lg(f'== seed {seed} {ar}: {nch} rounds, reference norms {"original rule" if ref is None else "NAT applied norms"}')
+        L=ISO.Iso55(rt,save_dir=out/'states'/f'E59_{a.tag}_{ar}_s{seed}',canary=can);T=tools(L,rt)
+        if a.lr or a.clip:L.sgd_apply=make_sgd(L,s3,a.lr or float(getattr(L,'lr',1.0)),a.clip or float(getattr(L,'clip',1.0)));lg(f'  inner rule override: lr {a.lr or getattr(L,"lr",1.0)}, clip {a.clip or getattr(L,"clip",1.0)}')
+        st=dict(steps=[],sketch=[],path=0.0,W0=rt.base.inner_parameters());got={};gotr={};gotx={n_:{} for n_ in RX};t0=time.monotonic();lg(f'== seed {seed} {ar}: {nch} rounds, reference norms {"original rule" if ref is None else "NAT applied norms"}')
         if ar in STREAM:
             fonly,chunk_alone,resc=STREAM[ar];uv=ChunkOnlyUV(W,lg) if chunk_alone else (QR.SelMaskQ('ALLQ1024',{'band_ALLQ1024':np.asarray(1024),'all_ALLQ1024':np.asarray(1)},lg) if ar in ('BAND1024','MASK1024') else (U12.uv_for(ar,w['chunks'],lg) if ar in U12.ARMS else (__import__('e59_match').uv_for(ar,w['chunks'],seed,lg) if ar in ('RANDTOK','BGSENT') else (__import__('e59_hidearms').uv_for(ar,w['chunks'],seed,lg) if ar in ('BOTH','OTHERONLY','RANDF','RANDC','SHOWSAME','SHOWOTHER','ALLHID') else (__import__('e59_partner').uv_for(ar,w['chunks'],seed,lg) if ar=='PARTNER' else QR.SelMaskQ('NATQ',{},lg))))));cnt=[0];nllrec=[]     # MASK1024 (= BAND1024; name used from job 1321 on): band-1024 mask on every row, in ALL 32 layers (e55_core passes the same keep to prefix_masked and write_step), ORIGINAL write rule (no rescaling, as jobs 1297c / 1308 / 1313), K0 = 0
             @eqx.filter_jit
@@ -150,7 +159,7 @@ def selftest():
     import ast;ast.parse(open(__file__).read());assert set(STREAM)<=set(ARMS)
     print('e59_srv_run selftest ok (syntax; arms',ARMS,')')
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--reads',default='');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--cue',action='store_true');ap.add_argument('--scramble-u2',action='store_true');ap.add_argument('--u12',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int);ap.add_argument('--out');ap.add_argument('--arms',default='NAT');ap.add_argument('--ref-dir',default='');ap.add_argument('--tag',default='e59');ap.add_argument('--reads',default='');ap.add_argument('--smoke',type=int,default=0);ap.add_argument('--rerun',action='store_true');ap.add_argument('--reverse',action='store_true');ap.add_argument('--cue',action='store_true');ap.add_argument('--scramble-u2',action='store_true');ap.add_argument('--lr',type=float,default=0.0);ap.add_argument('--clip',type=float,default=0.0);ap.add_argument('--u12',action='store_true');ap.add_argument('--fq-worlds',default='');ap.add_argument('--ref-nats',default='');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest();return
     run(a)
 if __name__=='__main__':main()
