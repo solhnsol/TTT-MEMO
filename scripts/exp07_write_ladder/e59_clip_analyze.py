@@ -8,10 +8,12 @@ E7=RA.E7;S=list(range(231,239));n=len(S);t=stats.t.ppf(.975,n-1);EXP=int(sys.arg
 def rd(rule,arm,s):
     d,tag=(('clip_off','cl') if rule=='const' else ('u12','u12'));r=json.load(open(E7/f'{d}/E59_{tag}_{arm}_s{s}.read.json'));return RA.vec(r['read'][str(EXP)]['out'],r['meta']),RA.vec(r['W0']['out'],r['meta'])
 def ci(d):d=np.asarray(d);m=d.mean();h=t*d.std(ddof=1)/np.sqrt(n);return f'{m:7.3f} [{m-h:7.3f},{m+h:7.3f}] {int(max((d>0).sum(),(d<0).sum()))}/{n}'
-arms=[a for a in ('SAME','SAME_U1','SAME_U2','SAME_U1U2') if (E7/f'clip_off/E59_cl_{a}_s231.read.json').exists()]
+arms=[a for a in ('NAT','SAME','SAME_U1','SAME_U2','SAME_U1U2') if (E7/f'clip_off/E59_cl_{a}_s231.read.json').exists()]
 for mi,mn in enumerate(RA.MET):
     V={r_:{a:np.array([rd(r_,a,s)[0][mi] for s in S]) for a in arms} for r_ in ('orig','const')};W0=np.array([rd('orig','SAME',s)[1][mi] for s in S])
     print(f'[{mn}] exposure {EXP}; W0 {W0.mean():.3f}; means original',{a:round(float(V['orig'][a].mean()),3) for a in arms},'constant step',{a:round(float(V['const'][a].mean()),3) for a in arms})
+    if 'NAT' in arms:
+        for r_ in ('orig','const'):print(f'  {r_:6s} same-fact share  SAME - NAT {ci(V[r_]["SAME"]-V[r_]["NAT"])} | other-fact share SAME_U1U2 - SAME {ci(V[r_]["SAME_U1U2"]-V[r_]["SAME"])}')
     for r_ in ('orig','const'):
         print(f'  {r_:6s} gain over W0: '+'  '.join(f'{a} {ci(V[r_][a]-W0)}' for a in arms))
     g_o=V['orig']['SAME_U1U2']-V['orig']['SAME'];g_c=V['const']['SAME_U1U2']-V['const']['SAME'];print(f'  G = SAME_U1U2 - SAME: original {ci(g_o)} | constant step {ci(g_c)} | G_orig - G_const {ci(g_o-g_c)}')

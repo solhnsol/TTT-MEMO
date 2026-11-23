@@ -6,6 +6,14 @@ HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
 CH=1024;NS=262144;NREAD=16
 CHUNKS=(16,32,48,64,80,96,112,127)
+COND_NEW={'intact':{'C0':'SAME_U1U2','SAMEVIS':('ha','OTHERONLY'),'NATVIS':('nat','NAT')}}      # job 1344: the same-fact sentences VISIBLE while every other fact is hidden (e59_hidearms OTHERONLY: hides the earlier sentences of all other facts, the same fact stays visible) and no mask at all (NAT: same fact and all other facts visible)
+def mk_uv(spec,w,seed,lg):
+    import e59_u12 as U
+    if isinstance(spec,str):return U.uv_for(spec,w['chunks'],lg)
+    kind,arm=spec
+    if kind=='ha':import e59_hidearms as H;return H.uv_for(arm,w['chunks'],seed,lg)
+    if kind=='nat':import e57_qband_run as QR;return QR.SelMaskQ('NATQ',{},lg)
+    raise KeyError(spec)
 COND={'intact':{'C0':'SAME_U1U2','U1vis':'SAME_U2','U2vis':'SAME_U1','ALLVIS':'SAME'},'scr':{'C0':'SAME_U1U2','U2vis':'SAME_U1'}}
 def token_weights(ap_chunk,valid):
     """chunk-position -> NLL-index weights (index = target position = token position - 1): answer (second entity), first entity, frame tokens of the U1 sentences; each normalised to sum 1; all = valid mask / sum"""
@@ -35,7 +43,11 @@ def selftest(seed=231):
     n_u1=sum(1 for d in ap[16] if d['fact']<NREAD);assert n_u1==16,n_u1
     import e59_hidearms as H
     for world,cs in COND.items():
-        for cn,arm in cs.items():U.uv_for(arm,w['chunks'],lambda *x:None)
+        for cn,arm in cs.items():
+            if isinstance(arm,str) or arm[0]=='ha':mk_uv(arm,w,seed,lambda *x:None)
+    for world,cs in COND_NEW.items():
+        for cn,arm in cs.items():
+            if isinstance(arm,str) or arm[0]=='ha':mk_uv(arm,w,seed,lambda *x:None)
     print('e59_shadow selftest ok: token weights for the answer / first-entity / frame / all objectives (U1 sentences only), conditions',COND)
 def run(a):
     import jax,jax.numpy as jnp,equinox as eqx
@@ -58,7 +70,8 @@ def run(a):
             lp=jax.nn.log_softmax(o.logits.astype(jnp.float32),axis=-1);nll=-jnp.take_along_axis(lp,c.target_tokens[:,None],axis=-1)[:,0];return jnp.sum(wt*nll),nll
         (_l,nll),g=eqx.filter_value_and_grad(total,has_aux=True)(m);return g.inner_parameters(),nll
     res=dict(seed=seed,chunks=chunks,rows=[],args=vars(a));SK={};t_all=time.monotonic()
-    for world,cs in COND.items():
+    CONDS=COND_NEW if a.set=='new' else COND
+    for world,cs in CONDS.items():
         if a.worlds and world not in a.worlds.split(','):continue
         ids=ids0 if world=='intact' else SC.scramble_u2(ids0,w['chunks'],seed);L=ISO.Iso55(rt,save_dir=out/'states'/f's{seed}_{world}',canary=can);L.rec_cache={}
         for cn,arm in cs.items():
@@ -72,11 +85,11 @@ def run(a):
                     for nm in ('ans','first','frame','all'):row['nll_'+nm]=float((nll*W[nm]).sum())
                     SK[(world,cn,k)]=np.stack([gs['ans'],gs['frame'],gs['all']]).astype(np.float32);res['rows'].append(row)
                 return m.inner_parameters(),jnp.asarray(0.0,jnp.float32),jnp.asarray(1.0,jnp.float32),jnp.asarray(0.0,jnp.float32)
-            L.write_step=ws;uv=U.uv_for(arm,w['chunks'],lg);t0=time.monotonic()
+            L.write_step=ws;uv=mk_uv(arm,w,seed,lg);t0=time.monotonic()
             r=L.run_stream(NM.ENGINE,1,ids,read_chunks=[],canary_chunks=[],nch=(a.nch or nch),tag=f'shadow_{world}_{cn}',log=lg,read_hook=None,hook_chunks=[],chunks_meta=w['chunks'],uv=uv);r.pop('model',None);lg(f'seed {seed} {world} {cn} ({arm}): {a.nch or nch} chunks in {time.monotonic()-t0:.0f}s')
         L.rec_cache=None;del L
     json.dump(res,open(out/f'shadow_s{seed}.json','w'));keys=sorted(SK);np.savez(out/f'shadow_s{seed}_sketch.npz',keys=np.array([f'{a_}|{b_}|{c_}' for a_,b_,c_ in keys]),sk=np.stack([SK[k] for k in keys]));lg('wrote',out/f'shadow_s{seed}.json',len(res['rows']),'rows',f'{time.monotonic()-t_all:.0f}s')
 if __name__=='__main__':
-    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int,default=231);ap.add_argument('--out');ap.add_argument('--chunks',default=','.join(map(str,CHUNKS)));ap.add_argument('--worlds',default='');ap.add_argument('--nch',type=int,default=0);ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--seed',type=int,default=231);ap.add_argument('--out');ap.add_argument('--chunks',default=','.join(map(str,CHUNKS)));ap.add_argument('--worlds',default='');ap.add_argument('--nch',type=int,default=0);ap.add_argument('--set',default='old');ap.add_argument('--selftest',action='store_true');a=ap.parse_args()
     if a.selftest:selftest(a.seed)
     else:run(a)
