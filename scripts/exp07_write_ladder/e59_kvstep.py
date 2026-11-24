@@ -88,14 +88,16 @@ def run(a):
     # H contexts: prefix sentences with hidden answer tokens (built per measured chunk)
     gold_tok=[np.asarray(raw[i*G.NCAND+items[i]['gold_idx']][0][raw[i*G.NCAND+items[i]['gold_idx']][1][0]+1:raw[i*G.NCAND+items[i]['gold_idx']][1][1]+1]) for i in range(NREAD)]
     def prefix_rows(k,mode):
-        """rows of the 16 facts (16 candidates each) with the planted prefix sentence; -> raw rows, rowmask"""
-        its=[];hid=[]
+        """rows of the 16 facts (16 candidates each) with the prefix sentence; -> raw rows, rowmask. The hidden answer tokens are found as the token subsequence of the gold answer in the row; if the answer is tokenised differently inside that sentence (punctuation attached) the sentence of the SAME fact from the next candidate chunk is used (same mode: chunks k-1, k-2, k-3, k+1; other mode: k, k-1, k+1), and the chosen chunk is recorded in PFXCHUNK"""
+        its=[];hid=[];ch_used={}
         for f in range(NREAD):
-            if mode=='same':ck=k-1;fs=f
-            else:ck=k;fs=(f+1)%NREAD
-            sn=[x for x in w['chunks'][ck]['sents'] if int(x['fact'])==fs][0];toks=ids0[ck*CH+int(sn['start']):ck*CH+int(sn['end'])];txt=tkz.decode(toks.tolist())
-            its.append(dict(prefix=txt+'\n'+items[f]['prefix'],cands=items[f]['cands']))
-        rr=R55.rows_for(LD,rt,its);rm={}
+            fs=f if mode=='same' else (f+1)%NREAD;cands_ck=[k-1,k-2,k-3,k+1] if mode=='same' else [k,k-1,k+1]
+            for ck in cands_ck:
+                sn=[x for x in w['chunks'][ck]['sents'] if int(x['fact'])==fs][0];toks=ids0[ck*CH+int(sn['start']):ck*CH+int(sn['end'])];txt=tkz.decode(toks.tolist())
+                rr1=R55.rows_for(LD,rt,[dict(prefix=txt+'\n'+items[f]['prefix'],cands=items[f]['cands'])])
+                if all(len(find_sub(ids,gold_tok[fs],a_))==1 for ids,(a_,b_) in rr1):its.append(dict(prefix=txt+'\n'+items[f]['prefix'],cands=items[f]['cands']));ch_used[f]=ck;break
+            else:raise AssertionError(('no prefix sentence with a unique hidden answer',f,mode,k))
+        rr=R55.rows_for(LD,rt,its);rm={};PFX.setdefault((k,mode),ch_used)
         for f in range(NREAD):
             fs=f if mode=='same' else (f+1)%NREAD
             for c in range(G.NCAND):
@@ -147,7 +149,7 @@ def run(a):
                 if f'.{nm}.' in s+'.' or f'{nm}.weight' in s:rep=jnp.asarray(arrs[nm],leaf.dtype)
             new.append(rep if rep is not None else leaf)
         return jax.tree_util.tree_unflatten(treedef,new)
-    RES=dict(seed=seed,chunks=chunks,W0_margin=W0m.tolist(),rows=[],H=[],validation=[],args=vars(a));CMB=[c for c in combos()];STORE={}                  # STORE[(cond,k)] = dict arrays; GRAD[(cond,k)] = dict(w1,w2,w3 np arrays, tree)
+    PFX={};RES=dict(seed=seed,chunks=chunks,W0_margin=W0m.tolist(),rows=[],H=[],validation=[],args=vars(a));CMB=[c for c in combos()];STORE={}                  # STORE[(cond,k)] = dict arrays; GRAD[(cond,k)] = dict(w1,w2,w3 np arrays, tree)
     GRAD={};cond_list=list(CONDS)
     for cn in cond_list:
         arm=CONDS[cn];cnt=[0];L=ISO.Iso55(rt,save_dir=out/'states'/f's{seed}_{cn}',canary=can);L.rec_cache={}
@@ -188,7 +190,7 @@ def run(a):
             return m.inner_parameters(),jnp.asarray(0.0,jnp.float32),jnp.asarray(1.0,jnp.float32),jnp.asarray(0.0,jnp.float32)
         L.write_step=ws;uv=SH.mk_uv(arm,w,seed,lg);t0=time.monotonic();r=L.run_stream(NM.ENGINE,1,ids0,read_chunks=[],canary_chunks=[],nch=(a.nch or nch),tag=f'kvstep_{cn}',log=lg,read_hook=None,hook_chunks=[],chunks_meta=w['chunks'],uv=uv);r.pop('model',None);lg(f'seed {seed} {cn} ({arm}): stream done in {time.monotonic()-t0:.0f}s')
         L.rec_cache=None;del L
-    json.dump(RES,open(out/f'kvstep_s{seed}.json','w'),default=float);lg('wrote',out/f'kvstep_s{seed}.json',f'{time.monotonic()-t_all:.0f}s')
+    RES['prefix_chunks']={f'{k}|{m}':v for (k,m),v in PFX.items()};json.dump(RES,open(out/f'kvstep_s{seed}.json','w'),default=float);lg('wrote',out/f'kvstep_s{seed}.json',f'{time.monotonic()-t_all:.0f}s')
 if __name__=='__main__':
     ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--chunks',default=','.join(map(str,SH.CHUNKS)));ap_.add_argument('--nch',type=int,default=0);ap_.add_argument('--keys',default='');ap_.add_argument('--selftest',action='store_true');a=ap_.parse_args()
     selftest() if a.selftest else run(a)
