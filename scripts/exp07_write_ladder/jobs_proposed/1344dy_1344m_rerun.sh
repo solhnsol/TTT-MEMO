@@ -8,12 +8,14 @@ cd "$(dirname "$0")/../../.." 2>/dev/null || true
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_deterministic_ops=true}"
 nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader | grep -q . && { echo "another process is on the GPU: exit 30"; exit 30; }
 D=scripts/exp07_write_ladder;O=$OUT/kvstep;K=$OUT/kv1344k
+if [ -z "$SEEDS" ]; then SEEDS=$(for s in 231 232 233 234 235 236 237 238; do test -f $O/kvstep_s${s}.json || echo $s; done | tr '\n' ' '); fi    # default: every seed of 1344m that has no result file (237, and 238 if it failed too)
+echo "rerun seeds: $SEEDS"; [ -n "$SEEDS" ] || { echo 'nothing to rerun'; exit 0; }
 mkdir -p $O/smoke
-for s in ${SEEDS:-237}; do test -f $K/kv_s${s}_keys.npy || { echo "keys of job 1344b missing for seed $s: exit 31"; exit 31; }; done
+for s in $SEEDS; do test -f $K/kv_s${s}_keys.npy || { echo "keys of job 1344b missing for seed $s: exit 31"; exit 31; }; done
 sha256sum $D/e59_kvstep.py $D/e59_kvstep_analyze.py $D/e59_kvprobe.py $D/e59_shadow.py $D/e59_u12.py $D/e55_core.py $D/e57_natmask_run.py $D/e57_qband_run.py $D/e59_hidearms.py
 $PY $D/e59_kvstep.py --selftest | tail -1
 $PY $D/e59_kvprobe.py --selftest | tail -1
-for s in ${SEEDS:-237}; do
+for s in $SEEDS; do
   set +e
   $PY $D/e59_kvstep.py --seed $s --out $O --keys $K/kv_s${s}_keys.npy --chunks 16,48,80,112
   echo "RUN kvstep seed $s rc=$?"
