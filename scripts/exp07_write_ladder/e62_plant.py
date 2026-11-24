@@ -20,7 +20,7 @@ def load_books(rec=ROOT.parent/'TTT-reg-stage0/data/natural-text/recur/sel24_boo
     for line in open(rec):
         r=json.loads(line);allb[r['id']]=r['text']
     return allb
-def gen_facts(tk,allb,seed=0,pool_per_type=60):
+def gen_facts(tk,allb,seed=0,pool_per_type=60,n_names=54):
     """-> answers[type] (pool_per_type valid answers), names (list of (first, last)); all absent from the 24 books, answers 3 tokens"""
     rng=random.Random(f'E62|{seed}|facts');low='\n'.join(allb.values()).lower();ans={};names=[]
     for ty in TYPES:
@@ -31,7 +31,7 @@ def gen_facts(tk,allb,seed=0,pool_per_type=60):
             seen.add(w);out.append(w)
         ans[ty]=out
     seen=set()
-    while len(names)<42+12:
+    while len(names)<n_names:
         f=rng.choice(FIRST);l=syl(rng,'patron')
         if l in seen or l.lower() in low or f+' '+l in low:continue
         if l in sum(ans.values(),[]):continue
