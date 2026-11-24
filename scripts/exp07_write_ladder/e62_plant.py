@@ -74,10 +74,23 @@ def pick_templates(rng,cell,used):
     ty=cell['type'];pool=[(i,st,t) for i,(st,t) in enumerate(TP.POOL[ty]) if (ty,i) not in used];n=cell['n'];m=min(n,24)
     pos=lambda t:(lambda toks,k:('start' if k<len(toks)/3 else ('end' if k>=2*len(toks)/3 else 'mid')))(re.findall(r"\{[A-Z]+\}|[A-Za-z']+",t),[j for j,w in enumerate(re.findall(r"\{[A-Z]+\}|[A-Za-z']+",t)) if w=='{A}'][0])
     for _ in range(4000):
-        sel=rng.sample(pool,m)
-        if sum('{F}' in t for _,_,t in sel)<0.5*m:continue
+        P={'start':[],'mid':[],'end':[]}
+        for x in pool:P[pos(x[2])].append(x)
+        qmin=-(-m//5) if m>=5 else 0;sel=[];okq=True                  # >= 20% of the mentions with the answer in the first / middle / last third of the sentence
+        for k_ in ('start','mid','end'):
+            if len(P[k_])<qmin:okq=False;break
+            sel+=rng.sample(P[k_],qmin)
+        if not okq:continue
+        rest=[x for x in pool if x not in sel]
+        if len(rest)<m-len(sel):continue
+        sel+=rng.sample(rest,m-len(sel));need=-(-m//2)-sum('{F}' in t for _,_,t in sel)
+        if need>0:                                                        # >= 50% of the mentions name the person in full ({F})
+            restF=[x for x in pool if x not in sel and '{F}' in x[2]];nonF=[x for x in sel if '{F}' not in x[2]]
+            if len(restF)<need or len(nonF)<need:continue
+            for xo,xi in zip(rng.sample(nonF,need),rng.sample(restF,need)):sel.remove(xo);sel.append(xi)
         c=collections.Counter(pos(t) for _,_,t in sel)
-        if m>=5 and min(c['start'],c['mid'],c['end'])<0.2*m:continue
+        if m>=5 and min(c['start'],c['mid'],c['end'])<qmin:continue
+        if sum('{F}' in t for _,_,t in sel)<0.5*m:continue
         # order so that consecutive mentions differ in style and first word
         seq=sel[:];rng.shuffle(seq)
         for _ in range(200):
@@ -110,7 +123,7 @@ def plant_book(tk,text,cells,facts,seed,book,nch=NCH):
     for ci,c in enumerate(cells):
         for k,ch in enumerate(c['chunks']):jobs.append([ci,k,ch,render(temps[ci][k][2],facts[ci][0],facts[ci][1]),temps[ci][k]])
     shift=[0]*len(jobs);chosen=None;Dtok=[j[2]*CH+rng.randint(150,CH-150) for j in jobs]
-    for it in range(30):
+    for it in range(60):
         pick=[];lastb=-10**9;taken=[]
         order=sorted(range(len(jobs)),key=lambda j:(jobs[j][2],j))
         for j in order:
@@ -131,6 +144,9 @@ def plant_book(tk,text,cells,facts,seed,book,nch=NCH):
             if ch!=jobs[j][2]:ok=False
             newshift[j]=shift[j]+(ts-Dtok[j])
         if ok:chosen=(newt,fin,e2);break
+        if it%6==5:                                          # stubborn jobs (no sentence boundary near the target): draw a new target position inside the chunk
+            for j in range(len(jobs)):
+                if fin[j][3]!=jobs[j][2]:Dtok[j]=jobs[j][2]*CH+rng.randint(150,CH-150);newshift[j]=0
         shift=newshift
     if chosen is None:raise RuntimeError(('planting did not converge',book,[(jobs[j][0],jobs[j][1],jobs[j][2],fin[j][3],fin[j][2]-Dtok[j]) for j in range(len(jobs)) if fin[j][3]!=jobs[j][2]]))
     newt,fin,e2=chosen;rows=[]

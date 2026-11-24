@@ -1,4 +1,4 @@
-"""E62 MAIN run (design 1; code e62m_run.py derived from e62_run.py; thread-server 11/24; Hans 'as recommended'; NOT queued): 12 book units x 14 cells (n = 2, 4, 8, 16, 32 mentions x gap kinds; 124 chunks per unit), arms NAT and SAME (RAND dropped: placebo = 0 in P0a), ONE question frame (frame 0 of every type; P0a: the three frames agree, per-fact correlation 0.93-0.97, SD +1.7% for one frame), reads at W0 / 1st / 2nd / 4th / last mention / unit end. FAMILIARITY vs BINDING: the 14 cells are grouped by n (A: n=2 close/far/edge, B: n=4 close/mixed, C: n=4 far/edge, D: n=8 close/mixed/edge, E: n=16 close/mixed, F: n=32 close/mixed); the 6 groups carry the 6 attribute types, rotated from unit to unit (unit u: group g gets type (g + u) mod 6, each group meets each type twice over the 12 units). The answers of the OTHER facts of the same group (same book, same type, same number of exposures) are EXPOSED, wrongly bound decoys of a fact (1-2 per fact), placed at candidate positions 1..m; the remaining 15 - m candidates are unexposed generated words (never planted anywhere in the run). binding = (gold - mean exposed decoys); familiarity = (mean exposed decoys - mean unexposed); gold - max over all candidates stays as the headline. Units: the first 124 chunks of 11 PG-19 test books (Carmen Ariza, Ragged Trousered Philanthropists, Old Mortality, Coningsby, Life of Thomas Paine II, Nature's Serial Story, Civil War Through the Camera, Jennie Gerhardt, Leavenworth Case, Life of Gordon II, Patrol of the Sun Dance Trail) plus a second, non-overlapping segment of Carmen Ariza (from chunk 200); several of them are non-fiction prose or biography. Everything else as e62_run.py (planting e62_plant.py, templates e62_templates.py, masks, pre-write NLL records).
+"""E62 MAIN run (design 1; code e62m_run.py derived from e62_run.py; thread-server 11/24; Hans 'as recommended'; NOT queued): 12 book units x 14 cells (n = 2, 4, 8, 16, 32 mentions x gap kinds; 180 chunks per unit as in P0a), arms NAT and SAME (RAND dropped: placebo = 0 in P0a), ONE question frame (frame 0 of every type; P0a: the three frames agree, per-fact correlation 0.93-0.97, SD +1.7% for one frame), reads at W0 / 1st / 2nd / 4th / last mention / unit end. FAMILIARITY vs BINDING: the 14 cells are grouped by n (A: n=2 close/far/edge, B: n=4 close/mixed, C: n=4 far/edge, D: n=8 close/mixed/edge, E: n=16 close/mixed, F: n=32 close/mixed); the 6 groups carry the 6 attribute types, rotated from unit to unit (unit u: group g gets type (g + u) mod 6, each group meets each type twice over the 12 units). The answers of the OTHER facts of the same group (same book, same type, same number of exposures) are EXPOSED, wrongly bound decoys of a fact (1-2 per fact), placed at candidate positions 1..m; the remaining 15 - m candidates are unexposed generated words (never planted anywhere in the run). binding = (gold - mean exposed decoys); familiarity = (mean exposed decoys - mean unexposed); gold - max over all candidates stays as the headline. Units: 12 distinct novels, first 180 chunks each (option D, Hans 11/24: 12 novels, no repeated books, no non-fiction): PG-19 test Carmen Ariza, The Ragged Trousered Philanthropists, Old Mortality, The Fair Maid of Perth, The Crisis, Coningsby, Nature's Serial Story and PG-19 TRAIN The Mill on the Floss, Ralph the Heir, Night and Morning, The Perpetual Curate, Dred (the train books may have been seen in the book fine-tuning of the checkpoint). Everything else as e62_run.py (planting e62_plant.py, templates e62_templates.py, masks, pre-write NLL records).
   python3 e62m_run.py --out O [--books 12] [--arms NAT,SAME] [--max-chunks N] [--seed 0] | --selftest"""
 import sys,json,time,bisect,re,pathlib,argparse,random,collections
 import numpy as np
@@ -56,8 +56,16 @@ class E62UV:
             rows+=b-a
             for s0,s1 in iv:kp[a:b,s0-wlo:s1-wlo]=False;hk+=s1-s0
         n=int((~kp&base[None,:]).sum());self.last_info={'masked_pairs':n,'sentence_rows':rows,'hidden_key_tokens':hk};return kp,{'uv_arm':self.mode,'q_banded':rows,'masked_pairs':n,'sentence_rows':rows,'uv_hidden_tokens':0,'uv_hidden_chunk_tokens':0}
-UNITS=[('pg19test_21',0),('pg19test_37',0),('pg19test_91',0),('pg19test_92',0),('pg19test_44',0),('pg19test_90',0),('pg19test_56',0),('pg19test_18',0),('pg19test_49',0),('pg19test_14',0),('pg19test_29',0),('pg19test_21',1)]
-NCH_M=124;SEG_STEP=200;GROUP_OF=[0,0,0,1,1,2,2,3,3,3,4,4,5,5];TYPES6=PL.TYPES
+UNITS=[('pg19_30312',0),('pg19_3608',0),('pg19_6941',0),('pg19_7987',0),('pg19_5396',0),('pg19_7412',0),('pg19_6412',0),('pg19tr_6688',0),('pg19tr_25579',0),('pg19tr_9755',0),('pg19tr_28006',0),('pg19tr_55012',0)]      # 12 DISTINCT novels, first 180 chunks each: PG-19 TEST Carmen Ariza, Ragged Trousered Philanthropists, Old Mortality, Fair Maid of Perth, The Crisis, Coningsby, Nature's Serial Story; PG-19 TRAIN (option D; possibly seen in the book fine-tuning of the checkpoint) The Mill on the Floss, Ralph the Heir, Night and Morning, The Perpetual Curate, Dred
+NCH_M=180;SEG_STEP=200;GROUP_OF=[0,0,0,1,1,2,2,3,3,3,4,4,5,5];TYPES6=PL.TYPES
+PG19=ROOT/'data/natural-text/pg19_test';TRAIN_IDS=('6688','25579','9755','28006','55012')
+def load_all100():
+    """the 100 books of the PG-19 test split (GCS deepmind-gutenberg/test/*.txt + metadata.csv), keys 'pg19_<id>_<title>', plus the 5 PG-19 TRAIN novels of the units (keys 'pg19tr_<id>_<title>') for the leak check and the hosts"""
+    import csv;meta={r[0]:r for r in csv.reader(open(PG19/'metadata.csv'))};out={}
+    for f in sorted((PG19/'txt').glob('*.txt')):
+        i=f.stem;out[f'pg19_{i}_{meta.get(i,[i,"?"])[1]}']=open(f,encoding='utf-8',errors='replace').read()
+    for i in TRAIN_IDS:out[f'pg19tr_{i}_{meta.get(i,[i,"?"])[1]}']=open(PG19/'trainc'/f'{i}.txt',encoding='utf-8',errors='replace').read()
+    return out
 def full_key(allb,p):return [k for k in allb if k.startswith(p+'_')][0]
 def unit_text(tk,allb,bk):
     k0,sg=bk.split('|seg');text=allb[full_key(allb,k0)];e=tk.encode(text,add_special_tokens=False);i0=int(sg)*SEG_STEP*CH;c0=0
@@ -88,7 +96,7 @@ def build_items(facts,cands,b):
     return items
 def selftest(seed=0):
     from tokenizers import Tokenizer
-    tk=Tokenizer.from_file(str(ROOT/'data/tokenizer/llama3/tokenizer.json'));allb=PL.load_books();ans,names=PL.gen_facts(tk,allb,seed,pool_per_type=110,n_names=len(UNITS)*14+14);nm=list(names);used=collections.Counter();fb={};tot=0;ntk=collections.Counter()
+    tk=Tokenizer.from_file(str(ROOT/'data/tokenizer/llama3/tokenizer.json'));allb=load_all100();ans,names=PL.gen_facts(tk,allb,seed,pool_per_type=110,n_names=len(UNITS)*14+14);nm=list(names);used=collections.Counter();fb={};tot=0;ntk=collections.Counter()
     for ui,(k0,sg) in enumerate(UNITS):
         bk=f'{k0}|seg{sg}';cells=PL.schedule(seed,bk,NCH_M);F=[]
         for ci,c in enumerate(cells):
@@ -113,7 +121,7 @@ def run(a):
     from tokenizers import Tokenizer
     import e55_run as R55,e55_iso as ISO,e55_gpu as RG,e57_natmask_run as NM,e57_qband_run as QR
     NM.register_engine();QR.K0=0;NM.K0=0;lg=lambda *x:print(*x,flush=True);out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True);t_all=time.monotonic();seed=a.seed
-    tk=Tokenizer.from_file(str(ROOT/'data/tokenizer/llama3/tokenizer.json'));allb=PL.load_books();ans,names=PL.gen_facts(tk,allb,seed,pool_per_type=110,n_names=len(UNITS)*14+14)
+    tk=Tokenizer.from_file(str(ROOT/'data/tokenizer/llama3/tokenizer.json'));allb=load_all100();ans,names=PL.gen_facts(tk,allb,seed,pool_per_type=110,n_names=len(UNITS)*14+14)
     bks=[f'{k0}|seg{sg}' for k0,sg in UNITS][:a.books];arms=a.arms.split(',')
     LD,s3,C=R55.lab();rt=LD.Runtime();can=R55.Canary55(LD,rt);rt32=LD.runtime_fp32();rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     rng=random.Random(f'E62|{seed}|run');nm=list(names);facts_by_book={};cells_by_book={};used=collections.Counter()
