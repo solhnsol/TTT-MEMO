@@ -179,7 +179,7 @@ def run(a):
                 KP.CAP['bwd'].clear();nll2,_s=bwd_probe(KP.install(m,'bwd'),st_suf,c,pref,kmask,wt);jax.block_until_ready(nll2);jax.effects_barrier();bw=dict(KP.CAP['bwd'])
                 STORE[(cn,k)]=dict(x=np.stack([xs[l][0] for l in range(NL)]).astype(np.float32),x2=np.stack([xs[l][1] for l in range(NL)]).astype(np.float32),dz1=np.stack([bw[('z1',l)] for l in range(NL)]).astype(np.float32),dz3=np.stack([bw[('z3',l)] for l in range(NL)]).astype(np.float32),dz2=np.stack([bw[('z2',l)] for l in range(NL)]).astype(np.float32))
                 if cn==cond_list[-1]:
-                    st={c_:STORE.pop((c_,k)) for c_ in cond_list};T=nll.shape[0];posm=class_masks(k,T,ap,w);row=dict(k=k,combos={},posn={kk:int(v.sum()) for kk,v in posm.items() if kk in ('ans','name','frame','extra','filler')})
+                    st={c_:STORE.pop((c_,k)) for c_ in cond_list};T=nll.shape[0];posm=class_masks(k,T,ap,w);row=dict(k=k,combos={},posn={kk:int(v.sum()) for kk,v in posm.items() if kk in ('ans','name','frame','extra','filler')},sent_order=[({d_['fact']:(0 if d_['order']=='place_first' else 1) for d_ in ap[k]}).get(f_) for f_ in range(NREAD)])
                     # validation: G[C0,C0] vs the autodiff gradient of C0
                     Gcc=build_G(st,ku,[c_ for c_ in CMB if c_.get('name')=='G[C0,C0]'][0],posm);ga=GRAD[('C0',k)];RES['validation'].append(dict(k=k,**{nm:float(np.linalg.norm(Gcc[nm]-ga[nm])/(np.linalg.norm(ga[nm])+1e-30)) for nm in ('w1','w2','w3')}))
                     models={'W0':m};step={}

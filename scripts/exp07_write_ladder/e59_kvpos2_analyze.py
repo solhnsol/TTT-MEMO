@@ -33,3 +33,4 @@ for tok in ('ans','name'):
                     p=parts(X['combos'][f'G[{cond},{cond}]@f{j}_{tok}']['dS']);ow.append(p[:,j]);ot.append(np.delete(p,j,axis=1).mean(1))
             own.append(np.mean(ow,0));oth.append(np.mean(ot,0))
         own=np.array(own);oth=np.array(oth);print(f'  {tok:4s} {cond:8s} own  head {ci(own[:,0])} | bind {ci(own[:,1])} | fam {ci(own[:,2])}');print(f'  {tok:4s} {cond:8s} other head {ci(oth[:,0])} | bind {ci(oth[:,1])} | fam {ci(oth[:,2])}')
+print('NOTE on terms: the classes called ans / name in this report are the LATER / EARLIER mentioned entity of the sentence (2 tokens each; the U12 templates put the place before the person name in ~57% of the sentences), NOT always the place / the name. In name-first sentences ans = place (the answer), in place-first sentences ans = the person name.')

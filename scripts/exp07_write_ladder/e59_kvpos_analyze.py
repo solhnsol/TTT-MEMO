@@ -32,3 +32,4 @@ for kind in ('ans','name'):
         res[c]=(np.array(diag),np.array(off))
         cls=ps(f'G[{c},{c}]@{kind}');print(f'  {kind:5s} {c:8s} own fact {ci(res[c][0])} | other read facts (mean per fact) {ci(res[c][1])} | own x 16 facts {res[c][0].mean()*16:.3f} + others x 240 pairs/16 {res[c][1].mean()*15:.3f} vs class step {cls.mean():.3f}')
     print(f'  {kind:5s} SAMEVIS - C0: own fact {ci(res["SAMEVIS"][0]-res["C0"][0])} | other read facts {ci(res["SAMEVIS"][1]-res["C0"][1])}')
+print('NOTE on terms: the classes called ans / name in this report are the LATER / EARLIER mentioned entity of the sentence (2 tokens each; the U12 templates put the place before the person name in ~57% of the sentences), NOT always the place / the name. In name-first sentences ans = place (the answer), in place-first sentences ans = the person name.')

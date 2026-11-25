@@ -41,18 +41,32 @@ def items2(world,UX):
         items.append({'kind':'fact','fact':f['id'],'group':f['group'],'name_id':f['id'],'place_id':f['id'],'name':f['X'],'qframe':f['id']%NQ,'prefix':QF[f['id']%NQ].format(X=f['X']),'cands':[' '+x['P'] for x in cl]+[' '+u for u in UX],'gold_idx':0,'cand_fact':[x['id'] for x in cl]+[-1]*len(UX),'cand_group':[x['group'] for x in cl]+[-1]*len(UX),'cand_same':[x['group']==f['group'] for x in cl]+[False]*len(UX),'cand_exposed':[True]*NEXP+[False]*len(UX),'n_rank':NEXP})
     return items
 
-def sets_of(posm):
-    """token sets over the NLL index: A answer tokens of the read facts, F their whole sentences (ans + name + frame), O the sentences of the extra facts"""
-    return dict(A=posm['ans'].copy(),F=posm['ans']|posm['name']|posm['frame'],O=posm['extra'].copy())
-def kind_of(posm,idx):
-    """token kind per index of idx: ans / name / frame / extra"""
-    out=[]
-    for i in idx:
-        out.append('ans' if posm['ans'][i] else ('name' if posm['name'][i] else ('frame' if posm['frame'][i] else 'extra')))
-    return out
-def scale_vec(T,mask,e_num,e_den,cap):
+def entity_masks(k,T,ap,w,mode='order'):
+    """token sets over the NLL index (position - 1) of chunk k. Two sentence entities (2 tokens each: the PLACE = answer, the person NAME); the U12 templates put the place before the name in ~57% of the sentences. mode 'role': A = place tokens, N = name tokens (independent of the order). mode 'order': A = the LATER mentioned entity (class 'ans' of e59_kvpos / kvpos2: predicted given the earlier one), N = the EARLIER mentioned entity (class 'name' there). F = whole sentences of the read facts (both entities + frame), O = whole sentences of the extra facts. A and N are disjoint and lie inside F in both modes. Also ORD (0 place-first / 1 name-first / -1 none) and ROLE (0 place / 1 name / 2 frame / 3 extra sentence / -1 outside) per token and ORDER[fact] of the read facts."""
+    assert mode in ('role','order');m={c:np.zeros(T,bool) for c in 'ANFO'};m['ORD']=np.full(T,-1,np.int8);m['ROLE']=np.full(T,-1,np.int8);m['ORDER']={};byf={d['fact']:d for d in ap[k]}
+    for x in w['chunks'][k]['sents']:
+        f=int(x['fact']);idx=list(range(max(int(x['start'])-1,0),min(int(x['end'])-1,T)))
+        if f>=NREAD:m['O'][idx]=True;m['ROLE'][idx]=3;continue
+        m['F'][idx]=True;d=byf[f];o=0 if d['order']=='place_first' else 1;m['ORD'][idx]=o;m['ROLE'][idx]=2;m['ORDER'][f]=o
+        for t in d['place']:
+            if 0<=t-1<T:m['ROLE'][t-1]=0
+        for t in d['name']:
+            if 0<=t-1<T:m['ROLE'][t-1]=1
+        for tt,key_a,key_n in (('x',('place' if mode=='role' else 'second'),('name' if mode=='role' else 'first')),):
+            for t in d[key_a]:
+                if 0<=t-1<T:m['A'][t-1]=True
+            for t in d[key_n]:
+                if 0<=t-1<T:m['N'][t-1]=True
+    assert not (m['A']&m['N']).any() and not ((m['A']|m['N'])&~m['F']).any() and not (m['F']&m['O']).any();return m
+def sets_of(em):
+    """the token sets A, N, F, O (copies)"""
+    return {c:em[c].copy() for c in 'ANFO'}
+def kind_of(em,idx):
+    """token kind per index of idx: ans (place) / name / frame / extra"""
+    return ['ans' if em['A'][i] else ('name' if em['N'][i] else ('frame' if em['F'][i] else 'extra')) for i in idx]
+def scale_vec(T,mask,e_num,e_den,cap,alpha=1.0):
     """per-token factor s_p: min(cap, e_num/e_den) inside the mask, 1 outside; e_* = ||e|| arrays [T]; returns (s, hit) with hit = bool [T] of the capped tokens"""
-    ratio=e_num/np.maximum(e_den,1e-12);s=np.ones(T,np.float32);hit=np.zeros(T,bool)
+    ratio=(e_num/np.maximum(e_den,1e-12))**alpha;s=np.ones(T,np.float32);hit=np.zeros(T,bool)
     s[mask]=np.minimum(cap,ratio[mask]);hit[mask]=ratio[mask]>cap;return s.astype(np.float32),hit
 def quart(x):
     x=np.asarray(x,float);return [float(v) for v in np.percentile(x,[25,50,75])] if len(x) else [float('nan')]*3
@@ -60,9 +74,9 @@ def selftest():
     import jax,jax.numpy as jnp
     # (1) sets of a toy chunk: A inside F, O disjoint from F; scale_vec outside = 1, cap, ratio
     w={'chunks':[{'sents':[dict(fact=0,start=1,end=10),dict(fact=1,start=10,end=19),dict(fact=17,start=19,end=30)]}]};T=40
-    ap=[[dict(fact=0,first=[2,3],second=[8,9]),dict(fact=1,first=[11],second=[17]),dict(fact=2,first=[],second=[]),dict(fact=3,first=[],second=[]),dict(fact=17,first=[20],second=[28])]]
-    m=class_masks(0,T,ap,w);S=sets_of(m);assert S['A'].sum()==3 and not (S['A']&~S['F']).any() and not (S['O']&S['F']).any() and S['O'].sum()==11 and S['F'].sum()==18
-    en=np.full(T,1.0);ed=np.full(T,0.5);ed[7]=1e-9;s,hit=scale_vec(T,S['A'],en,ed,100.);assert np.allclose(s[~S['A']],1) and s[S['A']].max()==100. and hit.sum()==1 and np.isclose(s[S['A']].min(),2.)
+    ap=[[dict(fact=0,first=[8,9],second=[2,3],place=[8,9],name=[2,3],order='place_first'),dict(fact=1,first=[11],second=[17],place=[17],name=[11],order='name_first'),dict(fact=2,first=[],second=[],place=[],name=[]),dict(fact=3,first=[],second=[],place=[],name=[]),dict(fact=17,first=[20],second=[28],place=[28],name=[20],order='name_first')]]      # fact 0: place BEFORE name (first = place), fact 1: name before place
+    m=entity_masks(0,T,ap,w,'role');S=sets_of(m);mo=entity_masks(0,T,ap,w,'order');So=sets_of(mo);assert set(np.where(So['A'])[0])=={1,2,16} and set(np.where(So['N'])[0])=={7,8,10} and not (So['A']&So['N']).any() and mo['ORDER']=={0:0,1:1} and set(np.where(mo['ORD']==0)[0])==set(range(0,9)) and set(np.where(mo['ROLE']==0)[0])=={7,8,16} and set(np.where(mo['ROLE']==1)[0])=={1,2,10};assert S['A'].sum()==3 and S['N'].sum()==3 and not (S['A']&S['N']).any() and not ((S['A']|S['N'])&~S['F']).any() and not (S['O']&S['F']).any() and S['O'].sum()==11 and S['F'].sum()==18 and set(np.where(S['A'])[0])=={7,8,16} and set(np.where(S['N'])[0])=={1,2,10},'A (place) and N (name) must be disjoint whatever the order of the entities';assert kind_of(m,[7,1,0,20])==['ans','name','frame','extra']
+    en=np.full(T,1.0);ed=np.full(T,0.5);ed[7]=1e-9;s,hit=scale_vec(T,S['A'],en,ed,100.);assert np.allclose(s[~S['A']],1) and s[S['A']].max()==100. and hit.sum()==1 and np.isclose(s[S['A']].min(),2.);s5,h5=scale_vec(T,S['A'],en,ed,100.,0.5);assert np.isclose(s5[S['A']].min(),2.**0.5) and s5[S['A']].max()==100. and h5.sum()==1;s15,h15=scale_vec(T,S['A'],en,ed,100.,1.5);assert np.isclose(s15[S['A']].min(),2.**1.5) and s15[S['A']].max()==100. and h15.sum()==1
     # (2) the toy model: the weighted-loss gradient equals the explicit logit-cotangent injection wt s e (the arm construction) and the gradient is linear in the weights
     with jax.default_matmul_precision('highest'):
         rng=np.random.default_rng(0);Tn,H,V=12,5,7;X=jnp.asarray(rng.normal(size=(Tn,H)),jnp.float32);Wm=jnp.asarray(rng.normal(size=(H,V)),jnp.float32);tg=jnp.asarray(rng.integers(0,V,Tn));wt=jnp.asarray(rng.uniform(0.5,1.5,Tn),jnp.float32);sc=jnp.asarray(rng.uniform(0.1,5,Tn),jnp.float32)
@@ -139,26 +153,27 @@ def run(a):
         s=lr0*m.get_ilr_multiplier(st_all.get(m.step_index));return jax.tree.map(lambda p,x:(p+(-s*coef*x).astype(p.dtype)).astype(p.dtype),m.inner_parameters(),g)
     gnorm=eqx.filter_jit(lambda g:optax.global_norm(g))
     tdiff=eqx.filter_jit(lambda g1,g2:optax.global_norm(jax.tree.map(lambda x,y:x.astype(jnp.float32)-y.astype(jnp.float32),g1,g2)))
-    RES=dict(seed=seed,chunks=chunks,cap=cap,W0_R1=W0S.tolist(),cand_exposed=[True]*NEXP+[False]*(G.NCAND-NEXP),rows=[],validation=[],args=vars(a));ROW={};ST={};cond_list=list(CONDS)
+    RES=dict(seed=seed,chunks=chunks,cap=cap,sets=a.sets,W0_R1=W0S.tolist(),cand_exposed=[True]*NEXP+[False]*(G.NCAND-NEXP),rows=[],validation=[],args=vars(a));ROW={};ST={};cond_list=list(CONDS)
     for cn in cond_list:
         arm=CONDS[cn];cnt=[0];L=ISO.Iso55(rt,save_dir=out/'states'/f's{seed}_{cn}',canary=can);L.rec_cache={}
         def ws(m,st_all,st_suf,c,pref,kmask,cnt=cnt,cn=cn,L=L):
             k=cnt[0];cnt[0]+=1
             if k in chunks:
-                t1=time.monotonic();valid=np.asarray(c.loss_masks,np.float32);Wall=SH.token_weights(ap[k],valid>0)['all'].astype(np.float32);T=len(Wall);posm=class_masks(k,T,ap,w);SETS=sets_of(posm);row=ROW.setdefault(k,dict(k=k,arms={},diag={},stats={},check={}));S_=ST.setdefault(k,{})
+                t1=time.monotonic();valid=np.asarray(c.loss_masks,np.float32);Wall=SH.token_weights(ap[k],valid>0)['all'].astype(np.float32);T=len(Wall);posm=entity_masks(k,T,ap,w,a.sets);SETS=sets_of(posm);row=ROW.setdefault(k,dict(k=k,arms={},diag={},stats={},check={},sent_order=[posm['ORDER'].get(f_) for f_ in range(NREAD)],sets=a.sets));S_=ST.setdefault(k,{})
                 gw=lambda wv:ref_grad(m,st_suf,c,pref,kmask,jnp.asarray(wv,jnp.float32))[0]
                 def do_arm(name,g,coef_fixed=None):
                     gn=float(gnorm(g))
                     if coef_fixed is None:newp,_gn,coef=L.sgd_apply(m,st_all,g);coef=float(coef)
                     else:newp=apply_fixed(m,st_all,g,jnp.float32(coef_fixed));coef=float(coef_fixed)
-                    mn=model_from(newp);read_out(mn);S1=LAST['S'].copy();S2=read2(mn,k)
-                    row['arms'][name]=dict(gn=gn,coef=coef,upd=coef*gn,dS1=(S1-W0S).tolist(),dS2=(S2-w0r2(k)).tolist(),W0_R2=w0r2(k).tolist());del newp,mn;return gn,coef
+                    if a.no_reads:S1=W0S.copy();S2=np.zeros((NREAD,G.NCAND));w0=np.zeros((NREAD,G.NCAND));del newp                   # debug: gradients and diagnostics only (CPU check), no reads
+                    else:mn=model_from(newp);read_out(mn);S1=LAST['S'].copy();S2=read2(mn,k);w0=w0r2(k);del newp,mn
+                    row['arms'][name]=dict(gn=gn,coef=coef,upd=coef*gn,dS1=(S1-W0S).tolist(),dS2=(S2-w0).tolist(),W0_R2=w0.tolist());return gn,coef
                 union=np.where(SETS['F']|SETS['O'])[0]
                 if cn in ('C0','SAMEVIS'):
                     e,en,nll,mass=err_fn(m,st_suf,c,pref,kmask,cf);en_n=np.asarray(en);nll_n=np.asarray(nll);mass_n=np.asarray(mass);rows=np.asarray(e[jnp.asarray(union)]);del e
                 if cn=='C0':
                     g=gw(Wall);gn,coef=do_arm('P1',g)
-                    setgn={s:float(gnorm(gw(Wall*SETS[s].astype(np.float32)))) for s in 'AFO'}
+                    setgn={s:float(gnorm(gw(Wall*SETS[s].astype(np.float32)))) for s in 'AFON'}
                     S_['C0']=dict(en=en_n,nll=nll_n,mass=mass_n,rows=rows,union=union,coef=coef,gn=gn,setgn=setgn)
                     # validation (1): the explicit logit-cotangent injection with s = 1 reproduces ref_grad
                     if not RES['validation']:
@@ -166,14 +181,14 @@ def run(a):
                     row['check']['apply_fixed_vs_sgd_apply']=None
                     newp_a,_g,_c=L.sgd_apply(m,st_all,g);newp_b=apply_fixed(m,st_all,g,jnp.float32(float(_c)));row['check']['apply_fixed_vs_sgd_apply']=float(tdiff(newp_a,newp_b)/jnp.maximum(optax.global_norm(jax.tree.map(lambda x,y:x.astype(jnp.float32)-y.astype(jnp.float32),newp_a,m.inner_parameters())),1e-30));del newp_a,newp_b,g
                 elif cn=='SAMEVIS':
-                    C=S_['C0'];g=gw(Wall);gn,coef=do_arm('P0',g);S_['SV']=dict(en=en_n,coef=coef,gn=gn);setgn_sv={s:float(gnorm(gw(Wall*SETS[s].astype(np.float32)))) for s in 'AFO'};del g
+                    C=S_['C0'];g=gw(Wall);gn,coef=do_arm('P0',g);S_['SV']=dict(en=en_n,coef=coef,gn=gn);setgn_sv={s:float(gnorm(gw(Wall*SETS[s].astype(np.float32)))) for s in 'AFON'};del g
                     cos=np.einsum('nv,nv->n',rows,C['rows'])/np.maximum(np.linalg.norm(rows,axis=1)*np.linalg.norm(C['rows'],axis=1),1e-30);un=C['union']
                     assert (un==union).all(),'the token sets of the two conditions must be identical'
-                    row['diag']=dict(idx=union.tolist(),kind=kind_of(posm,union),en_SV=en_n[union].tolist(),en_C0=C['en'][union].tolist(),nll_SV=nll_n[union].tolist(),nll_C0=C['nll'][union].tolist(),cos=cos.tolist(),mass_SV=mass_n[union].tolist(),mass_C0=C['mass'][union].tolist(),setgn_C0=C['setgn'],setgn_SV=setgn_sv)
+                    row['diag']=dict(idx=union.tolist(),kind=kind_of(posm,union),ord=[int(v) for v in posm['ORD'][union]],role=[int(v) for v in posm['ROLE'][union]],en_SV=en_n[union].tolist(),en_C0=C['en'][union].tolist(),nll_SV=nll_n[union].tolist(),nll_C0=C['nll'][union].tolist(),cos=cos.tolist(),mass_SV=mass_n[union].tolist(),mass_C0=C['mass'][union].tolist(),setgn_C0=C['setgn'],setgn_SV=setgn_sv)
                     ia=np.where(SETS['A'])[0];lg(f'seed {seed} k={k} write-forward logits dtype {DT.get("logits")}; A tokens (n={len(ia)}): ||e_SV|| min/quartiles {float(en_n[ia].min()):.4g} {quart(en_n[ia])}, ||e_C0|| min/quartiles {float(C["en"][ia].min()):.4g} {quart(C["en"][ia])}, ratio ||e_C0||/||e_SV|| quartiles {quart(C["en"][ia]/np.maximum(en_n[ia],1e-12))}, ratio > cap {float((C["en"][ia]/np.maximum(en_n[ia],1e-12)>cap).mean()):.3f}')
-                    for nm,sname in (('S2A','A'),('S2F','F'),('S2O','O')):
-                        s,hit=scale_vec(T,SETS[sname],C['en'],en_n,cap);wv=Wall*s;g=gw(wv);do_arm(nm,g,coef_fixed=C['coef'])
-                        mk_=SETS[sname];tgt=C['en'];real=s*en_n;kinds=np.asarray(kind_of(posm,np.where(mk_)[0]));ix=np.where(mk_)[0]
+                    for nm,sname,al in (('S2A','A',1.0),('S2F','F',1.0),('S2O','O',1.0),('S2M','N',1.0),('S2A-0.5','A',0.5),('S2A-1.5','A',1.5)):
+                        s,hit=scale_vec(T,SETS[sname],C['en'],en_n,cap,al);wv=Wall*s;g=gw(wv);do_arm(nm,g,coef_fixed=C['coef'])
+                        mk_=SETS[sname];tgt=en_n**(1-al)*C['en']**al;real=s*en_n;kinds=np.asarray(kind_of(posm,np.where(mk_)[0]));ix=np.where(mk_)[0]
                         row['stats'][nm]=dict(setgn=float(gnorm(gw(wv*mk_.astype(np.float32)))),setgn_C0=C['setgn'][sname],setgn_SV=setgn_sv[sname],**{f'ratio_{kd}':quart(real[ix][kinds==kd]/np.maximum(tgt[ix][kinds==kd],1e-30)) for kd in ('ans','name','frame','extra') if (kinds==kd).any()},**{f'caphit_{kd}':float(hit[ix][kinds==kd].mean()) for kd in ('ans','name','frame','extra') if (kinds==kd).any()},n_tokens=int(mk_.sum()))
                         if nm=='S2A':
                             if len(RES['validation'])<2:                          # validation: the explicit injection (cotangent wt s e of this very arm) equals the weighted-loss gradient on the real model
@@ -185,11 +200,12 @@ def run(a):
                     Cc=S_['C0'];Sv=S_['SV'];g=gw(Wall);row['check']['repro_gn_C0_pass3']=abs(float(gnorm(g))-Cc['gn'])/Cc['gn'];del g
                     s,hit=scale_vec(T,SETS['A'],Sv['en'],Cc['en'],cap);wv=Wall*s;g=gw(wv);do_arm('X2A',g,coef_fixed=Sv['coef']);mk_=SETS['A'];ix=np.where(mk_)[0];kinds=np.asarray(kind_of(posm,ix))
                     row['stats']['X2A']=dict(setgn=float(gnorm(gw(wv*mk_.astype(np.float32)))),setgn_C0=Cc['setgn']['A'],ratio_ans=quart((s*Cc['en'])[ix]/np.maximum(Sv['en'][ix],1e-30)),caphit_ans=float(hit[ix].mean()),n_tokens=int(mk_.sum()));del g
+                    s2,hit2=scale_vec(T,SETS['A'],Cc['en'],Sv['en'],cap);wv2=Wall*s2;g=gw(wv2);do_arm('C2A',g,coef_fixed=Cc['coef']);row['stats']['C2A']=dict(setgn=float(gnorm(gw(wv2*mk_.astype(np.float32)))),setgn_C0=Cc['setgn']['A'],ratio_ans=quart(s2[ix]),caphit_ans=float(hit2[ix].mean()),n_tokens=int(mk_.sum()));del g
                 lg(f'seed {seed} k={k} pass {cn}: done in {time.monotonic()-t1:.0f}s; arms so far {sorted(row["arms"])}')
             return m.inner_parameters(),jnp.asarray(0.0,jnp.float32),jnp.asarray(1.0,jnp.float32),jnp.asarray(0.0,jnp.float32)
         L.write_step=ws;uv=SH.mk_uv(arm,w,seed,lg);t0=time.monotonic();r=L.run_stream(NM.ENGINE,1,ids0,read_chunks=[],canary_chunks=[],nch=(a.nch or nch),tag=f'kvlogit_{cn}',log=lg,read_hook=None,hook_chunks=[],chunks_meta=w['chunks'],uv=uv);r.pop('model',None);lg(f'seed {seed} {cn} ({arm}): stream done in {time.monotonic()-t0:.0f}s')
         L.rec_cache=None;del L
     RES['rows']=[ROW[k] for k in sorted(ROW)];json.dump(RES,open(out/f'kvlogit_s{seed}.json','w'),default=float);lg('wrote',out/f'kvlogit_s{seed}.json',f'{time.monotonic()-t_all:.0f}s')
 if __name__=='__main__':
-    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--chunks',default='16,80');ap_.add_argument('--nch',type=int,default=0);ap_.add_argument('--cap',type=float,default=100.);ap_.add_argument('--selftest',action='store_true');a=ap_.parse_args()
+    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--chunks',default='16,80');ap_.add_argument('--nch',type=int,default=0);ap_.add_argument('--cap',type=float,default=100.);ap_.add_argument('--sets',default='order',choices=('order','role'));ap_.add_argument('--no-reads',action='store_true',help='debug (CPU check): no arm reads');ap_.add_argument('--selftest',action='store_true');a=ap_.parse_args()
     selftest() if a.selftest else run(a)
