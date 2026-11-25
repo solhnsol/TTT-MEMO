@@ -79,11 +79,11 @@ if W1 or W2:
         for v in ('R2','R2m','R2a'):
             row=[]
             for arm in ARMS:
-                x=[per_fact(r['arms'][arm][v],r['W0'][v],s).mean(0)[mi] for s in SEEDS for r in [wrec(arm,s)] if r is not None and arm in r['arms']];row.append(f'{arm} {tci(x)}')
+                x=[per_fact(np.asarray(r['arms'][arm][v])-np.asarray(r['W0'][v]),r['W0'][v],s).mean(0)[mi] for s in SEEDS for r in [wrec(arm,s)] if r is not None and arm in r['arms']];row.append(f'{arm} {tci(x)}')
             print(f'    {v:4s}: '+' | '.join(row))
     print('  matched binding of the in-window reads, differences (seed-paired):')
     for v in ('R2','R2m','R2a'):
-        def cc(arm):return np.array([per_fact(r['arms'][arm][v],r['W0'][v],s).mean(0)[0] if (r:=wrec(arm,s)) is not None and arm in r['arms'] else np.nan for s in SEEDS])
+        def cc(arm):return np.array([per_fact(np.asarray(r['arms'][arm][v])-np.asarray(r['W0'][v]),r['W0'][v],s).mean(0)[0] if (r:=wrec(arm,s)) is not None and arm in r['arms'] else np.nan for s in SEEDS])
         print(f'    {v:4s}: '+' | '.join(f'{nm} {tci(cc(x)-cc(y))}' for nm,x,y in (('P1s - E2All','P1s','E2All'),('E2All - P0s','E2All','P0s'),('E2All - E2As','E2All','E2As'),('P1s - P0s','P1s','P0s'))))
 INT=[(1,16),(17,32),(33,64),(65,96),(97,128)]
 print('== per-chunk values, interval means over chunks, mean over seeds [per-seed min..max]')
