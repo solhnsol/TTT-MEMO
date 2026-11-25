@@ -75,3 +75,47 @@ for cls in ('ans','name','frame','extra','filler'):
         c0=_cls(cls,'C0',order);sv=_cls(cls,'SAMEVIS',order)
         if c0 is None:break
         print(f'  class {cls:6s} {on:11s}: '+' | '.join(f'[{mn}] C0 {ci(c0[:,mi])} SV-C0 {ci(sv[:,mi]-c0[:,mi])}' for mi,mn in enumerate(('margin','binding','familiarity'))))
+# ---- (11/25) MATCHED binding: the answer word of fact f scored as gold in its own question minus the same word scored as an exposed decoy in the other questions that contain it (candidate lists recreated from the seed: items2 draws 11 of the 15 other read facts per question)
+import random as _rnd
+def _cands(seed):
+    out=[]
+    for f in range(16):
+        r=_rnd.Random(f"kvpos2|{seed}|{f}");oth=[g for g in range(16) if g!=f];r.shuffle(oth);out.append([f]+oth[:11])
+    return out
+def _matched(dS,seed,fs):
+    cf=_cands(seed);dS=np.asarray(dS);out=[]
+    for j in fs:
+        oth=[dS[q,cf[q].index(j)] for q in range(16) if q!=j and j in cf[q][1:12]]
+        out.append(dS[j,0]-np.mean(oth) if oth else np.nan)
+    return np.array(out)
+print('== MATCHED binding (the same answer word as gold in its own question minus as exposed decoy in the other questions that contain it): per cell, C0 | SAMEVIS | SAMEVIS - C0')
+def _mcell(role,order,cond):
+    kind={('place',0):'name',('place',1):'ans',('name',0):'ans',('name',1):'name'}[(role,order)];out=[]
+    for r in R:
+        v=[]
+        for row in r['rows']:
+            so=row.get('sent_order')
+            if so is None:return None
+            for j in range(4):
+                if so[j]==order:v.extend(_matched(row['combos'][f'G[{cond},{cond}]@f{j}_{kind}']['dS'],r['seed'],[j]))
+        out.append(np.nanmean(v) if len(v) else np.nan)
+    return np.array(out)
+for role in ('place','name'):
+    for order,on in ((0,'place first'),(1,'name first')):
+        c0=_mcell(role,order,'C0');sv=_mcell(role,order,'SAMEVIS')
+        if c0 is None:break
+        print(f'  fact-level, {role} tokens in {on} sentences: C0 {ci(c0)} | SV {ci(sv)} | SV-C0 {ci(sv-c0)}')
+for name,key in (('real step','ACT[{c}]'),('full G','G[{c},{c}]')):
+    for order,on in ((0,'place first'),(1,'name first'),('all','all facts')):
+        vals={}
+        for cond in ('C0','SAMEVIS'):
+            out=[]
+            for r in R:
+                v=[]
+                for row in r['rows']:
+                    so=row.get('sent_order')
+                    if so is None:break
+                    fs=[j for j in range(16) if order=='all' or so[j]==order];v.extend(_matched(row['combos'][key.format(c=cond)]['dS'],r['seed'],fs))
+                out.append(np.nanmean(v) if len(v) else np.nan)
+            vals[cond]=np.array(out)
+        print(f'  {name:9s} {on:11s}: C0 {ci(vals["C0"])} | SV {ci(vals["SAMEVIS"])} | SV-C0 {ci(vals["SAMEVIS"]-vals["C0"])}')
