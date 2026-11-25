@@ -77,6 +77,20 @@ for arm in ARMS:
         for lo,hi,nm in bins:
             x=s[(s[:,0]>=lo)&(s[:,0]<=hi)];line+=f'{nm}: arm {x[:,1].mean():6.2f} nat {x[:,2].mean():6.2f} | '
         print(line)
+print('== 5b. the same by the order of the planted sentence: answer BEFORE the name (ans-first) / AFTER the name (name-first); NLL of the answer (role = the answer string) tokens at the mention; arm | natural-W8 forward')
+for arm in ARMS:
+    for af,afn in ((True,'answer before name'),(False,'answer after name')):
+        for cls in CLS:
+            s_=[]
+            for B in ST:
+                for m in B['arms'][arm]['mention_nll']:
+                    if m['cls']==cls and m['ntok']>0 and m['nll_arm'] and m.get('ans_first')==af:s_.append((m['mention'],np.sum(m['nll_arm']),np.sum(m['nll_nat'])))
+            if not s_:continue
+            s_=np.array(s_);line=f'  {arm} {afn:18s} class {cls}: n {len(s_):4d} first mention {s_[s_[:,0]==0,1].mean() if (s_[:,0]==0).any() else float("nan"):6.2f} | '
+            for lo,hi,nm in bins:
+                x=s_[(s_[:,0]>=lo)&(s_[:,0]<=hi)]
+                if len(x):line+=f'{nm}: arm {x[:,1].mean():6.2f} nat {x[:,2].mean():6.2f} | '
+            print(line)
 print('== 6. per arm, per chunk diagnostics (mean over chunks and streams)')
 for arm in ARMS:
     st=[x for B in ST for x in B['arms'][arm]['steps']];npa=[x['nonplanted_ce_arm'] for x in st if x['nonplanted_ce_arm'] is not None];npn=[x['nonplanted_ce_nat'] for x in st if x['nonplanted_ce_nat'] is not None]
@@ -141,3 +155,41 @@ for si,B in enumerate(ST):
     for f,fa in enumerate(B['facts']):
         r8=[r for r in G if r['stream']==si and r['fact']==f and r['arm']=='W8' and r['tag']=='k64'];r4=[r for r in G if r['stream']==si and r['fact']==f and r['arm']=='W4' and r['tag']=='k64']
         if r8 and r4 and 'text' in r8[0] and 'text' in r4[0]:print(f'  {B["stream"]} f{f:2d} {fa["type"]:6s} {fa["cls"]} gold {fa["answer"]:12s} | W8 {r8[0]["text"].strip()[:24]!r:28s} rank-top1 {int(r8[0]["top1"])} | W4 {r4[0]["text"].strip()[:24]!r:28s} rank-top1 {int(r4[0]["top1"])}')
+
+print('== 9. sensitivity: only facts whose EVERY mention has the answer token ids of the read form (" "+word); n facts per class; main contrast D(k=64) with control class B, B(k) levels, generation first-word accuracy')
+full={(si,t['fact']) for si,B in enumerate(ST) for t in B['fact_table'] if t['match_n']==NMEN}
+print(f'   facts with all 64 mentions in read form: {len(full)}/{sum(len(B["fact_table"]) for B in ST)}; by class '+', '.join(f'{c}: {sum(1 for si,B in enumerate(ST) for t in B["fact_table"] if t["cls"]==c and (si,t["fact"]) in full)}/{sum(1 for B in ST for t in B["fact_table"] if t["cls"]==c)}' for c in CLS))
+def pairdiff_sel(cls,k):
+    d={}
+    for r in rows:
+        if r['arm']=='W4' and r['cls']==cls and r['k']==k and (r['stream'],r['fact']) in full:d[(r['stream'],r['fact'])]=r['B']
+    return np.array([d[(r['stream'],r['fact'])]-r['B'] for r in rows if r['arm']=='W8' and r['cls']==cls and r['k']==k and (r['stream'],r['fact']) in d])
+for ctrl in ('B','C'):
+    for k in (64,32,16):
+        dA=pairdiff_sel('A',k);dC=pairdiff_sel(ctrl,k)
+        if len(dA)>1 and len(dC)>1:d,lo,hi=welch(dA,dC);print(f'  D(k={k}) control {ctrl}: {d:7.2f} Welch [{lo:6.2f},{hi:6.2f}] (A pairs {len(dA)}, {ctrl} pairs {len(dC)})')
+for arm in ARMS:
+    for cls in CLS:
+        x=np.array([r['B'] for r in rows if r['arm']==arm and r['cls']==cls and r['k']==64 and (r['stream'],r['fact']) in full])
+        if len(x):print(f'  {arm} class {cls} k=64 (n={len(x)}): B {tci(x)}')
+for tag in ('k64','end'):
+    for arm in ARMS:
+        for cls in CLS:
+            x=np.array([r['fw_gold'] for r in G if r['arm']==arm and r['cls']==cls and r['tag']==tag and 'fw_gold' in r and (r['stream'],r['fact']) in full])
+            if len(x):print(f'  generation first-word accuracy {tag} {arm} {cls} (n={len(x)}): {x.mean():.2f}')
+print('== 9b. fact table: reads-form mentions per fact (of 64) by class, first-mention and mean NLL per answer token')
+for si,B in enumerate(ST):
+    for c in CLS:
+        x=[t['match_n'] for t in B['fact_table'] if t['cls']==c];print(f'  {B["stream"]} class {c}: mean {np.mean(x):.1f}/64 per fact (min {min(x)}), end-to-start min {min(t["end_to_start_min"] for t in B["fact_table"] if t["cls"]==c)}')
+print('== 9c. write-time answer NLL per answer token (mean over the tokens of the mention) instead of the sum, by class and mention bin')
+for arm in ARMS:
+    for cls in CLS:
+        s_=[]
+        for B in ST:
+            for m in B['arms'][arm]['mention_nll']:
+                if m['cls']==cls and m['ntok']>0 and m['nll_arm']:s_.append((m['mention'],np.mean(m['nll_arm'])))
+        if not s_:continue
+        s_=np.array(s_);line=f'  {arm} class {cls}: first mention {s_[s_[:,0]==0,1].mean():.2f} | ';
+        for lo,hi,nm in bins:
+            x=s_[(s_[:,0]>=lo)&(s_[:,0]<=hi)];line+=f'{nm}: {x[:,1].mean():.2f} | '
+        print(line)

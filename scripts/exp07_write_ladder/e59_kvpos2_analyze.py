@@ -34,3 +34,44 @@ for tok in ('ans','name'):
             own.append(np.mean(ow,0));oth.append(np.mean(ot,0))
         own=np.array(own);oth=np.array(oth);print(f'  {tok:4s} {cond:8s} own  head {ci(own[:,0])} | bind {ci(own[:,1])} | fam {ci(own[:,2])}');print(f'  {tok:4s} {cond:8s} other head {ci(oth[:,0])} | bind {ci(oth[:,1])} | fam {ci(oth[:,2])}')
 print('NOTE on terms: the classes called ans / name in this report are the LATER / EARLIER mentioned entity of the sentence (2 tokens each; the U12 templates put the place before the person name in ~57% of the sentences), NOT always the place / the name. In name-first sentences ans = place (the answer), in place-first sentences ans = the person name.')
+# ---- (11/25) role x sentence order cells (Hans: role definition: place tokens = the answer, name tokens = the person name; the sentence order = place first / name first). The step classes 'ans' / 'name' are the LATER / EARLIER mentioned entity, so for the OWN fact j of a fact-level step: place-first sentence: ans = name role, name = place role; name-first sentence: ans = place role, name = name role.
+print('== ROLE x SENTENCE ORDER cells (fact-level steps of facts 0..3, OWN question of the fact): change over W0 of margin | BINDING (gold - mean exposed decoys of the same question) | FAMILIARITY (mean exposed decoys - mean never-exposed); per seed the mean over chunks and the facts of the cell; mean over seeds [t] positive seeds; C0 | SAMEVIS | SAMEVIS - C0')
+def _pf(dS,W0,j):
+    dS=np.asarray(dS);W0=np.asarray(W0);S=W0+dS;mar=lambda X:X[0]-X[1:12].max()
+    return np.array([mar(S[j])-mar(W0[j]),dS[j,0]-dS[j,1:12].mean(),dS[j,1:12].mean()-dS[j,12:16].mean()])
+def _cell(role,order,cond):
+    kind={('place',0):'name',('place',1):'ans',('name',0):'ans',('name',1):'name'}[(role,order)]
+    out=[];cnt=0
+    for r in R:
+        v=[]
+        for row in r['rows']:
+            so=row.get('sent_order')
+            if so is None:return None,0
+            for j in range(4):
+                if so[j]==order:v.append(_pf(row['combos'][f'G[{cond},{cond}]@f{j}_{kind}']['dS'],r['W0_scores'],j))
+        out.append(np.mean(v,0) if v else np.full(3,np.nan));cnt+=len(v)
+    return np.array(out),cnt
+for role in ('place','name'):
+    for order,on in ((0,'place first'),(1,'name first')):
+        c0,n0=_cell(role,order,'C0');sv,n1=_cell(role,order,'SAMEVIS')
+        if c0 is None:print('  (sent_order not stored in these files: re-cut impossible)');break
+        print(f'  {role} tokens in {on} sentences (facts {n0}):')
+        for mi,mn in enumerate(('margin','binding','familiarity')):print(f'     [{mn}] C0 {ci(c0[:,mi])} | SV {ci(sv[:,mi])} | SV-C0 {ci(sv[:,mi]-c0[:,mi])}')
+print('== class steps (all sentences of the chunk) by the sentence order of the EVALUATED fact: margin | binding | familiarity; classes ans = later mentioned, name = earlier mentioned entity')
+def _cls(cls,cond,order):
+    out=[]
+    for r in R:
+        v=[]
+        for row in r['rows']:
+            so=row.get('sent_order')
+            if so is None:return None
+            dS=np.asarray(row['combos'][f'G[{cond},{cond}]@{cls}']['dS']);W0=np.asarray(r['W0_scores'])
+            for j in range(16):
+                if order=='all' or so[j]==order:v.append(_pf(dS,W0,j))
+        out.append(np.mean(v,0) if v else np.full(3,np.nan))
+    return np.array(out)
+for cls in ('ans','name','frame','extra','filler'):
+    for order,on in ((0,'place first'),(1,'name first'),('all','all facts')):
+        c0=_cls(cls,'C0',order);sv=_cls(cls,'SAMEVIS',order)
+        if c0 is None:break
+        print(f'  class {cls:6s} {on:11s}: '+' | '.join(f'[{mn}] C0 {ci(c0[:,mi])} SV-C0 {ci(sv[:,mi]-c0[:,mi])}' for mi,mn in enumerate(('margin','binding','familiarity'))))

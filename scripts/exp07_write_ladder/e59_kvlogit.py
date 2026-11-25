@@ -41,7 +41,7 @@ def items2(world,UX):
         items.append({'kind':'fact','fact':f['id'],'group':f['group'],'name_id':f['id'],'place_id':f['id'],'name':f['X'],'qframe':f['id']%NQ,'prefix':QF[f['id']%NQ].format(X=f['X']),'cands':[' '+x['P'] for x in cl]+[' '+u for u in UX],'gold_idx':0,'cand_fact':[x['id'] for x in cl]+[-1]*len(UX),'cand_group':[x['group'] for x in cl]+[-1]*len(UX),'cand_same':[x['group']==f['group'] for x in cl]+[False]*len(UX),'cand_exposed':[True]*NEXP+[False]*len(UX),'n_rank':NEXP})
     return items
 
-def entity_masks(k,T,ap,w,mode='order'):
+def entity_masks(k,T,ap,w,mode='role'):
     """token sets over the NLL index (position - 1) of chunk k. Two sentence entities (2 tokens each: the PLACE = answer, the person NAME); the U12 templates put the place before the name in ~57% of the sentences. mode 'role': A = place tokens, N = name tokens (independent of the order). mode 'order': A = the LATER mentioned entity (class 'ans' of e59_kvpos / kvpos2: predicted given the earlier one), N = the EARLIER mentioned entity (class 'name' there). F = whole sentences of the read facts (both entities + frame), O = whole sentences of the extra facts. A and N are disjoint and lie inside F in both modes. Also ORD (0 place-first / 1 name-first / -1 none) and ROLE (0 place / 1 name / 2 frame / 3 extra sentence / -1 outside) per token and ORDER[fact] of the read facts."""
     assert mode in ('role','order');m={c:np.zeros(T,bool) for c in 'ANFO'};m['ORD']=np.full(T,-1,np.int8);m['ROLE']=np.full(T,-1,np.int8);m['ORDER']={};byf={d['fact']:d for d in ap[k]}
     for x in w['chunks'][k]['sents']:
@@ -207,5 +207,5 @@ def run(a):
         L.rec_cache=None;del L
     RES['rows']=[ROW[k] for k in sorted(ROW)];json.dump(RES,open(out/f'kvlogit_s{seed}.json','w'),default=float);lg('wrote',out/f'kvlogit_s{seed}.json',f'{time.monotonic()-t_all:.0f}s')
 if __name__=='__main__':
-    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--chunks',default='16,80');ap_.add_argument('--nch',type=int,default=0);ap_.add_argument('--cap',type=float,default=100.);ap_.add_argument('--sets',default='order',choices=('order','role'));ap_.add_argument('--no-reads',action='store_true',help='debug (CPU check): no arm reads');ap_.add_argument('--selftest',action='store_true');a=ap_.parse_args()
+    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--chunks',default='16,80');ap_.add_argument('--nch',type=int,default=0);ap_.add_argument('--cap',type=float,default=100.);ap_.add_argument('--sets',default='role',choices=('order','role'));ap_.add_argument('--no-reads',action='store_true',help='debug (CPU check): no arm reads');ap_.add_argument('--selftest',action='store_true');a=ap_.parse_args()
     selftest() if a.selftest else run(a)
