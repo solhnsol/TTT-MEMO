@@ -56,7 +56,7 @@ def run(a):
     def ref_grad(m,st_suf,c,pref_,kmask,wt):
         (_l,nll),g=eqx.filter_value_and_grad(loss_fn,has_aux=True)(m,st_suf,c,pref_,kmask,wt);return g.inner_parameters(),nll
     EXPO=[int(x) for x in a.expo.split(',')];NCH=a.nch;LASTE=max(EXPO);seed=a.seed
-    cf=jnp.asarray(np.asarray([int(raw[i*G.NCAND+items[i]['gold_idx']][0][raw[i*G.NCAND+items[i]['gold_idx']][1][0]+1]) for i in range(NREAD)],np.int32))
+    cf=jnp.asarray(np.unique(np.asarray([int(raw[i*G.NCAND+items[i]['gold_idx']][0][raw[i*G.NCAND+items[i]['gold_idx']][1][0]+1]) for i in range(NREAD)],np.int32)))  # unique first tokens (shared first tokens were counted twice: mass > 1 in the 1348 smoke)
     @eqx.filter_jit
     def err_fn(m,st_suf,c,pref_,kmask,cf_):
         """per token: e = softmax - onehot in float32 WITHOUT subtraction (e_j = p_j for j != y, e_y = -sum_{j != y} p_j via the logsumexp without the answer), ||e||, NLL, share of |e| on the first tokens of the 16 places"""
