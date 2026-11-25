@@ -16,7 +16,7 @@ for lab,tag,arm in RUNS:
     for s in SEEDS:
         r=load(tag,arm,s);gold=np.array(r['meta']['gold_idx']);g_=[];l_=[]
         for ap in sorted(int(k) for k in r['read']):
-            jj=ap//16-1;name=f'w{jj}';sd=json.load(open(D/f'E55_{tag}_ctx_s{s}.json'))[str(ap)][name];lag=np.array([x if x is not None else -1 for x in sd['d']]);ii=np.array(r['meta']['item_idx'][str(ap)][name]);assert (ii==np.array(sd['items'])).all()
+            jj=ap//16-1;name=f'w{jj}';sd=json.load(open(D/f'E55_{tag}_ctx_s{s}.json'))[str(ap)][name];lag=np.array([x if x is not None else -99 for x in sd['d']]);ii=np.array(r['meta']['item_idx'][str(ap)][name]);assert (ii==np.array(sd['items'])).all()
             for l in range(jj+1):
                 m=lag==l;gg=gold[ii[m]];g_.append((l,met(np.asarray(r['read'][str(ap)][name])[m],gg)-met(np.asarray(r['W0'][name])[m],gg),met(np.asarray(r['read'][str(ap)][name])[m],gg)))
         G[(lab,s)]={l:np.mean([x[1] for x in g_ if x[0]==l],0) for l in range(8)};L[(lab,s)]={l:np.mean([x[2] for x in g_ if x[0]==l],0) for l in range(8)}
@@ -57,6 +57,28 @@ print('== final read point, SAME weights, same items: window read (w7) vs neutra
 for lab,tag,arm in RUNS:
     d0=[];d1=[]
     for s in SEEDS:
-        r=load(tag,arm,s);gold=np.array(r['meta']['gold_idx']);fa=max(int(k) for k in r['read']);jj=fa//16-1;sd=json.load(open(D/f'E55_{tag}_ctx_s{s}.json'))[str(fa)][f'w{jj}'];ii=np.array(sd['items']);lag=np.array([x if x is not None else -1 for x in sd['d']]);Sw=np.asarray(r['read'][str(fa)][f'w{jj}']);Ww=np.asarray(r['W0'][f'w{jj}']);So=np.asarray(r['read'][str(fa)]['out']);Wo=np.asarray(r['W0']['out'])
+        r=load(tag,arm,s);gold=np.array(r['meta']['gold_idx']);fa=max(int(k) for k in r['read']);jj=fa//16-1;sd=json.load(open(D/f'E55_{tag}_ctx_s{s}.json'))[str(fa)][f'w{jj}'];ii=np.array(sd['items']);lag=np.array([x if x is not None else -99 for x in sd['d']]);Sw=np.asarray(r['read'][str(fa)][f'w{jj}']);Ww=np.asarray(r['W0'][f'w{jj}']);So=np.asarray(r['read'][str(fa)]['out']);Wo=np.asarray(r['W0']['out'])
         dd={l:(met(Sw[lag==l],gold[ii[lag==l]])[0]-met(Ww[lag==l],gold[ii[lag==l]])[0])-(met(So[ii[lag==l]],gold[ii[lag==l]])[0]-met(Wo[ii[lag==l]],gold[ii[lag==l]])[0]) for l in range(jj+1)};d0.append(dd[0]);d1.append(np.mean([dd[l] for l in range(1,jj+1)]))
     print(f'  {lab:14s} lag0 (block 7, in window) {ci(np.array(d0))} | lag1-7 (window kept, facts not in window) {ci(np.array(d1))}')
+
+# ---- familiarity / binding split (job 1345w with UNWRITTEN questions; Hans 11/25 'familiarity control'): the same context w<k> also asks the questions of the blocks k+1..7 (never written, never exposed; their candidates are the places of their own block). Per item dS = candidate scores minus W0 of the SAME context. BINDING = dS[gold] - mean dS[decoys]; DECOY = mean dS[decoys]; FAMILIARITY (exposed - unexposed) = DECOY(written block at lag l) - DECOY(items of unwritten blocks) in the same read.
+print('== familiarity / binding split per lag (read points with an unwritten block, k < 7; mean over blocks, read points, seeds; summed log p; bind | decoy | fam = decoy(lag) - decoy(unwritten)) ==')
+FB={}
+for lab,tag,arm in RUNS:
+    for s in SEEDS:
+        r=load(tag,arm,s);gold=np.array(r['meta']['gold_idx']);acc={}
+        for ap in sorted(int(k) for k in r['read']):
+            jj=ap//16-1
+            if jj>=7:continue
+            name=f'w{jj}';sd=json.load(open(D/f'E55_{tag}_ctx_s{s}.json'))[str(ap)][name];lag=np.array([x if x is not None else -99 for x in sd['d']]);ii=np.array(sd['items'])
+            dS=np.asarray(r['read'][str(ap)][name])-np.asarray(r['W0'][name]);ok=lag!=-99;g=gold[ii[ok]];dS=dS[ok];lg=lag[ok]
+            bind=np.array([dS[n,g[n]]-np.delete(dS[n],g[n]).mean() for n in range(len(g))]);dec=np.array([np.delete(dS[n],g[n]).mean() for n in range(len(g))]);un=dec[lg<0].mean()
+            for l in range(jj+1):
+                m=lg==l;acc.setdefault(l,[]).append((bind[m].mean(),dec[m].mean(),dec[m].mean()-un))
+            acc.setdefault('un',[]).append((bind[lg<0].mean(),un,0.0))
+        FB[(lab,s)]={l:np.mean(v,0) for l,v in acc.items()}
+for lab,_,_ in RUNS:
+    print(f'  {lab:14s} '+' | '.join(f"l{l} bind {np.mean([FB[(lab,s)][l][0] for s in SEEDS if l in FB[(lab,s)]]):6.3f} dec {np.mean([FB[(lab,s)][l][1] for s in SEEDS if l in FB[(lab,s)]]):6.2f} fam {np.mean([FB[(lab,s)][l][2] for s in SEEDS if l in FB[(lab,s)]]):6.2f}" for l in (0,1,3,6))+f" | unwritten bind {np.mean([FB[(lab,s)]['un'][0] for s in SEEDS]):6.3f} dec {np.mean([FB[(lab,s)]['un'][1] for s in SEEDS]):6.2f}")
+for i,(lab,_,_) in enumerate(RUNS):
+    for lab2,_,_ in RUNS[:i]:
+        print(f'  {lab} - {lab2}: '+' | '.join(f"l{l} bind {ci(np.array([FB[(lab,s)][l][0]-FB[(lab2,s)][l][0] for s in SEEDS]))} fam {ci(np.array([FB[(lab,s)][l][2]-FB[(lab2,s)][l][2] for s in SEEDS]))}" for l in (0,1,3)))

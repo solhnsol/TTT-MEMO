@@ -5,7 +5,7 @@ import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
 import e57_blockstream8_run as B8
-CH=1024;LC=16;NB=8;NF=128;STASH={'base':{}}
+CH=1024;LC=16;NB=8;NF=128;STASH={'base':{}};UNWRITTEN=True
 def build_win(plan,w,ids,nitems=NF):
     """plan = e55_read.plan(world)['read'] (original in_g0 contexts) -> same dict with, per read point a (block jj = a / LC - 1), ONE context 'w<jj>': items = facts of the blocks 0..jj (sorted by block, then id) + control items, tail = the original in_g0 tail (the real last 8 chunks), 'd' per item = lag jj - block (None for controls). Modified IN PLACE (make_records reads the contexts from the same plan object); the original tails are stashed so that a second call (second arm) works."""
     new={}
@@ -16,7 +16,7 @@ def build_win(plan,w,ids,nitems=NF):
         tail,ctrl=STASH['base'][a];assert len(tail)==8*CH and [int(t) for t in tail[-CH:]]==[int(t) for t in ids[(a-1)*CH:a*CH]],('window tail is not the last 8 stream chunks',a)
         for c in range(a-8,a):
             for x in w['chunks'][c]['sents']:assert B8.BLK(x['fact'])==jj,('window chunk carries facts of another block',c,jj)
-        items=sorted([i for i in range(nitems) if B8.BLK(i)<=jj],key=lambda i:(B8.BLK(i),i))+list(ctrl)
+        items=sorted([i for i in range(nitems) if (B8.BLK(i)<=jj or UNWRITTEN)],key=lambda i:(B8.BLK(i),i))+list(ctrl)        # UNWRITTEN: the questions of the blocks > jj (never written, never in the stream) are asked too = never-exposed control (Hans 11/25 'familiarity control'; their candidates are places of their own never-exposed block)
         ent['ctx']={f'w{jj}':{'items':items,'tail':tail,'window_chunks':8,'d':[jj-B8.BLK(i) if i<nitems else None for i in items]}};new[a]=ent
     return new
 def sidecar(plan,path):
@@ -52,13 +52,14 @@ def selftest():
         new=build_win(P['read'],w,ids)
         assert sorted(new)==[LC*(j+1) for j in range(NB)]
         for a,ent in new.items():
-            jj=a//LC-1;(name,c),=ent['ctx'].items();assert name==f'w{jj}' and len(c['tail'])==8*CH and len(c['items'])==16*(jj+1)+G.NCTRL and len(c['d'])==len(c['items'])
-            assert sorted(set(x for x in c['d'] if x is not None))==list(range(jj+1)) and all(c['d'][n]==jj-B8.BLK(i) for n,i in enumerate(c['items']) if i<NF)
+            jj=a//LC-1;(name,c),=ent['ctx'].items();assert name==f'w{jj}' and len(c['tail'])==8*CH and len(c['items'])==(NF if UNWRITTEN else 16*(jj+1))+G.NCTRL and len(c['d'])==len(c['items'])
+            assert sorted(set(x for x in c['d'] if x is not None))==list(range(jj-NB+1 if UNWRITTEN else 0,jj+1)) and all(c['d'][n]==jj-B8.BLK(i) for n,i in enumerate(c['items']) if i<NF)
             assert c['items'][:-G.NCTRL]==sorted(c['items'][:-G.NCTRL],key=lambda i:(B8.BLK(i),i))
+            for bj in range(jj+1,NB):assert all(x['fact']!=i for ch in range(a) for x in w['chunks'][ch]['sents'] for i in range(NF) if B8.BLK(i)==bj),('unwritten block occurs in the stream',bj,a)
             for bj in range(jj):assert all(x['fact']!=i for ch in range(a-8,a) for x in w['chunks'][ch]['sents'] for i in range(NF) if B8.BLK(i)==bj)
     import tempfile,os;td=tempfile.mkdtemp();sidecar(new,td+'/c.json');assert len(json.load(open(td+'/c.json')))==NB
     n_item_reads=sum(len(c['items']) for ent in new.values() for c in ent['ctx'].values())
-    print(f'e59_bs8_window selftest ok: 8 read points, one context w<k> = real last 8 chunks (tail of the original in_g0), items = blocks 0..k + {G.NCTRL} controls, lag per item, {n_item_reads} item-reads per run (+ W0 same, out at the final point {NF+G.NCTRL})')
+    print(f'e59_bs8_window selftest ok: 8 read points, one context w<k> = real last 8 chunks (tail of the original in_g0), items = ALL blocks (0..k written, k+1..7 NEVER written = never-exposed control) + {G.NCTRL} controls, lag per item, {n_item_reads} item-reads per run (+ W0 same, out at the final point {NF+G.NCTRL})')
 if __name__=='__main__':
     if '--selftest' in sys.argv:selftest()
     else:
