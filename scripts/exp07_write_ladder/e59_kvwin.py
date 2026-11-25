@@ -110,10 +110,12 @@ def run(a):
     assert CHK['W0_R2_vs_Packed_r1']<0.02 and CHK['W0_R2m_allfalse_vs_R2']<0.02,CHK
     assert CHK['W0_R2m_prefonly_vs_R2']>0.01 and CHK['W0_R2m_sufonly_vs_R2']>0.01 and CHK['W0_allhidden_vs_R2']>0.05,('a mask channel has no effect',CHK)
     RES=dict(seed=seed,variants=list(VARIANTS),W0={v:W0[v].tolist() for v in VARIANTS},checks=CHK,cand_exposed=[True]*NEXP+[False]*(NC-NEXP),arms={},hidden_counts={v:Hs[v].sum(1).tolist() for v in VARIANTS},args=vars(a))
-    for arm in ARMS:
-        fs=kv['arms'][arm]['reads']['128']['final_state'];m=rd.load_state(ROOT/fs['_file'],fs['_hash']);m32=rd.to_fp32(m);r=score_all(m32,list(VARIANTS));RES['arms'][arm]={v:r[v].tolist() for v in VARIANTS}
-        RES['arms'][arm]['R2_vs_saved_1348']=dd(r['R2']-W0['R2'],kv['arms'][arm]['reads']['128']['dS2']);lg(f'seed {seed} {arm}: R2 recomputed vs saved dS2 of 1348: {RES["arms"][arm]["R2_vs_saved_1348"]:.4f}');del m,m32
-    json.dump(RES,open(out/f'kvwin_s{seed}.json','w'),default=float);lg('wrote',out/f'kvwin_s{seed}.json',f'{time.monotonic()-t_all:.0f}s')
+    SRC={x.split('=')[0]:x.split('=')[1] for x in a.srcs.split(',')} if a.srcs else {}
+    for arm in (a.arms.split(',') if a.arms else ARMS):
+        sj=json.load(open(ROOT/SRC[arm].format(seed=seed))) if arm in SRC else kv;assert abs(dd(sj['W0_R2'],kv['W0_R2']))<1e-6,'the source run has other W0 scores'
+        fs=sj['arms'][arm]['reads']['128']['final_state'];m=rd.load_state(ROOT/fs['_file'],fs['_hash']);m32=rd.to_fp32(m);r=score_all(m32,list(VARIANTS));RES['arms'][arm]={v:r[v].tolist() for v in VARIANTS}
+        RES['arms'][arm]['R2_vs_saved_1348']=dd(r['R2']-W0['R2'],sj['arms'][arm]['reads']['128']['dS2']);lg(f'seed {seed} {arm}: R2 recomputed vs saved dS2 of 1348: {RES["arms"][arm]["R2_vs_saved_1348"]:.4f}');del m,m32
+    json.dump(RES,open(out/f'{a.prefix}_s{seed}.json','w'),default=float);lg('wrote',out/f'{a.prefix}_s{seed}.json',f'{time.monotonic()-t_all:.0f}s')
 if __name__=='__main__':
-    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--selftest',action='store_true');a=ap_.parse_args()
+    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--selftest',action='store_true');ap_.add_argument('--arms',default=None);ap_.add_argument('--srcs',default=None);ap_.add_argument('--prefix',default='kvwin');a=ap_.parse_args()
     selftest() if a.selftest else run(a)

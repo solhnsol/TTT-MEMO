@@ -5,8 +5,9 @@ import numpy as np
 HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
 import e59_shadow as SH
+import e59_kvlogit as KL
 from e59_kvpos2 import items2,NEXP,NREAD,CH,CONDS,NL
-ARMS={'S2As-u':'SAMEVIS','E2As':'SAMEVIS'};MODE={'S2As-u':'S','E2As':'E'};KP=48                           # both arms write with the SAMEVIS graph; only the logit cotangent of the A tokens (place tokens of the 16 read facts, role definition) differs
+ARMS={'S2As-u':'SAMEVIS','E2As':'SAMEVIS','E2All':'SAMEVIS'};MODE={'S2As-u':'S','E2As':'E','E2All':'ALL'};KP=48     # E2All (job 1344t2): the cotangent of EVERY token with a loss is wt*e_C0                           # both arms write with the SAMEVIS graph; only the logit cotangent of the A tokens (place tokens of the 16 read facts, role definition) differs
 class UVRec:
     """wraps a mask object: remembers the arguments of the last keep() call (the chunk's natural window K,V and base visibility) so that the OTHER condition's mask can be built for the diagnostics"""
     def __init__(self,u):self.u=u;self.stash=None
@@ -78,6 +79,17 @@ def run(a):
     def ref_grad_s(m,st_suf,c,pref_,kmask,wt,cA,ixj,kvj,am):
         (_l,nll),g=eqx.filter_value_and_grad(loss_s,has_aux=True)(m,st_suf,c,pref_,kmask,wt,cA,ixj,kvj,am);return g.inner_parameters(),nll
     @eqx.filter_jit
+    def realized_cot(m,st_suf,c,pref_,kmask,wt,cA,ixj,kvj,am):
+        """gradient of the surrogate loss with respect to the logits themselves (the realized logit cotangent) """
+        s3.S3SUF['kmask']=kmask
+        try:o=m.language_model.suffix_call(prefix_outputs=pref_,state=st_suf,seq=c)
+        finally:s3.S3SUF.clear()
+        lgt=o.logits.astype(jnp.float32)
+        def f(z):
+            l_=lgt+z;lp=jax.nn.log_softmax(l_,axis=-1);nll=-jnp.take_along_axis(lp,c.target_tokens[:,None],axis=-1)[:,0]
+            return jnp.sum(jnp.where(am,0.0,wt*nll))+jnp.sum(kvj*wt[ixj]*jnp.sum(cA*l_[ixj],axis=-1))
+        return jax.grad(f)(jnp.zeros_like(lgt))
+    @eqx.filter_jit
     def err2(m,st_suf,c,pref_,kmask,ixj):
         """at the (padded) token indices ixj: e = softmax - onehot (float32, no subtraction), ||e||, NLL, correct-answer logit, correct logit minus the largest wrong logit"""
         s3.S3SUF['kmask']=kmask
@@ -105,27 +117,49 @@ def run(a):
         with jax.default_matmul_precision('highest'):return np.asarray(PR2[k].r1(rd.to_fp32(m))).reshape(len(items),G.NCAND)[:NREAD]
     W0R2=read2(rt.base,LASTE-1)
     RES=dict(validation=None,seed=seed,expo=EXPO,nch=NCH,W0_R1=W0S.tolist(),W0_R2=W0R2.tolist(),cand_exposed=[True]*NEXP+[False]*(G.NCAND-NEXP),arms={},args=vars(a));RC={}
-    VAL={}
+    VAL={};VAL8={}
+    rel_=lambda x,y:float(jnp.sqrt(sum(jnp.sum((p-q)**2) for p,q in zip(jax.tree_util.tree_leaves(x),jax.tree_util.tree_leaves(y)))/sum(jnp.sum(q**2) for q in jax.tree_util.tree_leaves(y))))
+    gnorm_=lambda x:float(jnp.sqrt(sum(jnp.sum(q**2) for q in jax.tree_util.tree_leaves(x))))
     for arm,cn in ARMS.items():
+        if arm not in a.arms.split(','):continue
         mode=MODE[arm];ocn='SAMEVIS' if cn=='C0' else 'C0'
         uv=UVRec(SH.mk_uv(CONDS[cn],w,seed,lg));uvo=SH.mk_uv(CONDS[ocn],w,seed,lg);rec=dict(steps=[],diag={},reads={},orders={});cnt=[0]
         L=ISO.Iso55(rt,save_dir=out/'states'/f's{seed}_{arm}',canary=can);L.rec_cache=RC
-        def ws(m,st_all,st_suf,c,pref,kmask,rec=rec,cnt=cnt,uv=uv,uvo=uvo,L=L,cn=cn,ocn=ocn,arm=arm):
+        def ws(m,st_all,st_suf,c,pref,kmask,rec=rec,cnt=cnt,uv=uv,uvo=uvo,L=L,cn=cn,ocn=ocn,arm=arm,mode=mode):
             k=cnt[0];cnt[0]+=1;valid=np.asarray(c.loss_masks,np.float32);wt=valid/valid.sum();T=len(wt);pm,od=place_masks(k,T,ap);ix=np.where(pm)[0];nA=len(ix);assert 0<nA<=KP,nA
             ids_k=jnp.asarray(ids0[k*CH:(k+1)*CH],dtype=jnp.int32);kk,Kc,Vc,keep_all=uv.stash;assert kk==k
             keep_o,_=uvo.keep(k,m,Kc,Vc,ids_k,keep_all);pref_o=L.prefix_masked(m,ids_k,Kc,Vc,jnp.int32(k*CH),jnp.asarray(keep_o))
-            ixp=np.zeros(KP,np.int32);ixp[:nA]=ix;kvp=np.zeros(KP,np.float32);kvp[:nA]=1;ixj=jnp.asarray(ixp);kvj=jnp.asarray(kvp);amj=jnp.asarray(pm);wtj=jnp.asarray(wt)
+            if mode=='ALL':ixp=np.arange(T,dtype=np.int32);kvp=valid.copy();sel=ix                                                              # every token with a loss
+            else:ixp=np.zeros(KP,np.int32);ixp[:nA]=ix;kvp=np.zeros(KP,np.float32);kvp[:nA]=1;sel=slice(0,nA)
+            ixj=jnp.asarray(ixp);kvj=jnp.asarray(kvp);amj=jnp.ones(T,bool) if mode=='ALL' else jnp.asarray(pm);wtj=jnp.asarray(wt)
             e1,en1,nll1,gl1,mg1=err2(m,st_suf,c,pref,kmask,ixj);e2,en2,nll2,gl2,mg2=err2(m,st_suf,c,pref_o,jnp.asarray(keep_o),ixj)           # e1: SAMEVIS (the weights of this arm now, this arm's own mask), e2: C0
-            cosv=np.asarray(jnp.sum(e1*e2,axis=-1)/jnp.maximum(en1*en2,1e-30))[:nA];s_=en2/jnp.maximum(en1,1e-30);okk=jnp.isfinite(s_)&(en1>0)&jnp.isfinite(en2)
-            if mode=='E':cA=e2;nbad=0
-            else:cA=jnp.where(okk[:,None],s_[:,None]*e1,e1);nbad=int((~okk)[:nA].sum())                                                           # S2As-u: C0 size, SAMEVIS direction
-            if a.validate and not VAL:                                                                                                           # tests (1), (2) on the real model at the first chunk of the first arm (the weights are W0)
-                g_ref,_=ref_grad(m,st_suf,c,pref,kmask,wtj);g_s1,_=ref_grad_s(m,st_suf,c,pref,kmask,wtj,e1,ixj,kvj,amj);sv=np.ones(T,np.float32);sv[ix]=np.asarray(jnp.where(okk,s_,1.0))[:nA];g_w,_=ref_grad(m,st_suf,c,pref,kmask,jnp.asarray(wt*sv));g_s2,_=ref_grad_s(m,st_suf,c,pref,kmask,wtj,jnp.where(okk[:,None],s_[:,None]*e1,e1),ixj,kvj,amj)
-                rel=lambda x,y:float(jnp.sqrt(sum(jnp.sum((p-q)**2) for p,q in zip(jax.tree_util.tree_leaves(x),jax.tree_util.tree_leaves(y)))/sum(jnp.sum(q**2) for q in jax.tree_util.tree_leaves(y))))
-                VAL.update(test1_cotangent_eSV_vs_original=rel(g_s1,g_ref),test2_cotangent_sXeSV_vs_weighted_loss=rel(g_s2,g_w),first_chunk_scale_s_quartiles=np.percentile(np.asarray(s_)[:nA],[25,50,75]).tolist());del g_ref,g_s1,g_w,g_s2;lg('VALIDATION',VAL);assert VAL['test1_cotangent_eSV_vs_original']<5e-3 and VAL['test2_cotangent_sXeSV_vs_weighted_loss']<5e-3,VAL
-            g,nll=ref_grad_s(m,st_suf,c,pref,kmask,wtj,cA,ixj,kvj,amj);newp,gn,coef=L.sgd_apply(m,st_all,g);del g;ce=float((np.asarray(nll,np.float32)*valid).sum()/valid.sum());cot=float(jnp.linalg.norm(cA,axis=-1)[:nA].mean())
-            rec['steps'].append(dict(k=k,gnorm=float(gn),coef=float(coef),ce=ce,cot_norm=cot,nbad=nbad,gold_logit=float(np.asarray(gl1)[:nA].mean()),margin_sv=float(np.asarray(mg1)[:nA].mean())))
-            if (k+1)%8==0:rec['diag'][str(k+1)]=dict(cond_own=cn,cond_other=ocn,idx=ix.tolist(),en_own=np.asarray(en1)[:nA].tolist(),en_other=np.asarray(en2)[:nA].tolist(),nll_own=np.asarray(nll1)[:nA].tolist(),nll_other=np.asarray(nll2)[:nA].tolist(),cos=cosv.tolist(),gold_logit_sv=np.asarray(gl1)[:nA].tolist(),gold_logit_c0=np.asarray(gl2)[:nA].tolist(),margin_sv=np.asarray(mg1)[:nA].tolist(),margin_c0=np.asarray(mg2)[:nA].tolist(),order=od)
+            den=en1*en2;cosv=np.asarray(jnp.where(den>1e-30,jnp.sum(e1*e2,axis=-1)/jnp.maximum(den,1e-30),jnp.nan))[sel];s_=en2/jnp.maximum(en1,1e-30);okk=jnp.isfinite(s_)&(en1>0)&jnp.isfinite(en2);nsmall=0
+            if mode in ('E','ALL'):cA=e2;nbad=0
+            else:cA=jnp.where(okk[:,None],s_[:,None]*e1,e1);nbad=int((~okk)[sel].sum());nsmall=int(((en1>0)&(en1<1e-30))[sel].sum())               # S2As-u: C0 size, SAMEVIS direction
+            if a.validate and not VAL:                                                                                                           # tests at the first chunk of the first arm (the weights are W0; C0 = SAMEVIS there)
+                g_ref,_=ref_grad(m,st_suf,c,pref,kmask,wtj);g_s1,_=ref_grad_s(m,st_suf,c,pref,kmask,wtj,e1,ixj,kvj,amj);VAL['test1_cotangent_eSV_vs_original']=rel_(g_s1,g_ref);VAL['mode']=mode
+                if mode=='ALL':
+                    g_c0,_=ref_grad_s(m,st_suf,c,pref,kmask,wtj,e2,ixj,kvj,amj);VAL['test1b_E2All_cotangent_eC0_vs_original_first_chunk']=rel_(g_c0,g_ref);gs=gnorm_(g_s1);VAL['gnorm_eSV_cotangent']=gs;kvb=json.load(open(pathlib.Path(a.base_dir)/f'kvmulti_s{seed}.json'));VAL['gnorm_P0s_step0_job1344t0']=kvb['arms']['P0s']['steps'][0]['gnorm'];VAL['test2_eSV_step_vs_P0s_step_rel']=abs(gs-VAL['gnorm_P0s_step0_job1344t0'])/VAL['gnorm_P0s_step0_job1344t0'];del g_c0
+                    assert VAL['test1b_E2All_cotangent_eC0_vs_original_first_chunk']<5e-3 and VAL['test2_eSV_step_vs_P0s_step_rel']<5e-3,VAL
+                else:
+                    sv=np.ones(T,np.float32);sv[ix]=np.asarray(jnp.where(okk,s_,1.0))[:nA];g_w,_=ref_grad(m,st_suf,c,pref,kmask,jnp.asarray(wt*sv));g_s2,_=ref_grad_s(m,st_suf,c,pref,kmask,wtj,jnp.where(okk[:,None],s_[:,None]*e1,e1),ixj,kvj,amj)
+                    VAL.update(test2_cotangent_sXeSV_vs_weighted_loss=rel_(g_s2,g_w),first_chunk_scale_s_quartiles=np.percentile(np.asarray(s_)[:nA],[25,50,75]).tolist());del g_w,g_s2
+                del g_ref,g_s1;lg('VALIDATION',VAL);assert VAL['test1_cotangent_eSV_vs_original']<5e-3 and VAL.get('test2_cotangent_sXeSV_vs_weighted_loss',0)<5e-3,VAL
+            if (a.validate or a.validate8) and k==7 and arm not in VAL8:                                                                         # chunk 8: realized logit cotangent vs the target; for S2As-u the s != 1 test against the weighted-loss implementation (tokens with 1e-4 < ||e_SV||, s < 1e5; the rest s = 1)
+                Gz=realized_cot(m,st_suf,c,pref,kmask,wtj,cA,ixj,kvj,amj);tgt=(wtj[ixj]*kvj)[:,None]*cA;msk=(kvj>0)[:,None];VAL8[arm]=dict(realized_cotangent_rel_err=float(jnp.linalg.norm(jnp.where(msk,Gz[ixj]-tgt,0.0))/jnp.maximum(jnp.linalg.norm(tgt),1e-30)));del Gz,tgt
+                if mode=='S':
+                    rs=okk&(en1>1e-4)&(s_<1e5)&(jnp.arange(len(en1))<nA);svr=np.ones(T,np.float32);svr[ix]=np.asarray(jnp.where(rs,s_,1.0))[:nA];cA_r=jnp.where(rs[:,None],s_[:,None]*e1,e1)
+                    g_s,_=ref_grad_s(m,st_suf,c,pref,kmask,wtj,cA_r,ixj,kvj,amj);g_w,_=ref_grad(m,st_suf,c,pref,kmask,jnp.asarray(wt*svr));VAL8[arm].update(test2_chunk8_s_ne_1_rel_err=rel_(g_s,g_w),n_restricted_tokens=int(rs.sum()),n_A_tokens=nA,s_quartiles_restricted=np.percentile(np.asarray(s_)[np.asarray(rs)],[25,50,75]).tolist() if int(rs.sum())>0 else None);del g_s,g_w
+                lg('VALIDATION chunk 8',arm,VAL8[arm])
+            g,nll=ref_grad_s(m,st_suf,c,pref,kmask,wtj,cA,ixj,kvj,amj);newp,gn,coef=L.sgd_apply(m,st_all,g);del g;ce=float((np.asarray(nll,np.float32)*valid).sum()/valid.sum());cot=float(jnp.linalg.norm(cA,axis=-1)[sel].mean())
+            rec['steps'].append(dict(k=k,gnorm=float(gn),coef=float(coef),ce=ce,cot_norm=cot,nbad=nbad,nsmall=nsmall,gold_logit=float(np.asarray(gl1)[sel].mean()),margin_sv=float(np.asarray(mg1)[sel].mean())))
+            if (k+1)%8==0:
+                rec['diag'][str(k+1)]=dict(cond_own=cn,cond_other=ocn,idx=ix.tolist(),en_own=np.asarray(en1)[sel].tolist(),en_other=np.asarray(en2)[sel].tolist(),nll_own=np.asarray(nll1)[sel].tolist(),nll_other=np.asarray(nll2)[sel].tolist(),cos=cosv.tolist(),gold_logit_sv=np.asarray(gl1)[sel].tolist(),gold_logit_c0=np.asarray(gl2)[sel].tolist(),margin_sv=np.asarray(mg1)[sel].tolist(),margin_c0=np.asarray(mg2)[sel].tolist(),order=od)
+                if mode=='ALL':
+                    ro=KL.entity_masks(k,T,ap,w,'role')['ROLE'];vm=valid>0;E1=np.asarray(en1);E2=np.asarray(en2);kd={}
+                    for nm_,v_ in (('place',0),('name',1),('frame',2),('extra',3),('filler',-1)):
+                        mk_=vm&(ro==v_);kd[nm_]=dict(n=int(mk_.sum()),en_c0=float(E2[mk_].mean()) if mk_.any() else None,en_sv=float(E1[mk_].mean()) if mk_.any() else None)
+                    rec['diag'][str(k+1)]['kinds']=kd
             del e1,e2,cA;return newp,gn,coef,jnp.asarray(ce,jnp.float32)
         def hook(k,m,rec=rec,arm=arm):
             e=k+1;read_out(m);d=dict(dS1=(LAST['S']-W0S).tolist())
@@ -144,7 +178,7 @@ def run(a):
         L.rec_cache=None;del L
     if False:
         d=abs(RES['arms']['P0s']['steps'][0]['gnorm']-RES['arms']['P1s']['steps'][0]['gnorm']);RES['check_chunk0_dgnorm']=d;lg(f'check: chunk 0 has no earlier sentences, so P0s and P1s must give the same step: |d gnorm| {d:.2e}')
-    RES['validation']=VAL;json.dump(RES,open(out/f'kvmulti2_s{seed}.json','w'),default=float);lg('wrote',out/f'kvmulti2_s{seed}.json',f'{time.monotonic()-t_all:.0f}s')
+    RES['validation']=VAL;RES['validation_chunk8']=VAL8;json.dump(RES,open(out/f'kvmulti2{a.tag}_s{seed}.json','w'),default=float);lg('wrote',out/f'kvmulti2{a.tag}_s{seed}.json',f'{time.monotonic()-t_all:.0f}s')
 if __name__=='__main__':
-    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--nch',type=int,default=128);ap_.add_argument('--expo',default='8,16,32,48,64,80,96,112,128');ap_.add_argument('--save-final',action='store_true');ap_.add_argument('--validate',action='store_true');ap_.add_argument('--selftest',action='store_true');a=ap_.parse_args()
+    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--nch',type=int,default=128);ap_.add_argument('--expo',default='8,16,32,48,64,80,96,112,128');ap_.add_argument('--save-final',action='store_true');ap_.add_argument('--validate',action='store_true');ap_.add_argument('--validate8',action='store_true');ap_.add_argument('--arms',default='S2As-u,E2As');ap_.add_argument('--tag',default='');ap_.add_argument('--base-dir',default='experiments/exp07_write_ladder/kvmulti');ap_.add_argument('--selftest',action='store_true');a=ap_.parse_args()
     selftest() if a.selftest else run(a)
