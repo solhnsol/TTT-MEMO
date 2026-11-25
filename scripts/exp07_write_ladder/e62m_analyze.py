@@ -3,9 +3,9 @@ import sys,json,numpy as np,collections
 from scipy import stats
 a=sys.argv;R=json.load(open(a[a.index('--json')+1]))
 def parts(S,f):
-    S=np.asarray(S)[:,0,:];m=len(f['exposed']);out=[]
+    S=np.asarray(S)[:,0,:];out=[]
     for i in range(S.shape[0]):
-        mm=len(f['_all'][i]['exposed']);g=S[i,0];ex=S[i,1:1+mm];un=S[i,1+mm:]
+        mm=len(f['facts'][i]['exposed']);g=S[i,0];ex=S[i,1:1+mm];un=S[i,1+mm:]
         out.append((g-S[i,1:].max(),g-ex.mean(),ex.mean()-un.mean(),g-un.mean(),g))
     return np.array(out)                                                        # [F,5]: headline, binding, familiarity, gold-unexposed mean, gold
 METRICS=('headline gold-max','BINDING gold-exposed decoy','FAMILIARITY exposed-unexposed','gold-unexposed mean','gold score')

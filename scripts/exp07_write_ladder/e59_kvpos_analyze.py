@@ -15,7 +15,7 @@ def fact_mat(X,c,kind):
     return np.mean(out,0)
 print(f'1344p: real one-step effect by position class, seeds {SEEDS} (n={n}), chunks {R[0]["chunks"]}; dmargin = margin change over W0 (16 read facts)')
 v=np.array([[x[k] for k in ('w1','w2','w3')] for X in R for x in X['validation']]);print(f'validation G[C0,C0] vs autodiff gradient: relative error median w1 {np.median(v[:,0]):.2e} w2 {np.median(v[:,1]):.2e} w3 {np.median(v[:,2]):.2e}, max {v.max():.2e}')
-tok=np.mean([[r['posn'][c] for c in CL] for X in R for r in X['rows']],0);print('mean token counts per class and chunk: '+', '.join(f'{c} {t:.0f}' for c,t in zip(CL,tok)))
+tok=np.nanmean([[r['posn'].get(c,np.nan) for c in CL] for X in R for r in X['rows']],0);print('mean token counts per class and chunk: '+', '.join(f'{c} {t:.0f}' for c,t in zip(CL,tok)))
 print('-- levels (class steps with the clip coefficient of the full step)')
 for c in CO:
     cls={k:ps(f'G[{c},{c}]@{k}') for k in CL};sm=sum(cls.values());full=ps(f'G[{c},{c}]');act=ps(f'ACT[{c}]')
