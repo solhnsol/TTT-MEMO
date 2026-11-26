@@ -14,7 +14,12 @@ def save_suffix_state(st,fn):
     import jax;leaves=[np.asarray(x) for x in jax.tree_util.tree_leaves(st)];pathlib.Path(fn).parent.mkdir(parents=True,exist_ok=True);np.savez(fn,*leaves);return dict(_file=str(fn),n_leaves=len(leaves),shapes=[list(x.shape) for x in leaves],dtypes=[str(x.dtype) for x in leaves])
 def load_suffix_state(fn,template):
     """template = s3.clone_state(rt.state_suffix): the tree structure"""
-    import jax,jax.numpy as jnp;z=np.load(fn);leaves=[jnp.asarray(z[f'arr_{i}']) for i in range(len(z.files))];td=jax.tree_util.tree_structure(template);assert td.num_leaves==len(leaves),(td.num_leaves,len(leaves));return jax.tree_util.tree_unflatten(td,leaves)
+    import jax,jax.numpy as jnp;z=np.load(fn);tl,td=jax.tree_util.tree_flatten(template);assert td.num_leaves==len(z.files),(td.num_leaves,len(z.files));leaves=[]
+    for i,t in enumerate(tl):
+        x=np.asarray(z[f'arr_{i}'])
+        if x.dtype.kind=='V':x=x.view(np.dtype(t.dtype))      # bfloat16 (ml_dtypes) is stored by np.savez as raw void |V2: reinterpret with the template dtype (1358b failure 11/26)
+        assert x.shape==tuple(t.shape) and x.dtype==np.dtype(t.dtype),(i,x.shape,x.dtype,t.shape,t.dtype);leaves.append(jnp.asarray(x))
+    return jax.tree_util.tree_unflatten(td,leaves)
 def install(seed,out,SIDE,log=print):
     """wrap e55_iso.Iso55 so that every stream run (a) records the output of read_state and (b) gets extra hook chunks where it saves W_t / S_t / hashes; the original read hook is called only at its own chunks, and inline reads of the extra chunks are dropped"""
     import e55_iso as ISO,s3
@@ -49,6 +54,7 @@ def compare(new,old):
 def selftest():
     assert extra_chunks(128)==[0,31,32,63,64,95,96] and extra_chunks(16)==[0]
     import tempfile;d=tempfile.mkdtemp();st={'k':np.arange(6,dtype=np.float32).reshape(2,3),'v':np.ones((2,2),np.float16)};info=save_suffix_state(st,d+'/s.npz');r=load_suffix_state(d+'/s.npz',st);assert info['n_leaves']==2 and np.array_equal(np.asarray(r['k']),st['k']) and np.asarray(r['v']).dtype==np.float16
+    import ml_dtypes,jax.numpy as jnp;sb={'k':jnp.asarray(np.arange(6,dtype=np.float32).reshape(2,3)).astype(jnp.bfloat16)};save_suffix_state(sb,d+'/b.npz');assert np.load(d+'/b.npz')['arr_0'].dtype.kind=='V';rb=load_suffix_state(d+'/b.npz',sb);assert rb['k'].dtype==jnp.bfloat16 and np.array_equal(np.asarray(rb['k'],np.float32),np.arange(6,dtype=np.float32).reshape(2,3))      # the bf16 round trip of 1358b
     A={'arms':{x:{'reads':{'8':{'dS1':[[1.0]]},'128':{'dS1':[[2.0]],'dS2':[[3.0]],'final_state':{'_hash':'h'+x}}},'steps':[{'gnorm':1.0}]} for x in ('P0s','P1s')}};assert compare(A,A)['same']
     B=json.loads(json.dumps(A));B['arms']['P1s']['reads']['8']['dS1']=[[1.5]];c=compare(B,A);assert not c['same'] and c['P1s']['dS1_8']==0.5
     print('e59_xstep_save selftest ok: save chunks, suffix-state save/load, 1348 comparison')
