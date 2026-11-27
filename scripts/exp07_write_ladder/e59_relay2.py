@@ -113,7 +113,7 @@ def run(a):
         s3.S3SUF['kmask']=kmask
         try:return m.language_model.suffix_call(prefix_outputs=pref_,state=st,seq=c).new_state
         finally:s3.S3SUF.clear()
-    UVC0=SH.mk_uv(KC['C0'],w,seed,lambda *x:None)
+    UVC0=SH.mk_uv(KC['C0'],w,seed,lambda *x:None);UVSV=SH.mk_uv(KC['SAMEVIS'],w,seed,lambda *x:None)
     leaf_names=[jax.tree_util.keystr(p_) for p_,_ in jax.tree_util.tree_flatten_with_path(rt.base.inner_parameters())[0]]
     hashf=lambda m:s3.reuse._hash_pytree(m.inner_parameters())[0]
     def delta(newp,m):return [np.asarray(jax.device_get(x.astype(jnp.float32)-y.astype(jnp.float32))) for x,y in zip(jax.tree_util.tree_leaves(newp),jax.tree_util.tree_leaves(m.inner_parameters()))]
@@ -147,7 +147,11 @@ def run(a):
                     s_=ent['steps']['C0']['update_norm']/ent['steps']['D']['update_norm'] if ent['steps']['D']['update_norm']>0 else 1.0;newp['D_sized']=L.rescale(newp['D'],Wt,s_);ent['steps']['D_sized']=dict(scale=s_,update_norm=L.norm_between(newp['D_sized'],Wt))
                     dl={sname:delta(newp[sname],Wt) for sname in STEPS};ent['cos']={f'{x}-{y}':cosine_parts(dl[x],dl[y],leaf_names) for x,y in (('C0','D'),('C0x','D'),('C0','C0x'))};del dl
                     if j==0:
-                        ref=side['saved'][arm].get(str(t+1),{});h=hashf(L.set_inner(Wt,newp['C0']));RES['checks'][f'{sn}_t{t}']=dict(C0_step_hash_equal_stream=(h==ref.get('hash')));lg('CHECK C0 step = stream',sn,t,RES['checks'][f'{sn}_t{t}'])
+                        ref=side['saved'][arm].get(str(t+1),{})      # the stream's own step: C0 mask for the C0 stream (P1s), SAMEVIS mask for the SAMEVIS stream (P0s); 11/27 fix: the SAMEVIS state was compared with its C0 step
+                        if sn=='C0':h=hashf(L.set_inner(Wt,newp['C0']))
+                        else:
+                            stc,_p,_k,Kc,Vc=inp['C0'];kpv,_=UVSV.keep(k,Wt,Kc,Vc,ids0[k*CH:(k+1)*CH],np.ones(WIN+CH,bool));kmv=jnp.asarray(kpv);gv,_n=ref_grad(Wt,stc,c,pref_of('N',k,Wt,Kc,Vc,kmv),kmv,wt);npv,_g,_c=L.sgd_apply(Wt,s3.clone_state(rt.state_all),gv);del gv;h=hashf(L.set_inner(Wt,npv));del npv
+                        RES['checks'][f'{sn}_t{t}']=dict(own_mask_step_hash_equal_stream=(h==ref.get('hash')),own_mask=sn);lg('CHECK own-mask step = stream',sn,t,RES['checks'][f'{sn}_t{t}'])
                     for sname,np_ in newp.items():
                         mm=L.set_inner(Wt,np_);ent['steps'][sname]['R1']=(r1(mm)-W0S).tolist();pn={}
                         for s2 in ('C0','D'):
@@ -160,7 +164,7 @@ def run(a):
                 json.dump(RES,open(out/f'relay2_s{seed}.json','w'),default=float)
     json.dump(RES,open(out/f'relay2_s{seed}.json','w'),default=float);lg('wrote',out/f'relay2_s{seed}.json',f'{time.monotonic()-t_all:.0f}s')
     if a.check:
-        bad={k_:v for k_,v in RES['checks'].items() if k_!='recorder' and not v['C0_step_hash_equal_stream']};assert not bad,('C0 step from W_t differs from the stream',bad)
+        bad={k_:v for k_,v in RES['checks'].items() if k_!='recorder' and not v['own_mask_step_hash_equal_stream']};assert not bad,('own-mask step from W_t differs from the stream',bad)
 if __name__=='__main__':
     ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--states-dir');ap_.add_argument('--ts',default='32,64,96');ap_.add_argument('--nj',type=int,default=8);ap_.add_argument('--selftest',action='store_true');ap_.add_argument('--check',action='store_true');a=ap_.parse_args()
     selftest() if a.selftest else run(a)

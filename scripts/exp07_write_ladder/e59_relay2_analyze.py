@@ -25,7 +25,7 @@ def sv(state,ts,fn):
     for s in SEEDS:
         v=[fn(s,rec,e) for t in ts for rec in [RS[s]['states'].get(state,{}).get(str(t))] if rec for e in rec['chunks']];out.append(np.nanmean(v) if v else np.nan)
     return np.asarray(out)
-print(f'1360 relay2: seeds {SEEDS}; stage-1 identical to 1348 {[RS[s]["stage1_same_as_1348"] for s in SEEDS]}; C0 step = stream {[all(v.get("C0_step_hash_equal_stream",True) for k,v in RS[s]["checks"].items() if k!="recorder") for s in SEEDS]}')
+print(f'1360 relay2: seeds {SEEDS}; stage-1 identical to 1348 {[RS[s]["stage1_same_as_1348"] for s in SEEDS]}; C0 step = stream {[all(v.get("own_mask_step_hash_equal_stream",True) for k,v in RS[s]["checks"].items() if k!="recorder") for s in SEEDS]}')
 for s in SEEDS[:1]:print('recorder check (seed %d):'%s,json.dumps(RS[s]['checks'].get('recorder'))[:600])
 TS=(32,64,96)
 for mi,mn in enumerate(MET):
