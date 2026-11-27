@@ -53,19 +53,29 @@ def run(a):
             seq_=Batch(input_ids=ids_,target_tokens=ids_,loss_masks=jnp.ones_like(ids_,dtype=bool));o,_=blk(h,(Kc,Vc),seq_,is_prefix=True);K,V=s3.S3['rec']
         finally:s3.S3.clear()
         return o,K,V
-    blocks=rt.base.language_model.model.h.prefix_blocks;nl=jax.tree_util.tree_leaves(blocks)[0].shape[0];BL=[jax.tree.map(lambda x:x[l] if eqx.is_array(x) else x,blocks) for l in range(nl)]
+    blocks=rt.base.language_model.model.h.prefix_blocks;nl=jax.tree_util.tree_leaves(blocks)[0].shape[0]      # per-layer slices (BL) dropped with the per-layer loop: the scan recorder needs none
     base_of=lambda k:(k*CH-WIN+np.arange(WIN+CH))>=0
     def keep_nat(chunks,k,base):return np.broadcast_to(np.asarray(base,bool),(CH,WIN+CH)).copy()
-    def chunk_forward(k,Kc,Vc,kp):
-        ids_k=jnp.asarray(ids0[k*CH:(k+1)*CH],dtype=jnp.int32);h=rt.base.language_model.wte_call(ids_k);Ks=[];Vs=[]
-        for l in range(nl):h,K,V=layer_ctx(BL[l],h,Kc[l],Vc[l],jnp.int32(k*CH),kp,ids_k);Ks.append(K);Vs.append(V)
+    @eqx.filter_jit
+    def prefix_rec(m,ids_,Kst,Vst,q0,keep):
+        """the engine's s3 prefix_masked (embedding + jax.lax.scan over the prefix blocks, 'ctx' attention), with the post-RoPE K,V of the chunk's own tokens returned per layer as scan outputs (1360 smoke 11/27: a per-layer jit loop differed from the scan by 3 bf16 ulps of the largest activation; the scan keeps the engine's graph)"""
+        h=m.language_model.wte_call(ids_);blocks_=m.language_model.model.h.prefix_blocks
+        s3.S3['mode']='ctxrec';s3.S3['q0']=q0;s3.S3['keep']=keep
+        try:
+            seq_=Batch(input_ids=ids_,target_tokens=ids_,loss_masks=jnp.ones_like(ids_,dtype=bool))
+            def body(x,xs):
+                blk,Kc,Vc=xs;y,_=blk(x,(Kc,Vc),seq_,is_prefix=True);K,V=s3.S3['rec'];return y,(K,V)
+            h,(Ks,Vs)=jax.lax.scan(body,h,(blocks_,Kst,Vst))
+        finally:s3.S3.clear()
         return h,Ks,Vs
+    def chunk_forward(k,Kc,Vc,kp):
+        ids_k=jnp.asarray(ids0[k*CH:(k+1)*CH],dtype=jnp.int32);h,Ks,Vs=prefix_rec(rt.base,ids_k,Kc,Vc,jnp.int32(k*CH),kp);return h,Ks,Vs
     def masked_record(keepfn,upto,like):
         Kh=np.zeros_like(like[0][:,:upto*CH]);Vh=np.zeros_like(like[1][:,:upto*CH]);P_={};t0=time.monotonic()
         with rt.mesh:
             for k in range(upto):
                 Kc,Vc=L.ctx_kv(Kh,Vh,k);h,Ks,Vs=chunk_forward(k,Kc,Vc,jnp.asarray(keepfn(ch,k,base_of(k))))
-                for l in range(nl):Kh[l,k*CH:(k+1)*CH]=np.asarray(jax.device_get(Ks[l])).reshape(Kh[l,k*CH:(k+1)*CH].shape);Vh[l,k*CH:(k+1)*CH]=np.asarray(jax.device_get(Vs[l])).reshape(Vh[l,k*CH:(k+1)*CH].shape)
+                Kh[:,k*CH:(k+1)*CH]=np.asarray(jax.device_get(Ks)).reshape(Kh[:,k*CH:(k+1)*CH].shape);Vh[:,k*CH:(k+1)*CH]=np.asarray(jax.device_get(Vs)).reshape(Vh[:,k*CH:(k+1)*CH].shape)
                 P_[k]=h
         lg(f'  re-record {keepfn.__name__}: {upto} chunks {time.monotonic()-t0:.0f}s');return Kh,Vh,P_
     RES=dict(seed=seed,args=vars(a),W0_R1=W0S.tolist(),cand_exposed=[True]*NEXP+[False]*(NC-NEXP),stage1_same_as_1348=s1same,steps=list(STEPS)+['D_sized'],states={},checks={},design='S2626-RELAY2; C0x added as the numerics control of D (implementation thread)')
@@ -78,11 +88,11 @@ def run(a):
             c_={};c_['layer0_K_maxabs_rerecord_vs_natural']=float(np.abs(f32(KhX[0])-f32(KhN[0,:KL*CH])).max());c_['K_maxabs_by_layer_first_mid_last']=[float(np.abs(f32(KhX[l])-f32(KhN[l,:KL*CH])).max()) for l in (0,nl//2,nl-1)];c_['K_scale']=float(np.abs(f32(KhN[:,:KL*CH])).max())
             c_['K_maxabs_by_chunk_last_layer']=[float(np.abs(f32(KhX[nl-1,k*CH:(k+1)*CH])-f32(KhN[nl-1,k*CH:(k+1)*CH])).max()) for k in range(0,KL,8)]
             k=9;Kc,Vc=L.ctx_kv(KhN,VhN,k);kp=jnp.asarray(keep_nat(ch,k,base_of(k)));hL,_,_=chunk_forward(k,Kc,Vc,kp);hE=L.prefix_masked(rt.base,jnp.asarray(ids0[k*CH:(k+1)*CH],dtype=jnp.int32),Kc,Vc,jnp.int32(k*CH),kp);nat=prefsN[k*CH:(k+1)*CH]
-            c_['chunk9_layerloop_vs_engine_prefix_masked_maxabs']=float(jnp.abs(hL.astype(jnp.float32)-hE.astype(jnp.float32)).max());c_['chunk9_engine_prefix_masked_vs_native_maxabs']=float(jnp.abs(hE.astype(jnp.float32)-nat.astype(jnp.float32)).max());c_['chunk9_rerecord_vs_native_maxabs']=float(jnp.abs(PX[k].astype(jnp.float32)-nat.astype(jnp.float32)).max());c_['prefix_out_scale']=float(jnp.abs(nat.astype(jnp.float32)).max())
+            c_['chunk9_recorder_vs_engine_prefix_masked_maxabs']=float(jnp.abs(hL.astype(jnp.float32)-hE.astype(jnp.float32)).max());c_['chunk9_engine_prefix_masked_vs_native_maxabs']=float(jnp.abs(hE.astype(jnp.float32)-nat.astype(jnp.float32)).max());c_['chunk9_rerecord_vs_native_maxabs']=float(jnp.abs(PX[k].astype(jnp.float32)-nat.astype(jnp.float32)).max());c_['prefix_out_scale']=float(jnp.abs(nat.astype(jnp.float32)).max())
             c_['chunk9_engine_rel_mean']=float(jnp.abs(hE.astype(jnp.float32)-nat.astype(jnp.float32)).mean()/jnp.abs(nat.astype(jnp.float32)).mean());c_['chunk9_rerecord_rel_mean']=float(jnp.abs(PX[k].astype(jnp.float32)-nat.astype(jnp.float32)).mean()/jnp.abs(nat.astype(jnp.float32)).mean())
         RES['checks']['recorder']=c_;lg('CHECK recorder',c_)
         assert c_['layer0_K_maxabs_rerecord_vs_natural']<=0.02*c_['K_scale'],('layer-0 K differs beyond bf16 rounding (matmul tiling): positions / RoPE / ids',c_)      # a position / RoPE error is of the order of the scale
-        assert c_['chunk9_layerloop_vs_engine_prefix_masked_maxabs']<=1e-2*c_['prefix_out_scale'],('layer loop differs from the engine prefix_masked',c_)
+        assert c_['chunk9_recorder_vs_engine_prefix_masked_maxabs']<=1e-2*c_['prefix_out_scale'],('recorder scan differs from the engine prefix_masked',c_)
     # ---- write / read machinery ----
     def loss_fn(mm,st_suf,c,pref_,kmask,wt):
         s3.S3SUF['kmask']=kmask
