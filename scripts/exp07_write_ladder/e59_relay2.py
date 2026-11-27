@@ -138,7 +138,7 @@ def run(a):
                     k=t+j;c=rt.chunk(seq,k);valid=np.asarray(c.loss_masks,np.float32);wt=jnp.asarray(valid/valid.sum());pos={d['fact']:[q-1 for q in d['place'] if 0<=q-1<CH] for d in ap[k] if d['fact']<NREAD}
                     ent=dict(k=k,facts=facts_in_chunk(ch,k),place_nll_Wt={},steps={});inp={}
                     for sname in STEPS:
-                        cond=COND_OF[sname];Kc,Vc=L.ctx_kv(*WINS[cond],k);kp,_=UVC0.keep(k,Wt,Kc,Vc,ids0[k*CH:(k+1)*CH],np.ones(WIN+CH,bool))      # the stream's NAT keep vector (e55_core.keep_vector: all True; k >= 32 so no absent slots);km=jnp.asarray(kp);pref=pref_of(cond,k,Wt,Kc,Vc,km);inp[sname]=(st[cond],pref,km,Kc,Vc)
+                        cond=COND_OF[sname];Kc,Vc=L.ctx_kv(*WINS[cond],k);kp,_=UVC0.keep(k,Wt,Kc,Vc,ids0[k*CH:(k+1)*CH],np.ones(WIN+CH,bool));km=jnp.asarray(kp);pref=pref_of(cond,k,Wt,Kc,Vc,km);inp[sname]=(st[cond],pref,km,Kc,Vc)      # kp: the stream's NAT keep vector (e55_core.keep_vector: all True; k >= 32 so no absent slots)
                         nl_=np.asarray(nll_all(Wt,st[cond],c,pref,km));ent['place_nll_Wt'][sname]={str(f):[float(nl_[i]) for i in pos[f]] for f in range(NREAD)}
                     newp={}
                     for sname in STEPS:
