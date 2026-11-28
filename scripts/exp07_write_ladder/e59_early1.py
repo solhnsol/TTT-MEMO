@@ -1,6 +1,6 @@
 """S2628-EARLY step 1, the ladder from P1d towards ISO1 (job 1364 'early1'; GPU; NEW file; implementation thread 11/28; Hans 11/28 16:03 KST "응 넘어가서 확인해보자"; EXPLORATORY). First 32 chunks only, reads R1 (neutral 8192-token tail) after 8 / 16 / 32 exposures, 16 x 16 candidate scores (12 exposed + 4 never exposed). Every arm is P1d (job 1362: carried 8-chunk window recorded with the D rule, e59_p1d.install) with ONE change on top of the previous rung:
   L1  : the write loss is the NTP loss over the tokens of the 16 READ-fact sentences only (positions predicting a sentence token, i.e. from the token before the sentence to its second-last token; token mean), as ISO1's loss is over its 16 isolated sentences;
-  L2  : L1 + in the write forward every row of the current chunk sees, inside the current chunk, only the 16 read-fact sentences (and itself; positions kept) = the current chunk reduced to the 16 sentences; the D window stays;
+  L2  : L1 + in the write forward every row of the current chunk sees, inside the current chunk, only the 16 read-fact sentences, each with the token before it (and itself; positions kept) = the current chunk reduced to the 16 sentences; the D window stays;
   L2b : L2 + each read-fact sentence (with the token before it) sees, inside the current chunk, only itself = the sentences isolated from each other as in ISO1 (the D window still visible; ISO1 has no window).
 Everything else is the P1d stream (C0 keep for the sentence rows vs earlier chunks, clipped SGD, natural clip, same lr, the carried window and suffix chain by the D rule, unaffected by the write mask). L3 (ISO1 rescaled to the P1d step norm) is left out: step 0 found the step sizes already equal (cumulative update norm e32 ISO1 32.0 vs P1d 30.4).
 Checks (--check): the loss positions are exactly the read-fact sentence positions (count per chunk); the chunk-0 write differs from 1348 P1s for every arm (the loss / mask changed); the keep of L2 / L2b differs from C0 only inside the current chunk.
@@ -20,7 +20,7 @@ def loss_positions(chunks,nch):
 def keep_L(kp0,chunk,mode):
     """kp0 = the C0 keep [CH, WIN+CH] of the chunk; L2: every row sees, in the current chunk, only read-fact sentence tokens and itself; L2b: rows of a sentence (from the token before it) see only that span"""
     kp=np.array(kp0,bool,copy=True);sp=read_spans(chunk);allow=np.zeros(CH,bool)
-    for a,b in sp:allow[a:b]=True
+    for a,b in sp:allow[max(a-1,0):b]=True      # each sentence with the token before it (ISO1 rows are '\n\n' + sentence)
     cur=kp[:,WIN:];cur&=allow[None,:];np.fill_diagonal(cur,np.diagonal(np.asarray(kp0,bool)[:,WIN:]))
     if mode=='L2b':
         for a,b in sp:
@@ -36,7 +36,7 @@ def selftest():
     ch=[{'sents':[dict(fact=0,start=10,end=20),dict(fact=20,start=30,end=40),dict(fact=1,start=50,end=60)]} for _ in range(3)]
     m=loss_positions(ch,2);assert m[9:19].all() and not m[19] and not m[29:39].any() and m[49:59].all() and m[CH+9] and m.sum()==2*20
     kp0=np.ones((CH,WIN+CH),bool);kp0[:,WIN:]=np.tril(np.ones((CH,CH),bool))
-    K2=keep_L(kp0,ch[0],'L2');assert K2[15,WIN+10:WIN+16].all() and not K2[15,WIN+0:WIN+10].any() and not K2[35,WIN+30:WIN+35].any() and K2[35,WIN+35] and K2[55,WIN+10:WIN+20].all() and K2[:,:WIN].all()
+    K2=keep_L(kp0,ch[0],'L2');assert K2[15,WIN+10:WIN+16].all() and not K2[15,WIN+0:WIN+9].any() and K2[15,WIN+9] and not K2[35,WIN+30:WIN+35].any() and K2[35,WIN+35] and K2[55,WIN+10:WIN+20].all() and K2[:,:WIN].all()
     Kb=keep_L(kp0,ch[0],'L2b');assert Kb[55,WIN+49:WIN+56].all() and not Kb[55,WIN+10:WIN+20].any() and Kb[9,WIN+9] and not Kb[9,WIN+0:WIN+9].any() and Kb[15,WIN+9:WIN+16].all()
     assert not (K2&~kp0).any() and not (Kb&~K2).any()
     print('e59_early1 selftest ok: loss positions, keeps L2 / L2b')
