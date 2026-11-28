@@ -28,11 +28,29 @@ def keep_L(kp0,chunk,mode):
     kp[:,WIN:]=cur
     if mode=='L2c':kp[:,:WIN]=False      # S2821-LADDER128 (Hans 11/28 22:00 KST): L2b + no carried 8-chunk window at all (positions kept; every row keeps at least itself)
     return kp
+REOPEN={'RS':'self','RO':'other','RD':'decoy'}      # K3 (S2903-CONTRAST, Hans 11/29 04:26 KST): L2b + earlier-chunk sentences re-opened for the read-fact sentence rows
+def reopen_cols(chunks,k,f,kind):
+    """window columns (8-chunk window of chunk k) of ONE sentence per earlier chunk c: kind 'self' = fact f's own sentence, 'other' = read fact (f+1+(c mod 15)) mod 16 (never f), 'decoy' = extra fact 16 + ((f+c) mod 16) (same frame bank, its name / place is in no candidate list)"""
+    cols=[]
+    for c in range(max(0,k-NW),k):
+        g=f if kind=='self' else ((f+1+(c%15))%NREAD if kind=='other' else NREAD+((f+c)%NREAD));off=(c-k+NW)*CH
+        sp=[(int(x['start']),int(x['end'])) for x in chunks[c]['sents'] if int(x['fact'])==g];assert len(sp)==1,(c,g);cols.append(off+np.arange(*sp[0]))
+    return np.concatenate(cols) if cols else np.zeros(0,np.int64)
+def keep_reopen(kp,chunks,k,kind,base):
+    """kp = the L2b keep of chunk k; the rows of each read-fact sentence (from the token before it) see again one earlier sentence per window chunk (reopen_cols)"""
+    kp=np.array(kp,bool,copy=True);b2=np.broadcast_to(np.asarray(base,bool),(CH,WIN+CH))
+    for x in chunks[k]['sents']:
+        f=int(x['fact'])
+        if f>=NREAD:continue
+        a0=max(int(x['start'])-1,0);b=int(x['end']);cols=reopen_cols(chunks,k,f,kind)
+        if len(cols):kp[a0:b][:,cols]=b2[a0:b][:,cols]
+    return kp
 class KeepL:
     def __init__(self,inner,chunks,mode):self.inner=inner;self.chunks=chunks;self.mode=mode;self.name=mode
     def keep(self,k,m,Kc,Vc,ids_k,keep_all):
         kp,info=self.inner.keep(k,m,Kc,Vc,ids_k,keep_all)
         if self.mode=='L1':return kp,info
+        if self.mode in REOPEN:return keep_reopen(keep_L(kp,self.chunks[k],'L2b'),self.chunks,k,REOPEN[self.mode],keep_all),info
         return keep_L(kp,self.chunks[k],self.mode),info
 def selftest():
     ch=[{'sents':[dict(fact=0,start=10,end=20),dict(fact=20,start=30,end=40),dict(fact=1,start=50,end=60)]} for _ in range(3)]

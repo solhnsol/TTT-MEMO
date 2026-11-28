@@ -76,8 +76,8 @@ def run(a):
     RES=dict(seed=seed,k=k,ctx_chunks=ctx_chunks(k),variants=list(VARIANTS),hidden_counts=cx.n_hidden,cand_exposed=[True]*NEXP+[False]*(NC-NEXP),W0=cx.score(rt.base),arms={},args=vars(a))
     SRC={x.split('=')[0]:x.split('=')[1] for x in a.srcs.split(',')}
     for arm,pat in SRC.items():
-        sj=json.load(open(ROOT/pat.format(seed=seed)));fs=sj['arms'][arm]['reads']['128']['final_state'];m=rd.load_state(ROOT/fs['_file'],fs['_hash']);t0=time.monotonic();RES['arms'][arm]=cx.score(m);lg(f'seed {seed} {arm}: scored {time.monotonic()-t0:.0f}s');del m
+        sj=json.load(open(ROOT/pat.format(seed=seed)));fs=sj['arms'][arm]['reads'][str(a.final_e)]['final_state'];m=rd.load_state(ROOT/fs['_file'],fs['_hash']);t0=time.monotonic();RES['arms'][arm]=cx.score(m);lg(f'seed {seed} {arm}: scored {time.monotonic()-t0:.0f}s');del m
         json.dump(RES,open(out/f'win8_s{seed}.json','w'))
     json.dump(RES,open(out/f'win8_s{seed}.json','w'));lg('wrote',out/f'win8_s{seed}.json',f'{time.monotonic()-t_all:.0f}s')
 if __name__=='__main__':
-    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--srcs',default='');ap_.add_argument('--k',type=int,default=127);a=ap_.parse_args();run(a)
+    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--srcs',default='');ap_.add_argument('--k',type=int,default=127);ap_.add_argument('--final-e',type=int,default=128);a=ap_.parse_args();run(a)
