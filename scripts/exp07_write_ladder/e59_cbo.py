@@ -18,7 +18,7 @@ HERE=pathlib.Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 for p in (HERE,HERE/'e57',ROOT/'scripts/exp04_what_ttt_retains',ROOT/'scripts/exp05_write_dynamics'):sys.path.insert(0,str(p))
 from e59_kvmask import same_fact_keys
 NREAD=16;CH=1024;NW=8;WIN=NW*CH;RAMP_NCH=128
-ARMS={'C0x2':('c0',None),'C0+ISO-mask':('iso',None),'CLZ-ramp':('clz','ramp'),'CLZ-fix':('clz',0.6),'NAME-lure':('name',True),'NAME-nolure':('name',False),'ISOx2':('isox2',None)}
+ARMS={'C0x2':('c0',None),'C0+ISO-mask':('iso',None),'CLZ-ramp':('clz','ramp'),'CLZ-fix':('clz',0.6),'NAME-lure':('name',True),'NAME-nolure':('name',False),'ISOx2':('isox2',None),'ISO1':('isox1',None)}      # ISO1 (S2628-REDO step 1, Hans 11/28): the ISOx2 path with ONE isolated step per chunk
 ARM_ID={a:i for i,a in enumerate(ARMS)}
 def clz_r(spec,k):return 0.2+0.8*min(k,RAMP_NCH-1)/(RAMP_NCH-1) if spec=='ramp' else float(spec)
 def other_keys(chunks,k,fact):
@@ -166,14 +166,14 @@ def run(a):
     for arm in a.arms.split(','):
         mode,spec=ARMS[arm];rec=dict(steps=[],diag={},reads={},orders={},mask_stat={});t0=time.monotonic()
         L=ISO.Iso55(rt,save_dir=out/'states'/f's{seed}_{arm}',canary=can);L.rec_cache=RC;hook=mk_hook(rec,L,arm)
-        if mode=='isox2':
+        if mode in ('isox2','isox1'):
             packing=LD.packing;Wsl=int(rt.cfg.model.sliding_window_size);m=rt.base;st_all=LD.clone_state(rt.state_all);eos=rt.eos
             with rt.mesh:
                 for k in range(NCH):
                     rows=iso_rows_chunk(w,enc,seed,k);pch,where=packing.pack_rows(rows);mks=[np.zeros(CH,bool) for _ in pch]
                     for c_,a_,b_ in where:mks[c_][a_:b_]=True
                     ent=dict(k=k,n_rows=len(rows),n_packed=len(pch),steps=[])
-                    for rep in range(2):
+                    for rep in range(2 if mode=='isox2' else 1):
                         for (ids,seg,loc),mk in zip(pch,mks):
                             tg=np.concatenate([ids[1:],[eos]]).astype(np.int32);pref=L.prefix_iso(rt.base,jnp.asarray(ids),jnp.asarray(loc),jnp.asarray(packing.prefix_mask(seg,Wsl)))
                             g,ce=L.iso_grad(m,jnp.asarray(ids),jnp.asarray(tg),jnp.asarray(mk),pref,jnp.asarray(seg),jnp.asarray(loc));newp,gn,coef=L.sgd_apply(m,st_all,g);del g;un=L.norm_between(newp,m);m=L.set_inner(m,newp)
