@@ -12,9 +12,9 @@ def run(a):
     import jax,jax.numpy as jnp,equinox as eqx
     import e55_run as R55,e55_read as R,e55_gpu as RG,e57_natmask_run as NM,e57_qband_run as QR,e57_syn_pass as SP,e57_oracle_run as OR,gen_facts as G,e59_u12 as U,e59_leak_probe as LP
     from e59_kvpos2 import items2,NEXP
-    from ttt.model.data import Batch
     NM.register_engine();QR.K0=0;NM.K0=0;lg=lambda *x:print(*x,flush=True);seed=a.seed;out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True);t_all=time.monotonic()
     U.install();cell=U.CELL;ci=OR.register_cell(cell);LD,s3_,C=R55.lab();rt=LD.Runtime();rt32=LD.runtime_fp32();PS=LD.packing
+    from ttt.model.data import Batch      # after R55.lab(): the lab path (ttt package) is on sys.path only from here (1366 failure 11/28)
     rd=RG.Reader55(rt,rt32,LD.packing,LD._TailCtx,LD.reuse.get_filter_spec,LD.reuse._hash_pytree,LD.jax,LD.eqx,LD.jnp)
     enc,w,tf=R55.build(SP.synth_args(seed,cell),seed,read_apps=set(ci['read_apps']),arms=['NAT']);S=R55.streams(w,enc);ids0,sha=S['A'];UX=G.fresh_places(w,enc,4);G.build_items=lambda ww:items2(ww,UX);ids0=np.asarray(ids0);ch=w['chunks']
     P=R.plan(w,enc);items=P['items'];raw=R55.rows_for(LD,rt,items);RG.check_rows(raw,len(items),G.NCAND);NC=G.NCAND
