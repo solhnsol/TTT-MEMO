@@ -36,7 +36,7 @@ def read_loss_positions(chunk):
     for x in chunk['sents']:
         if int(x['fact'])<NREAD:a,b=int(x['start']),int(x['end']);m[max(a-1,0):b-1]=True
     return np.flatnonzero(m)
-LAST={}
+LAST={};SLIDE=[8*CH]      # E2E sliding_window_size 8192
 def install():
     import torch,e59_qwen_run as E,e59_qwen_hide as QH,e59_hidearms as H,cell_band_ladder as CB,e59_u12 as U
     U.install()
@@ -58,6 +58,19 @@ def install():
         fb=[x['X'] for x in w['facts']+w['ctrl']]+[x['P'] for x in w['facts']]+list(w['unexposed'])+[x['X'] for k_ in ('names','decoy') if k_ in w for x in w[k_]['facts']]+[x['P'] for k_ in ('names','decoy') if k_ in w for x in w[k_]['facts']]
         text=WT_.squad_text(fb);ids=WT_._pre(bos)+WT_.enc(tok,text).ids;assert len(ids)>=8192;return ids[:8192],text,'squad8192'
     WT_.neutral_tail=neutral_tail;E.WT.neutral_tail=neutral_tail
+    import readout as RO_
+    _sr=RO_.score_rows
+    def score_rows(model,ctx_kv,ctx_len,rows,device,batch=8,pad_id=0):
+        """E2E parity (Hans 11/28 23:08 KST): the probe rows see a context key j only if (ctx_len + i) - j < 8192, as the E2E read (sliding window 8192 in every layer); hooks on all decoder layers, removed afterwards"""
+        dec,_=E.parts(model);hooks=[]
+        def hook(mod,args,kwargs):
+            hs=kwargs['hidden_states'] if 'hidden_states' in kwargs else args[0];L=hs.shape[1];qi=(ctx_len+torch.arange(L,device=hs.device))[:,None];kj=torch.arange(ctx_len+L,device=hs.device)[None,:]
+            kwargs=dict(kwargs);kwargs['attention_mask']=((kj<=qi)&((qi-kj)<SLIDE[0]))[None,None];return args,kwargs
+        for l in dec.layers:hooks.append(l.self_attn.register_forward_pre_hook(hook,with_kwargs=True))
+        try:return _sr(model,ctx_kv,ctx_len,rows,device,batch,pad_id)
+        finally:
+            for h in hooks:h.remove()
+    RO_.score_rows=score_rows;E.CB.RO.score_rows=score_rows
     class LadderWriter(QH.HideWriter):
         def __init__(self,model,CH_,win,device,uv,seed,uv_kv=None):super().__init__(model,CH_,win,device,uv,seed);self.uv_kv=uv_kv if uv_kv is not None else KeepNat()
         def allowed(self,L,off,device):
@@ -111,6 +124,14 @@ def mask_check(seeds=(231,)):
         rp=read_loss_positions(ch[5]);assert len(rp)==sum(int(x['end'])-max(int(x['start'])-1,0)-1 for x in ch[5]['sents'] if int(x['fact'])<NREAD)
         ro=read_only(w);assert all(len(c['sents'])==NREAD for c in ro['chunks']) and len(w['chunks'][0]['sents'])==32
     print('e59_qwen_ladder mask_check ok: C0 and SAMEVIS keeps == E2E on the Qwen U12 world, 8-chunk key mapping of BOTH / L2b / D keeps, read loss positions, read-only ISO world',seeds)
+def read_check():
+    """tiny model, CPU: the patched score_rows equals the full-concatenation reference when every key is within the window, and equals a reference forward on the window-cut context when the window is made small"""
+    import torch,qwen_runtime as QR,readout as RO
+    E=install();torch.manual_seed(0);model=QR.tiny_qwen(QR.qwen_snapshot_dir(QR.BASE_ID));dev=torch.device('cpu');model.eval()
+    ctx=list(range(100,400));rows=[(list(range(500,520)),(5,20)),(list(range(600,612)),(3,12))]
+    kv,L=RO.encode_context(model,ctx,dev);a_=RO.score_rows(model,kv,L,rows,dev,2,0);ref=[RO.score_full(model,ctx,r,dev) for r in rows];assert max(abs(x-y) for x,y in zip(a_,ref))<1e-3,(a_,ref)
+    SLIDE[0]=64;b_=RO.score_rows(model,kv,L,rows,dev,2,0);SLIDE[0]=8*CH;assert max(abs(x-y) for x,y in zip(a_,b_))>1e-4,'a small window must change the scores'
+    print('e59_qwen_ladder read_check ok: sliding read == full reference inside the window, differs with a small window',[round(x,4) for x in a_],[round(x,4) for x in b_])
 def selftest():
     """tiny Qwen-shaped model on CPU, U12 world with the Qwen tokenizer: every ladder arm runs 3 chunks; chunk 0 of P1s == P1d (nothing carried yet); chunk 1 differs (D carried KV); L2b loss tokens = read-fact positions; ISO1 rows = 16"""
     import json,tempfile,shutil,math,torch
@@ -125,6 +146,7 @@ def selftest():
     shutil.rmtree(td,ignore_errors=True);print('e59_qwen_ladder selftest ok (tiny model, U12 Qwen world, 5 arms)')
 if __name__=='__main__':
     if '--mask-check' in sys.argv:mask_check(tuple(range(231,239)))
+    elif '--read-check' in sys.argv:read_check()
     elif '--selftest' in sys.argv:selftest()
     else:
         E=install();import torch;a=E.parser().parse_args();torch.manual_seed(0);E.run(a)
