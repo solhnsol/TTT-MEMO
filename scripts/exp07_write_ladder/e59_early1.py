@@ -22,10 +22,12 @@ def keep_L(kp0,chunk,mode):
     kp=np.array(kp0,bool,copy=True);sp=read_spans(chunk);allow=np.zeros(CH,bool)
     for a,b in sp:allow[max(a-1,0):b]=True      # each sentence with the token before it (ISO1 rows are '\n\n' + sentence)
     cur=kp[:,WIN:];cur&=allow[None,:];np.fill_diagonal(cur,np.diagonal(np.asarray(kp0,bool)[:,WIN:]))
-    if mode=='L2b':
+    if mode in ('L2b','L2c'):
         for a,b in sp:
             a0=max(a-1,0);own=np.zeros(CH,bool);own[a0:b]=True;cur[a0:b]&=own[None,:]
-    kp[:,WIN:]=cur;return kp
+    kp[:,WIN:]=cur
+    if mode=='L2c':kp[:,:WIN]=False      # S2821-LADDER128 (Hans 11/28 22:00 KST): L2b + no carried 8-chunk window at all (positions kept; every row keeps at least itself)
+    return kp
 class KeepL:
     def __init__(self,inner,chunks,mode):self.inner=inner;self.chunks=chunks;self.mode=mode;self.name=mode
     def keep(self,k,m,Kc,Vc,ids_k,keep_all):
@@ -39,9 +41,10 @@ def selftest():
     K2=keep_L(kp0,ch[0],'L2');assert K2[15,WIN+10:WIN+16].all() and not K2[15,WIN+0:WIN+9].any() and K2[15,WIN+9] and not K2[35,WIN+30:WIN+35].any() and K2[35,WIN+35] and K2[55,WIN+10:WIN+20].all() and K2[:,:WIN].all()
     Kb=keep_L(kp0,ch[0],'L2b');assert Kb[55,WIN+49:WIN+56].all() and not Kb[55,WIN+10:WIN+20].any() and Kb[9,WIN+9] and not Kb[9,WIN+0:WIN+9].any() and Kb[15,WIN+9:WIN+16].all()
     assert not (K2&~kp0).any() and not (Kb&~K2).any()
+    Kc=keep_L(kp0,ch[0],'L2c');assert not Kc[:,:WIN].any() and (Kc[:,WIN:]==Kb[:,WIN:]).all() and Kc[:,WIN:].diagonal().all()
     print('e59_early1 selftest ok: loss positions, keeps L2 / L2b')
 if __name__=='__main__':
-    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--nch',type=int,default=32);ap_.add_argument('--expo',default='8,16,32');ap_.add_argument('--arms',default='L1,L2,L2b');ap_.add_argument('--selftest',action='store_true');ap_.add_argument('--check',action='store_true');ap_.add_argument('--base-dir',default='experiments/exp07_write_ladder/kvmulti');a=ap_.parse_args()
+    ap_=argparse.ArgumentParser();ap_.add_argument('--seed',type=int,default=231);ap_.add_argument('--out');ap_.add_argument('--nch',type=int,default=32);ap_.add_argument('--expo',default='8,16,32');ap_.add_argument('--arms',default='L1,L2,L2b');ap_.add_argument('--selftest',action='store_true');ap_.add_argument('--check',action='store_true');ap_.add_argument('--save-final',action='store_true');ap_.add_argument('--base-dir',default='experiments/exp07_write_ladder/kvmulti');a=ap_.parse_args()
     if a.selftest:selftest();sys.exit(0)
     import e59_p1d as PD,e59_kvmulti as KV,e59_shadow as SH,e59_kvpos2 as KP,e55_iso as ISO
     out=pathlib.Path(a.out);out.mkdir(parents=True,exist_ok=True);CHK={};lg=lambda *x:print(*x,flush=True)
@@ -60,13 +63,13 @@ if __name__=='__main__':
         self._stream_seq=sseq
     ISO.Iso55.__init__=init
     KV.ARMS={x:x for x in a.arms.split(',')}
-    KV.run(argparse.Namespace(seed=a.seed,out=str(out),nch=a.nch,expo=a.expo,save_final=False,selftest=False))
+    KV.run(argparse.Namespace(seed=a.seed,out=str(out),nch=a.nch,expo=a.expo,save_final=a.save_final,selftest=False))
     r=json.load(open(out/f'kvmulti_s{a.seed}.json'));b=json.load(open(pathlib.Path(a.base_dir)/f'kvmulti_s{a.seed}.json'));sb=b['arms']['P1s']['steps']
-    for arm in a.arms.split(','):s=r['arms'][arm]['steps'];CHK[arm]=dict(chunk0_gnorm=s[0]['gnorm'],chunk0_gnorm_P1s=sb[0]['gnorm'],chunk0_ce=s[0]['ce'],chunk0_ce_P1s=sb[0]['ce'],diverged=r['arms'][arm]['diverged'])
+    for arm in a.arms.split(','):s=r['arms'][arm]['steps'];CHK[arm]=dict(chunk1_gnorm=s[1]['gnorm'],chunk0_gnorm=s[0]['gnorm'],chunk0_gnorm_P1s=sb[0]['gnorm'],chunk0_ce=s[0]['ce'],chunk0_ce_P1s=sb[0]['ce'],diverged=r['arms'][arm]['diverged'])
     json.dump(CHK,open(out/f'early1_checks_s{a.seed}.json','w'),default=float);lg('EARLY1 CHECKS',CHK)
     if a.check:
         import e59_u12 as U,e55_run as R55,e57_syn_pass as SP
         enc,w,tf=R55.build(SP.synth_args(a.seed,U.CELL),a.seed,read_apps={16,32,64,128},arms=['NAT']);exp=[sum(b_-1-max(a_-1,0) for a_,b_ in read_spans(w['chunks'][k])) for k in range(4)]
         assert CHK['loss_positions']==exp,('loss positions',CHK['loss_positions'],exp)
         for arm in a.arms.split(','):assert abs(CHK[arm]['chunk0_gnorm']-CHK[arm]['chunk0_gnorm_P1s'])>1e-4 and not CHK[arm]['diverged'],('chunk-0 write equals P1s or diverged',arm,CHK[arm])
-        g0={arm:CHK[arm]['chunk0_gnorm'] for arm in a.arms.split(',')};assert len(set(round(v,6) for v in g0.values()))==len(g0),('two rungs give the same chunk-0 write',g0)
+        g1={arm:CHK[arm]['chunk1_gnorm'] for arm in a.arms.split(',')};assert len(set(round(v,6) for v in g1.values()))==len(g1),('two rungs give the same chunk-1 write (chunk 0 has no window, so L2b = L2c there)',g1)
